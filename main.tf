@@ -111,19 +111,14 @@ resource "aws_instance" "bastion" {
               echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> $USER_HOME/.bashrc
               eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
-              # Install AWS CLI and kubectx via Homebrew
-              echo "Installing AWS CLI, kubectx, and Terraform via Homebrew..."
-              sudo -u $TARGET_USER /home/linuxbrew/.linuxbrew/bin/brew install awscli kubectx terraform
+              # Install CLI tools via Homebrew
+              echo "Installing AWS CLI, kubectx, OpenTofu, OpenShift CLI, and kubectl via Homebrew..."
+              sudo -u $TARGET_USER /home/linuxbrew/.linuxbrew/bin/brew install awscli kubectx opentofu openshift-cli kubernetes-cli
 
-              # Install OpenShift CLI (oc) and oc-mirror
-              echo "Downloading and installing OpenShift tools..."
+              # Install OpenShift tools not available via Homebrew
+              echo "Downloading and installing additional OpenShift tools..."
               WORKDIR="/tmp/ocp_tools"
               mkdir -p $WORKDIR && cd $WORKDIR
-
-              # Download OpenShift Client (oc & kubectl)
-              wget -q https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-client-linux.tar.gz
-              tar -xzf openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl
-              chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 
               # Download oc-mirror plugin
               wget -q https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/oc-mirror.tar.gz
