@@ -134,6 +134,7 @@ resource "aws_instance" "bastion" {
 	chmod +x /usr/local/bin/openshift-install
 
 	rm -rf $WORKDIR
+	cd /
 
 	# Set up tmux config and TPM for ec2-user
 	echo "Setting up tmux..."
