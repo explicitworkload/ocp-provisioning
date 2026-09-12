@@ -1,17 +1,31 @@
 # ocp-provisioning
 
-OpenTofu configuration that provisions a RHEL 10 bastion host on AWS for OpenShift Container Platform (OCP) deployment and management.
+OpenTofu configurations for provisioning OpenShift Container Platform (OCP) infrastructure on AWS.
 
-## What It Creates
+## Project Structure
 
-- **EC2 instance** running RHEL 10 (`t3.xlarge` by default) with a 100 GB gp3 root volume
-- **Security group** allowing inbound SSH and all outbound traffic
-- **SSH key pair** imported from your local machine
+```
+ocp-provisioning/
+├── bastion/       # RHEL 10 bastion host for OCP management
+├── cluster/       # OpenShift cluster provisioning (coming soon)
+└── README.md
+```
 
-The instance is bootstrapped via user data with:
+## Bastion Host
+
+Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
+
+**What it creates:**
+
+- EC2 instance running RHEL 10 (`t3.xlarge` by default) with a 100 GB gp3 root volume
+- Security group allowing inbound SSH and all outbound traffic
+- SSH key pair imported from your local machine
+
+**Pre-installed tools:**
 
 - OpenShift CLI (`oc`), `oc-mirror`, and `openshift-install`
-- AWS CLI, `kubectx`, and OpenTofu (via Homebrew)
+- AWS CLI, `kubectx`, `kubectl`, and OpenTofu (via Homebrew)
+- tmux with [TPM](https://github.com/tmux-plugins/tpm) and powerline
 - Git, wget, curl, jq, and other common utilities
 
 ## Prerequisites
@@ -33,7 +47,7 @@ The instance is bootstrapped via user data with:
 
    ```sh
    git clone https://github.com/explicitworkload/ocp-provisioning.git
-   cd ocp-provisioning
+   cd ocp-provisioning/bastion
    ```
 
 3. **Configure variables**
@@ -81,6 +95,7 @@ The instance is bootstrapped via user data with:
 ## Cleanup
 
 ```sh
+cd bastion
 tofu destroy
 ```
 
