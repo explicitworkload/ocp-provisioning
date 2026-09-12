@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "instance_type" {
   type        = string
   default     = "t3.xlarge" # 4 vCPU / 16GB RAM recommended for mirroring / heavy CLI tasks
-  description = "EC2 instance size for RHEL 9 Bastion"
+  description = "EC2 instance size for RHEL 10 Bastion"
 }
 
 variable "ssh_public_key_path" {

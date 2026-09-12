@@ -1,10 +1,10 @@
 # ocp-provisioning
 
-OpenTofu configuration that provisions a RHEL 9 bastion host on AWS for OpenShift Container Platform (OCP) deployment and management.
+OpenTofu configuration that provisions a RHEL 10 bastion host on AWS for OpenShift Container Platform (OCP) deployment and management.
 
 ## What It Creates
 
-- **EC2 instance** running RHEL 9 (`t3.xlarge` by default) with a 100 GB gp3 root volume
+- **EC2 instance** running RHEL 10 (`t3.xlarge` by default) with a 100 GB gp3 root volume
 - **Security group** allowing inbound SSH and all outbound traffic
 - **SSH key pair** imported from your local machine
 

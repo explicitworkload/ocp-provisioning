@@ -12,27 +12,25 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Fetch the Default VPC
-data "aws_vpc" "default" {
-  default = true
-}
+# Ensure the Default VPC exists (creates one if it was deleted)
+resource "aws_default_vpc" "default" {}
 
 # Fetch Default Subnets
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    values = [aws_default_vpc.default.id]
   }
 }
 
 # Fetch latest Red Hat Enterprise Linux 9 AMI in ap-southeast-1
-data "aws_ami" "rhel9" {
+data "aws_ami" "rhel10" {
   most_recent = true
   owners      = ["309956199498"] # Red Hat Official Owner ID
 
   filter {
     name   = "name"
-    values = ["RHEL-9.*_HVM-*-x86_64-*"]
+    values = ["RHEL-10.*_HVM-*-x86_64-*"]
   }
 
   filter {
@@ -50,8 +48,8 @@ resource "aws_key_pair" "bastion_key" {
 # Security Group for Bastion Host
 resource "aws_security_group" "bastion_sg" {
   name        = "ocp-bastion-sg"
-  description = "Allow inbound SSH access to RHEL9 Bastion"
-  vpc_id      = data.aws_vpc.default.id
+  description = "Allow inbound SSH access to RHEL10 Bastion"
+  vpc_id      = aws_default_vpc.default.id
 
   ingress {
     description = "SSH from allowed IP"
@@ -74,9 +72,9 @@ resource "aws_security_group" "bastion_sg" {
   }
 }
 
-# RHEL 9 Bastion Instance
+# RHEL 10 Bastion Instance
 resource "aws_instance" "bastion" {
-  ami                         = data.aws_ami.rhel9.id
+  ami                         = data.aws_ami.rhel10.id
   instance_type               = var.instance_type
   subnet_id                   = element(data.aws_subnets.default.ids, 0)
   vpc_security_group_ids      = [aws_security_group.bastion_sg.id]
@@ -135,6 +133,6 @@ resource "aws_instance" "bastion" {
               EOF
 
   tags = {
-    Name = "ocp-rhel9-bastion"
+    Name = "ocp-rhel10-bastion"
   }
 }
