@@ -17,19 +17,26 @@ The instance is bootstrapped via user data with:
 ## Prerequisites
 
 - [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.3.0
-- An AWS account with credentials configured (`aws configure` or environment variables)
+- An AWS account with credentials configured
 - An SSH key pair at `~/.ssh/id_rsa` (or specify a different path)
 
 ## Usage
 
-1. **Clone the repository**
+1. **Export AWS credentials**
+
+   ```sh
+   export AWS_ACCESS_KEY_ID="<your-access-key>"
+   export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
+   ```
+
+2. **Clone the repository**
 
    ```sh
    git clone https://github.com/explicitworkload/ocp-provisioning.git
    cd ocp-provisioning
    ```
 
-2. **Configure variables**
+3. **Configure variables**
 
    Create a `terraform.tfvars` file:
 
@@ -39,7 +46,7 @@ The instance is bootstrapped via user data with:
    ssh_public_key_path = "~/.ssh/id_rsa.pub"
    ```
 
-3. **Deploy**
+4. **Deploy**
 
    ```sh
    tofu init
@@ -47,7 +54,7 @@ The instance is bootstrapped via user data with:
    tofu apply
    ```
 
-4. **Connect**
+5. **Connect**
 
    ```sh
    ssh ec2-user@<bastion_public_ip>
