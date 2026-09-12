@@ -45,3 +45,6 @@ terraform.rc
 
 tfplan
 .terraform.lock.hcl
+
+pull-secret.json
+cluster/install-dir/
