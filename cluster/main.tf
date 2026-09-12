@@ -13,7 +13,15 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
   }
+}
+
+provider "aws" {
+  region = var.aws_region
 }
 
 # Generate a random 3-digit suffix for the cluster name
@@ -25,7 +33,11 @@ resource "random_integer" "cluster_suffix" {
 locals {
   cluster_name = "aws${random_integer.cluster_suffix.result}"
   install_dir  = "${path.module}/install-dir"
+}
 
+# Create Route53 hosted zone for the base domain
+resource "aws_route53_zone" "cluster" {
+  name = var.base_domain
 }
 
 # Render install-config.yaml from template
@@ -52,7 +64,7 @@ resource "local_file" "install_config_backup" {
 
 # Phase 1: Generate manifests so we can modify worker MachineSets
 resource "null_resource" "generate_manifests" {
-  depends_on = [local_file.install_config]
+  depends_on = [local_file.install_config, aws_route53_zone.cluster]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]

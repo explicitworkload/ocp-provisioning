@@ -22,3 +22,8 @@ output "kubeadmin_password_path" {
   value       = "${local.install_dir}/auth/kubeadmin-password"
   description = "Path to the kubeadmin password file"
 }
+
+output "route53_name_servers" {
+  value       = aws_route53_zone.cluster.name_servers
+  description = "Set these NS records at your domain registrar for ${var.base_domain}"
+}
