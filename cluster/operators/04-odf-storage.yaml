@@ -1,0 +1,58 @@
+---
+apiVersion: local.storage.openshift.io/v1alpha1
+kind: LocalVolumeDiscovery
+metadata:
+  name: auto-discover-devices
+  namespace: openshift-local-storage
+spec:
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: node-role.kubernetes.io/worker
+            operator: Exists
+          - key: node-role.kubernetes.io/gpu
+            operator: DoesNotExist
+---
+apiVersion: local.storage.openshift.io/v1alpha1
+kind: LocalVolumeSet
+metadata:
+  name: odf-local-volumes
+  namespace: openshift-local-storage
+spec:
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: node-role.kubernetes.io/worker
+            operator: Exists
+          - key: node-role.kubernetes.io/gpu
+            operator: DoesNotExist
+  storageClassName: localblock
+  volumeMode: Block
+  deviceInclusionSpec:
+    deviceTypes:
+      - disk
+    minSize: 200Gi
+---
+apiVersion: ocs.openshift.io/v1
+kind: StorageCluster
+metadata:
+  name: ocs-storagecluster
+  namespace: openshift-storage
+spec:
+  resourceProfile: balanced
+  storageDeviceSets:
+    - name: ocs-deviceset-localblock
+      count: 1
+      dataPVCTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 300Gi
+          storageClassName: localblock
+          volumeMode: Block
+      placement: {}
+      portable: false
+      replica: 3
+  monDataDirHostPath: /var/lib/rook

@@ -1,0 +1,75 @@
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-storage-operatorgroup
+  namespace: openshift-storage
+spec:
+  targetNamespaces:
+    - openshift-storage
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nfd-operatorgroup
+  namespace: openshift-nfd
+spec:
+  targetNamespaces:
+    - openshift-nfd
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: redhat-ods-operatorgroup
+  namespace: redhat-ods-operator
+spec: {}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: nvidia-gpu-operatorgroup
+  namespace: nvidia-gpu-operator
+spec:
+  targetNamespaces:
+    - nvidia-gpu-operator
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-lightspeed-operatorgroup
+  namespace: openshift-lightspeed
+spec:
+  targetNamespaces:
+    - openshift-lightspeed
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-observability-operatorgroup
+  namespace: openshift-observability-operator
+spec: {}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: quay-operatorgroup
+  namespace: quay-enterprise
+spec:
+  targetNamespaces:
+    - quay-enterprise
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-local-storage-operatorgroup
+  namespace: openshift-local-storage
+spec:
+  targetNamespaces:
+    - openshift-local-storage
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-gitops-operatorgroup
+  namespace: openshift-gitops-operator
+spec: {}

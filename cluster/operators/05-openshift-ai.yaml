@@ -1,0 +1,55 @@
+---
+apiVersion: dscinitialization.opendatahub.io/v1
+kind: DSCInitialization
+metadata:
+  name: default-dsci
+spec:
+  applicationsNamespace: redhat-ods-applications
+  monitoring:
+    managementState: Managed
+  serviceMesh:
+    managementState: Managed
+    controlPlane:
+      metricsCollection: Istio
+      namespace: istio-system
+  trustedCABundle:
+    managementState: Managed
+---
+apiVersion: datasciencecluster.opendatahub.io/v1
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    dashboard:
+      managementState: Managed
+    workbenches:
+      managementState: Managed
+    datasciencepipelines:
+      managementState: Managed
+    kserve:
+      managementState: Managed
+      serving:
+        ingressGateway:
+          certificate:
+            type: SelfSigned
+        managementState: Managed
+        name: knative-serving
+    modelmeshserving:
+      managementState: Removed
+    ray:
+      managementState: Managed
+    trustyai:
+      managementState: Managed
+    kueue:
+      managementState: Managed
+    codeflare:
+      managementState: Managed
+    trainingoperator:
+      managementState: Managed
+    modelregistry:
+      managementState: Managed
+    ogx:
+      managementState: Managed
+    aigateway:
+      managementState: Managed

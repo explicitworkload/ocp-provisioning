@@ -6,8 +6,14 @@ OpenTofu configurations for provisioning OpenShift Container Platform (OCP) infr
 
 ```
 ocp-provisioning/
-├── bastion/       # RHEL 10 bastion host for OCP management
-├── cluster/       # OpenShift cluster provisioning (coming soon)
+├── bastion/                # RHEL 10 bastion host for OCP management
+├── cluster/                # OpenShift cluster provisioning (IPI)
+│   ├── manifests/          # GPU worker MachineSet template
+│   ├── operators/          # Operator namespaces, groups, and subscriptions
+│   ├── main.tf             # Cluster install orchestration
+│   ├── variables.tf        # Cluster configuration variables
+│   ├── outputs.tf          # Cluster endpoints and credentials
+│   └── install-config.yaml.tpl
 └── README.md
 ```
 
@@ -28,74 +34,79 @@ Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 - tmux with [TPM](https://github.com/tmux-plugins/tpm) and powerline
 - Git, wget, curl, jq, and other common utilities
 
-## Prerequisites
-
-- [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.3.0
-- An AWS account with credentials configured
-- An SSH key pair at `~/.ssh/id_rsa` (or specify a different path)
-
-## Usage
-
-1. **Export AWS credentials**
-
-   ```sh
-   export AWS_ACCESS_KEY_ID="<your-access-key>"
-   export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
-   ```
-
-2. **Clone the repository**
-
-   ```sh
-   git clone https://github.com/explicitworkload/ocp-provisioning.git
-   cd ocp-provisioning/bastion
-   ```
-
-3. **Configure variables**
-
-   Create a `terraform.tfvars` file:
-
-   ```hcl
-   aws_region          = "ap-southeast-1"
-   instance_type       = "t3.xlarge"
-   ssh_public_key_path = "~/.ssh/id_rsa.pub"
-   ```
-
-4. **Deploy**
-
-   ```sh
-   tofu init
-   tofu plan
-   tofu apply
-   ```
-
-5. **Connect**
-
-   ```sh
-   ssh ec2-user@<bastion_public_ip>
-   ```
-
-   The bastion public IP and SSH command are printed as OpenTofu outputs after `apply`.
-
-## Variables
-
-| Name | Description | Default |
-|------|-------------|---------|
-| `aws_region` | AWS region for deployment | `ap-southeast-1` |
-| `instance_type` | EC2 instance size | `t3.xlarge` |
-| `ssh_public_key_path` | Path to your SSH public key | `~/.ssh/id_rsa.pub` |
-| `allowed_ssh_cidr` | CIDR block allowed to SSH into the bastion | `0.0.0.0/0` |
-
-## Outputs
-
-| Name | Description |
-|------|-------------|
-| `bastion_public_ip` | Public IP address of the bastion |
-| `ssh_connection_command` | Ready-to-use SSH command |
-
-## Cleanup
+### Deploy Bastion
 
 ```sh
+export AWS_ACCESS_KEY_ID="<your-access-key>"
+export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
+
 cd bastion
+tofu init && tofu apply
+ssh ec2-user@<bastion_public_ip>
+```
+
+## OpenShift Cluster
+
+Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by OpenTofu. Run this **from the bastion host** inside a tmux session.
+
+**Cluster topology:**
+
+| Role | Instance Type | Count | Notes |
+|------|---------------|-------|-------|
+| Master | `m5.xlarge` (4 vCPU, 16 GB) | 3 | Control plane |
+| CPU Worker | `m5.2xlarge` (8 vCPU, 32 GB) | 3 | + 300 GB additional SSD each |
+| GPU Worker | `g5.4xlarge` (16 vCPU, 64 GB, 1x A10G) | 1 | NVIDIA GPU workloads |
+
+**Operators installed:**
+
+- OpenShift Data Foundation (balanced profile)
+- Node Feature Discovery
+- OpenShift AI
+- NVIDIA GPU Operator
+- Lightspeed Operator
+- Cluster Observability Operator
+- OpenShift Pipelines
+- Red Hat Quay
+- Web Terminal
+- OpenShift GitOps
+
+### Prerequisites
+
+- A Route53 hosted zone for your base domain (e.g. `kubernetes.day`)
+- A [Red Hat pull secret](https://console.redhat.com/openshift/install/pull-secret) saved as `cluster/pull-secret.json`
+- SSH key pair on the bastion (`~/.ssh/id_rsa.pub`)
+
+### Deploy Cluster
+
+From the bastion host:
+
+```sh
+tmux new -s ocp
+
+cd cluster
+
+# Save your Red Hat pull secret (download from https://console.redhat.com/openshift/install/pull-secret)
+vi pull-secret.json
+
+tofu init
+tofu apply
+```
+
+A random cluster name (e.g. `aws472`) is generated automatically. The cluster will be available at `aws472.kubernetes.day`.
+
+### Cluster Outputs
+
+After deployment, OpenTofu will output:
+
+- **Cluster name** — the generated name (e.g. `aws472`)
+- **Console URL** — `https://console-openshift-console.apps.<name>.kubernetes.day`
+- **Kubeconfig path** — `cluster/install-dir/auth/kubeconfig`
+- **Kubeadmin password** — `cluster/install-dir/auth/kubeadmin-password`
+
+### Destroy Cluster
+
+```sh
+cd cluster
 tofu destroy
 ```
 
