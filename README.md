@@ -17,6 +17,44 @@ ocp-provisioning/
 └── README.md
 ```
 
+## Prerequisites
+
+### AWS
+
+- An AWS account with credentials configured (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
+- An existing Route53 hosted zone for your base domain (e.g. `sandbox199.opentlc.com`)
+- Sufficient EC2 quotas: 3x `m5.xlarge`, 3x `m5.2xlarge`, 1x `g5.4xlarge`, plus 1x `t3.xlarge` for the bastion
+- Elastic IP quota of at least 10 in your target region
+
+### Red Hat Pull Secret
+
+A pull secret is required to install OpenShift. Download it from the [Red Hat Console](https://console.redhat.com/openshift/install/pull-secret) and save it as `cluster/pull-secret.json`.
+
+> **Do not commit `pull-secret.json` to the repository.** It is listed in `.gitignore`.
+
+### SSH Key Pair
+
+An SSH key pair is needed in two places:
+
+1. **Local machine** (`~/.ssh/id_rsa.pub`) — used by the bastion OpenTofu config to allow SSH access to the bastion host
+2. **Bastion host** (`~/.ssh/id_rsa.pub`) — used by the cluster OpenTofu config and injected into all cluster nodes for SSH access
+
+After the bastion is provisioned, copy your key to it:
+
+```sh
+scp ~/.ssh/id_rsa.pub ec2-user@<bastion_public_ip>:~/.ssh/id_rsa.pub
+scp ~/.ssh/id_rsa ec2-user@<bastion_public_ip>:~/.ssh/id_rsa
+```
+
+### Tools
+
+The following are required on your local machine:
+
+- [OpenTofu](https://opentofu.org/docs/intro/install/) (>= 1.3.0)
+- AWS CLI (for credential management)
+
+All other tools (oc, kubectl, openshift-install, etc.) are installed automatically on the bastion host via Homebrew.
+
 ## Bastion Host
 
 Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
@@ -59,9 +97,9 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 
 **Operators installed:**
 
-- OpenShift Data Foundation (balanced profile)
+- OpenShift Data Foundation (balanced profile, adopts 300 GB worker SSDs via Local Storage Operator)
 - Node Feature Discovery
-- OpenShift AI
+- OpenShift AI 3.5 (KServe, OGX, AI Gateway, TrustyAI enabled)
 - NVIDIA GPU Operator
 - Lightspeed Operator
 - Cluster Observability Operator
@@ -70,20 +108,17 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 - Web Terminal
 - OpenShift GitOps
 
-### Prerequisites
-
-- A Route53 hosted zone for your base domain (e.g. `kubernetes.day`)
-- A [Red Hat pull secret](https://console.redhat.com/openshift/install/pull-secret) saved as `cluster/pull-secret.json`
-- SSH key pair on the bastion (`~/.ssh/id_rsa.pub`)
-
 ### Deploy Cluster
 
 From the bastion host:
 
 ```sh
+export AWS_ACCESS_KEY_ID="<your-access-key>"
+export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
+
 tmux new -s ocp
 
-cd cluster
+cd ~/ocp-provisioning/cluster
 
 # Save your Red Hat pull secret (download from https://console.redhat.com/openshift/install/pull-secret)
 vi pull-secret.json
@@ -92,22 +127,23 @@ tofu init
 tofu apply
 ```
 
-A random cluster name (e.g. `aws472`) is generated automatically. The cluster will be available at `aws472.kubernetes.day`.
+A random cluster name (e.g. `jgoh742`) is generated automatically. The cluster will be available at `jgoh742.sandbox199.opentlc.com`.
 
 ### Cluster Outputs
 
 After deployment, OpenTofu will output:
 
-- **Cluster name** — the generated name (e.g. `aws472`)
-- **Console URL** — `https://console-openshift-console.apps.<name>.kubernetes.day`
+- **Cluster name** — the generated name (e.g. `jgoh742`)
+- **Console URL** — `https://console-openshift-console.apps.<name>.sandbox199.opentlc.com`
 - **Kubeconfig path** — `cluster/install-dir/auth/kubeconfig`
 - **Kubeadmin password** — `cluster/install-dir/auth/kubeadmin-password`
 
 ### Destroy Cluster
 
 ```sh
-cd cluster
+cd ~/ocp-provisioning/cluster
 tofu destroy
+rm -rf install-dir
 ```
 
 ## License

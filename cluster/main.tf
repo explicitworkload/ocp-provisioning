@@ -80,11 +80,12 @@ resource "null_resource" "patch_worker_machinesets" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
 			set -euo pipefail
-			pip3 install pyyaml -q
+			python3 -m venv /tmp/pyyaml-venv
+			/tmp/pyyaml-venv/bin/pip install pyyaml -q
 
 			for f in ${local.install_dir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml; do
 				[ -f "$f" ] || continue
-				python3 -c "
+				/tmp/pyyaml-venv/bin/python3 -c "
 			import yaml, sys
 
 			with open('$f') as fh:
