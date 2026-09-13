@@ -49,11 +49,7 @@ spec:
             - filters:
                 - name: tag:Name
                   values:
-                    - CLUSTER_NAME-node
-            - filters:
-                - name: tag:Name
-                  values:
-                    - CLUSTER_NAME-lb
+                    - CLUSTER_NAME-worker-sg
           subnet:
             filters:
               - name: tag:Name
