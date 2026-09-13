@@ -24,6 +24,6 @@ output "kubeadmin_password_path" {
 }
 
 output "route53_name_servers" {
-  value       = aws_route53_zone.cluster.name_servers
-  description = "Set these NS records at your domain registrar"
+  value       = data.aws_route53_zone.cluster.name_servers
+  description = "Name servers for the Route53 hosted zone"
 }

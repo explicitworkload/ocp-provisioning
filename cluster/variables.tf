@@ -1,7 +1,7 @@
 variable "base_domain" {
   type        = string
-  default     = "kubernetes.day"
-  description = "Base domain for the OpenShift cluster (must have a Route53 hosted zone)"
+  default     = "sandbox199.opentlc.com"
+  description = "Base domain for the OpenShift cluster (must have an existing Route53 hosted zone)"
 }
 
 variable "aws_region" {

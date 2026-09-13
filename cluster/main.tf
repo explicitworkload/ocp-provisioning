@@ -31,12 +31,12 @@ resource "random_integer" "cluster_suffix" {
 }
 
 locals {
-  cluster_name = "aws${random_integer.cluster_suffix.result}"
+  cluster_name = "jgoh${random_integer.cluster_suffix.result}"
   install_dir  = "${path.module}/install-dir"
 }
 
-# Create Route53 hosted zone for the base domain
-resource "aws_route53_zone" "cluster" {
+# Look up the existing Route53 hosted zone
+data "aws_route53_zone" "cluster" {
   name = var.base_domain
 }
 
@@ -62,57 +62,9 @@ resource "local_file" "install_config_backup" {
   filename = "${local.install_dir}/install-config.yaml.bak"
 }
 
-# DNS validation: wait until the domain's NS records match this Route53 zone
-resource "null_resource" "dns_validation" {
-  depends_on = [aws_route53_zone.cluster]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    command     = <<-SCRIPT
-			set -euo pipefail
-
-			EXPECTED_NS=$(aws route53 get-hosted-zone --id ${aws_route53_zone.cluster.zone_id} \
-			  --query 'DelegationSet.NameServers' --output text | tr '\t' '\n' | sort)
-
-			echo ""
-			echo "============================================="
-			echo " Route53 hosted zone created for ${var.base_domain}"
-			echo " Zone ID: ${aws_route53_zone.cluster.zone_id}"
-			echo "============================================="
-			echo ""
-			echo " Set these NS records at your domain registrar:"
-			echo ""
-			echo "$EXPECTED_NS"
-			echo ""
-			echo " Waiting for DNS propagation..."
-			echo "============================================="
-			echo ""
-
-			while true; do
-				ACTUAL_NS=$(dig +short NS ${var.base_domain} @8.8.8.8 2>/dev/null | sed 's/\.$//' | sort || true)
-				MATCH=true
-				for ns in $EXPECTED_NS; do
-					if ! echo "$ACTUAL_NS" | grep -qi "$ns"; then
-						MATCH=false
-						break
-					fi
-				done
-
-				if [ "$MATCH" = true ] && [ -n "$ACTUAL_NS" ]; then
-					echo "DNS delegation verified — NS records match."
-					break
-				fi
-
-				echo "NS records not yet propagated. Retrying in 30s..."
-				sleep 30
-			done
-		SCRIPT
-  }
-}
-
 # Phase 1: Generate manifests so we can modify worker MachineSets
 resource "null_resource" "generate_manifests" {
-  depends_on = [local_file.install_config, null_resource.dns_validation]
+  depends_on = [local_file.install_config]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
