@@ -266,3 +266,31 @@ resource "null_resource" "openshift_ai" {
     cluster_name = local.cluster_name
   }
 }
+
+# Phase 8: Configure Quay Registry (waits for Quay operator to be ready)
+resource "null_resource" "quay_registry" {
+  depends_on = [null_resource.operators]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-SCRIPT
+			set -eo pipefail
+			${local.brew_init}
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+
+			echo "Waiting for Quay Operator to be ready..."
+			until oc get csv -n quay-enterprise -o jsonpath='{.items[?(@.spec.displayName=="Red Hat Quay")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
+
+			echo "Creating Quay Registry..."
+			oc apply -f ${path.module}/operators/06-quay-registry.yaml
+
+			echo "Quay Registry created."
+		SCRIPT
+  }
+
+  triggers = {
+    cluster_name = local.cluster_name
+  }
+}

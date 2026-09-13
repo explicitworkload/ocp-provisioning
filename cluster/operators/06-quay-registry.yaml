@@ -1,0 +1,41 @@
+---
+apiVersion: quay.redhat.com/v1
+kind: QuayRegistry
+metadata:
+  name: registry
+  namespace: quay-enterprise
+spec:
+  components:
+    - kind: clair
+      managed: true
+      overrides:
+        replicas: 1
+    - kind: postgres
+      managed: true
+    - kind: objectstorage
+      managed: true
+    - kind: redis
+      managed: true
+    - kind: horizontalpodautoscaler
+      managed: false
+    - kind: route
+      managed: true
+    - kind: mirror
+      managed: false
+    - kind: monitoring
+      managed: true
+    - kind: tls
+      managed: true
+    - kind: quay
+      managed: true
+      overrides:
+        replicas: 1
+        resources:
+          limits:
+            cpu: "4"
+            memory: 8Gi
+          requests:
+            cpu: "2"
+            memory: 8Gi
+    - kind: clairpostgres
+      managed: true
