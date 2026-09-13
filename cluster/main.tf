@@ -224,6 +224,10 @@ resource "null_resource" "odf_storage" {
 				sleep 30
 			done
 
+			echo "Labeling worker nodes for ODF storage..."
+			oc get nodes -l node-role.kubernetes.io/worker,!node-role.kubernetes.io/gpu --no-headers -o name \
+			  | xargs -I{} oc label {} cluster.ocs.openshift.io/openshift-storage="" --overwrite
+
 			echo "Applying ODF storage configuration..."
 			oc apply -f ${path.module}/operators/04-odf-storage.yaml
 

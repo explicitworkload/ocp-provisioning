@@ -54,9 +54,7 @@ kind: OperatorGroup
 metadata:
   name: quay-operatorgroup
   namespace: quay-enterprise
-spec:
-  targetNamespaces:
-    - quay-enterprise
+spec: {}
 ---
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
