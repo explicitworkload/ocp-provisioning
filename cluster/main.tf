@@ -94,6 +94,7 @@ resource "null_resource" "patch_worker_machinesets" {
 
 			block_devices = doc['spec']['template']['spec']['providerSpec']['value']['blockDevices']
 			block_devices.append({
+			    'deviceName': '/dev/xvdb',
 			    'ebs': {
 			        'encrypted': True,
 			        'volumeSize': ${var.worker_extra_disk_size},
