@@ -276,7 +276,34 @@ resource "null_resource" "openshift_ai" {
   }
 }
 
-# Phase 8: Configure Quay Registry (waits for Quay operator to be ready)
+# Phase 8: Enable console plugins
+resource "null_resource" "console_plugins" {
+  depends_on = [null_resource.operators]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-SCRIPT
+			set -eo pipefail
+			${local.brew_init}
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+
+			PLUGINS=(odf-console pipelines-console-plugin gitops-plugin)
+			for plugin in "$${PLUGINS[@]}"; do
+				echo "Enabling console plugin: $plugin"
+				oc patch consoles.operator.openshift.io cluster --type=json \
+				  -p="[{\"op\": \"add\", \"path\": \"/spec/plugins/-\", \"value\": \"$plugin\"}]" 2>/dev/null || true
+			done
+
+			echo "Console plugins enabled."
+		SCRIPT
+  }
+
+  triggers = {
+    cluster_name = local.cluster_name
+  }
+}
+
+# Phase 9: Configure Quay Registry (waits for Quay operator to be ready)
 resource "null_resource" "quay_registry" {
   depends_on = [null_resource.operators]
 
