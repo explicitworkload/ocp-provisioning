@@ -62,9 +62,57 @@ resource "local_file" "install_config_backup" {
   filename = "${local.install_dir}/install-config.yaml.bak"
 }
 
+# DNS validation: wait until the domain's NS records match this Route53 zone
+resource "null_resource" "dns_validation" {
+  depends_on = [aws_route53_zone.cluster]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-SCRIPT
+			set -euo pipefail
+
+			EXPECTED_NS=$(aws route53 get-hosted-zone --id ${aws_route53_zone.cluster.zone_id} \
+			  --query 'DelegationSet.NameServers' --output text | tr '\t' '\n' | sort)
+
+			echo ""
+			echo "============================================="
+			echo " Route53 hosted zone created for ${var.base_domain}"
+			echo " Zone ID: ${aws_route53_zone.cluster.zone_id}"
+			echo "============================================="
+			echo ""
+			echo " Set these NS records at your domain registrar:"
+			echo ""
+			echo "$EXPECTED_NS"
+			echo ""
+			echo " Waiting for DNS propagation..."
+			echo "============================================="
+			echo ""
+
+			while true; do
+				ACTUAL_NS=$(dig +short NS ${var.base_domain} @8.8.8.8 2>/dev/null | sed 's/\.$//' | sort || true)
+				MATCH=true
+				for ns in $EXPECTED_NS; do
+					if ! echo "$ACTUAL_NS" | grep -qi "$ns"; then
+						MATCH=false
+						break
+					fi
+				done
+
+				if [ "$MATCH" = true ] && [ -n "$ACTUAL_NS" ]; then
+					echo "DNS delegation verified — NS records match."
+					break
+				fi
+
+				echo "NS records not yet propagated. Retrying in 30s..."
+				sleep 30
+			done
+		SCRIPT
+  }
+}
+
 # Phase 1: Generate manifests so we can modify worker MachineSets
 resource "null_resource" "generate_manifests" {
-  depends_on = [local_file.install_config, aws_route53_zone.cluster]
+  depends_on = [local_file.install_config, null_resource.dns_validation]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
@@ -79,31 +127,33 @@ resource "null_resource" "patch_worker_machinesets" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
+			set -euo pipefail
+			pip3 install pyyaml -q
 
-      for f in ${local.install_dir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml; do
-        [ -f "$f" ] || continue
-        python3 -c "
-import yaml, sys
+			for f in ${local.install_dir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml; do
+				[ -f "$f" ] || continue
+				python3 -c "
+			import yaml, sys
 
-with open('$f') as fh:
-    doc = yaml.safe_load(fh)
+			with open('$f') as fh:
+			    doc = yaml.safe_load(fh)
 
-block_devices = doc['spec']['template']['spec']['providerSpec']['value']['blockDevices']
-block_devices.append({
-    'ebs': {
-        'encrypted': True,
-        'volumeSize': ${var.worker_extra_disk_size},
-        'volumeType': 'gp3',
-        'iops': 3000
-    }
-})
+			block_devices = doc['spec']['template']['spec']['providerSpec']['value']['blockDevices']
+			block_devices.append({
+			    'ebs': {
+			        'encrypted': True,
+			        'volumeSize': ${var.worker_extra_disk_size},
+			        'volumeType': 'gp3',
+			        'iops': 3000
+			    }
+			})
 
-with open('$f', 'w') as fh:
-    yaml.dump(doc, fh, default_flow_style=False)
-"
-        echo "Patched $f with additional ${var.worker_extra_disk_size}GB SSD"
-      done
-    SCRIPT
+			with open('$f', 'w') as fh:
+			    yaml.dump(doc, fh, default_flow_style=False)
+			"
+				echo "Patched $f with additional ${var.worker_extra_disk_size}GB SSD"
+			done
+		SCRIPT
   }
 }
 
@@ -135,24 +185,24 @@ resource "null_resource" "gpu_machineset" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
+			set -euo pipefail
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-      export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+			/usr/local/bin/oc wait clusteroperators --all --for=condition=Available=True --timeout=600s
 
-      /usr/local/bin/oc wait clusteroperators --all --for=condition=Available=True --timeout=600s
+			INFRA_ID=$(/usr/local/bin/oc get -o jsonpath='{.status.infrastructureName}' infrastructure cluster)
+			AMI_ID=$(/usr/local/bin/oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
 
-      INFRA_ID=$(/usr/local/bin/oc get -o jsonpath='{.status.infrastructureName}' infrastructure cluster)
-      AMI_ID=$(/usr/local/bin/oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
+			sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
+			    -e "s|AMI_ID|$AMI_ID|g" \
+			    ${path.module}/manifests/gpu-machineset.yaml.tpl | /usr/local/bin/oc apply -f -
 
-      sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
-          -e "s|AMI_ID|$AMI_ID|g" \
-          ${path.module}/manifests/gpu-machineset.yaml.tpl | /usr/local/bin/oc apply -f -
-
-      echo "GPU MachineSet created. Waiting for node..."
-      /usr/local/bin/oc wait machineset "$INFRA_ID-gpu-ap-southeast-1a" \
-        -n openshift-machine-api \
-        --for=jsonpath='{.status.readyReplicas}'=1 \
-        --timeout=600s
-    SCRIPT
+			echo "GPU MachineSet created. Waiting for node..."
+			/usr/local/bin/oc wait machineset "$INFRA_ID-gpu-ap-southeast-1a" \
+			  -n openshift-machine-api \
+			  --for=jsonpath='{.status.readyReplicas}'=1 \
+			  --timeout=600s
+		SCRIPT
   }
 
   triggers = {
@@ -167,22 +217,22 @@ resource "null_resource" "operators" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
+			set -euo pipefail
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-      export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+			echo "Creating operator namespaces..."
+			/usr/local/bin/oc apply -f ${path.module}/operators/01-namespaces.yaml
+			sleep 10
 
-      echo "Creating operator namespaces..."
-      /usr/local/bin/oc apply -f ${path.module}/operators/01-namespaces.yaml
-      sleep 10
+			echo "Creating operator groups..."
+			/usr/local/bin/oc apply -f ${path.module}/operators/02-operatorgroups.yaml
+			sleep 10
 
-      echo "Creating operator groups..."
-      /usr/local/bin/oc apply -f ${path.module}/operators/02-operatorgroups.yaml
-      sleep 10
+			echo "Creating operator subscriptions..."
+			/usr/local/bin/oc apply -f ${path.module}/operators/03-subscriptions.yaml
 
-      echo "Creating operator subscriptions..."
-      /usr/local/bin/oc apply -f ${path.module}/operators/03-subscriptions.yaml
-
-      echo "Operators installed. Monitor with: oc get csv -A"
-    SCRIPT
+			echo "Operators installed. Monitor with: oc get csv -A"
+		SCRIPT
   }
 
   triggers = {
@@ -197,24 +247,24 @@ resource "null_resource" "odf_storage" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
+			set -eo pipefail
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-      export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+			echo "Waiting for Local Storage Operator to be ready..."
+			until /usr/local/bin/oc get csv -n openshift-local-storage -o jsonpath='{.items[?(@.spec.displayName=="Local Storage")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
 
-      echo "Waiting for Local Storage Operator to be ready..."
-      until /usr/local/bin/oc get csv -n openshift-local-storage -o jsonpath='{.items[?(@.spec.displayName=="Local Storage")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-        sleep 30
-      done
+			echo "Waiting for ODF Operator to be ready..."
+			until /usr/local/bin/oc get csv -n openshift-storage -o jsonpath='{.items[?(@.spec.displayName=="OpenShift Data Foundation")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
 
-      echo "Waiting for ODF Operator to be ready..."
-      until /usr/local/bin/oc get csv -n openshift-storage -o jsonpath='{.items[?(@.spec.displayName=="OpenShift Data Foundation")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-        sleep 30
-      done
+			echo "Applying ODF storage configuration..."
+			/usr/local/bin/oc apply -f ${path.module}/operators/04-odf-storage.yaml
 
-      echo "Applying ODF storage configuration..."
-      /usr/local/bin/oc apply -f ${path.module}/operators/04-odf-storage.yaml
-
-      echo "ODF StorageCluster created. Devices will be discovered and adopted."
-    SCRIPT
+			echo "ODF StorageCluster created. Devices will be discovered and adopted."
+		SCRIPT
   }
 
   triggers = {
@@ -229,19 +279,19 @@ resource "null_resource" "openshift_ai" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-SCRIPT
+			set -eo pipefail
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-      export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+			echo "Waiting for OpenShift AI Operator to be ready..."
+			until /usr/local/bin/oc get csv -n redhat-ods-operator -o jsonpath='{.items[?(@.spec.displayName=="Red Hat OpenShift AI")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
 
-      echo "Waiting for OpenShift AI Operator to be ready..."
-      until /usr/local/bin/oc get csv -n redhat-ods-operator -o jsonpath='{.items[?(@.spec.displayName=="Red Hat OpenShift AI")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-        sleep 30
-      done
+			echo "Applying OpenShift AI configuration..."
+			/usr/local/bin/oc apply -f ${path.module}/operators/05-openshift-ai.yaml
 
-      echo "Applying OpenShift AI configuration..."
-      /usr/local/bin/oc apply -f ${path.module}/operators/05-openshift-ai.yaml
-
-      echo "OpenShift AI configured with KServe, ModelMesh, and all components."
-    SCRIPT
+			echo "OpenShift AI configured with KServe, ModelMesh, and all components."
+		SCRIPT
   }
 
   triggers = {
