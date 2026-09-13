@@ -24,8 +24,8 @@ variable "worker_instance_type" {
 
 variable "gpu_instance_type" {
   type        = string
-  default     = "g5.4xlarge"
-  description = "EC2 instance type for GPU worker node (16 vCPU, 64 GB, 1x A10G)"
+  default     = "g4dn.4xlarge"
+  description = "EC2 instance type for GPU worker node (16 vCPU, 64 GB, 1x T4)"
 }
 
 variable "gpu_availability_zone" {
