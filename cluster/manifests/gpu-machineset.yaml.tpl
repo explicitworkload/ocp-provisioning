@@ -58,7 +58,7 @@ spec:
             filters:
               - name: tag:Name
                 values:
-                  - CLUSTER_NAME-private-ap-southeast-1a
+                  - CLUSTER_NAME-subnet-private-ap-southeast-1a
           tags:
             - name: kubernetes.io/cluster/CLUSTER_NAME
               value: owned
