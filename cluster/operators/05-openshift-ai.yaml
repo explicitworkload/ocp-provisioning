@@ -25,31 +25,79 @@ spec:
       managementState: Managed
     workbenches:
       managementState: Managed
-    datasciencepipelines:
+      workbenchNamespace: rhods-notebooks
+    aipipelines:
       managementState: Managed
     kserve:
       managementState: Managed
-      serving:
-        ingressGateway:
-          certificate:
-            type: SelfSigned
+      nim:
+        airGapped: false
         managementState: Managed
-        name: knative-serving
-    modelmeshserving:
-      managementState: Removed
+      rawDeploymentServiceConfig: Headless
     ray:
       managementState: Managed
     trustyai:
       managementState: Managed
+      mcpGuardrailsMode: false
     kueue:
-      managementState: Managed
-    codeflare:
-      managementState: Managed
-    trainingoperator:
-      managementState: Managed
+      managementState: Removed
+      autoCreateQueues: false
+      defaultClusterQueueName: default
+      defaultLocalQueueName: default
     modelregistry:
       managementState: Managed
+      registriesNamespace: rhoai-model-registries
     ogx:
       managementState: Managed
     aigateway:
       managementState: Managed
+    trainingoperator:
+      managementState: Removed
+    trainer:
+      managementState: Removed
+    sparkoperator:
+      managementState: Removed
+    feastoperator:
+      managementState: Managed
+    mlflowoperator:
+      managementState: Managed
+    llamastackoperator:
+      managementState: Removed
+---
+apiVersion: opendatahub.io/v1alpha
+kind: OdhDashboardConfig
+metadata:
+  name: odh-dashboard-config
+  namespace: redhat-ods-applications
+spec:
+  dashboardConfig:
+    aiAssetCustomEndpoints: true
+    disableKServe: false
+    disableLLMd: false
+    disableTracking: false
+    genAiStudio: true
+    modelAsService: true
+    observabilityDashboard: true
+    vLLMDeploymentOnMaaS: true
+  genAiStudioConfig:
+    aiAssetCustomEndpoints:
+      externalProviders: true
+  globalMLflowNamespaces: []
+  hardwareProfileOrder: []
+  modelServing:
+    deploymentStrategy: recreate
+    isLLMdDefault: false
+  notebookController:
+    enabled: true
+    notebookNamespace: rhods-notebooks
+    pvcSize: 20Gi
+  templateDisablement:
+    - vllm-spyre-ppc64le-runtime
+    - kserve-ovms
+    - vllm-spyre-x86-runtime
+    - autogluon-runtime
+    - vllm-cpu-runtime
+    - vllm-spyre-s390x-runtime
+    - vllm-gaudi-runtime
+    - vllm-cuda-runtime
+  templateOrder: []
