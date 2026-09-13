@@ -124,12 +124,13 @@ resource "null_resource" "cluster_install" {
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["/bin/bash", "-c"]
-    command     = "${local.brew_init} && openshift-install destroy cluster --dir=${self.triggers.install_dir} --log-level=info || true"
+    command     = "${self.triggers.brew_init} && openshift-install destroy cluster --dir=${self.triggers.install_dir} --log-level=info || true"
   }
 
   triggers = {
     install_dir  = local.install_dir
     cluster_name = local.cluster_name
+    brew_init    = local.brew_init
   }
 }
 
