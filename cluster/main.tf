@@ -250,7 +250,15 @@ resource "null_resource" "openshift_ai" {
 			echo "Applying OpenShift AI configuration..."
 			oc apply -f ${path.module}/operators/05-openshift-ai.yaml
 
-			echo "OpenShift AI configured with KServe, ModelMesh, and all components."
+			echo "Waiting for OdhDashboardConfig CRD..."
+			until oc get crd odhdashboardconfigs.opendatahub.io 2>/dev/null; do
+				sleep 15
+			done
+
+			echo "Re-applying to create OdhDashboardConfig..."
+			oc apply -f ${path.module}/operators/05-openshift-ai.yaml
+
+			echo "OpenShift AI fully configured."
 		SCRIPT
   }
 
