@@ -152,10 +152,13 @@ resource "null_resource" "gpu_machineset" {
 
 			sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
 			    -e "s|AMI_ID|$AMI_ID|g" \
+			    -e "s|GPU_INSTANCE_TYPE|${var.gpu_instance_type}|g" \
+			    -e "s|GPU_REGION|${var.aws_region}|g" \
+			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
 			    ${path.module}/manifests/gpu-machineset.yaml.tpl | oc apply -f -
 
 			echo "GPU MachineSet created. Waiting for node..."
-			oc wait machineset "$INFRA_ID-gpu-ap-southeast-1a" \
+			oc wait machineset "$INFRA_ID-gpu-${var.gpu_availability_zone}" \
 			  -n openshift-machine-api \
 			  --for=jsonpath='{.status.readyReplicas}'=1 \
 			  --timeout=600s
@@ -163,7 +166,9 @@ resource "null_resource" "gpu_machineset" {
   }
 
   triggers = {
-    cluster_name = local.cluster_name
+    cluster_name      = local.cluster_name
+    gpu_instance_type = var.gpu_instance_type
+    gpu_az            = var.gpu_availability_zone
   }
 }
 

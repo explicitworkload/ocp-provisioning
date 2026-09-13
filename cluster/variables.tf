@@ -28,6 +28,12 @@ variable "gpu_instance_type" {
   description = "EC2 instance type for GPU worker node (16 vCPU, 64 GB, 1x A10G)"
 }
 
+variable "gpu_availability_zone" {
+  type        = string
+  default     = "ap-southeast-1b"
+  description = "Availability zone for the GPU worker node"
+}
+
 variable "master_replicas" {
   type        = number
   default     = 3

@@ -1,7 +1,7 @@
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
 metadata:
-  name: CLUSTER_NAME-gpu-ap-southeast-1a
+  name: CLUSTER_NAME-gpu-GPU_AZ
   namespace: openshift-machine-api
   labels:
     machine.openshift.io/cluster-api-cluster: CLUSTER_NAME
@@ -10,14 +10,14 @@ spec:
   selector:
     matchLabels:
       machine.openshift.io/cluster-api-cluster: CLUSTER_NAME
-      machine.openshift.io/cluster-api-machineset: CLUSTER_NAME-gpu-ap-southeast-1a
+      machine.openshift.io/cluster-api-machineset: CLUSTER_NAME-gpu-GPU_AZ
   template:
     metadata:
       labels:
         machine.openshift.io/cluster-api-cluster: CLUSTER_NAME
         machine.openshift.io/cluster-api-machine-role: worker
         machine.openshift.io/cluster-api-machine-type: worker
-        machine.openshift.io/cluster-api-machineset: CLUSTER_NAME-gpu-ap-southeast-1a
+        machine.openshift.io/cluster-api-machineset: CLUSTER_NAME-gpu-GPU_AZ
     spec:
       metadata:
         labels:
@@ -40,11 +40,11 @@ spec:
           deviceIndex: 0
           iamInstanceProfile:
             id: CLUSTER_NAME-worker-profile
-          instanceType: g5.4xlarge
+          instanceType: GPU_INSTANCE_TYPE
           kind: AWSMachineProviderConfig
           placement:
-            availabilityZone: ap-southeast-1a
-            region: ap-southeast-1
+            availabilityZone: GPU_AZ
+            region: GPU_REGION
           securityGroups:
             - filters:
                 - name: tag:Name
@@ -58,7 +58,7 @@ spec:
             filters:
               - name: tag:Name
                 values:
-                  - CLUSTER_NAME-subnet-private-ap-southeast-1a
+                  - CLUSTER_NAME-subnet-private-GPU_AZ
           tags:
             - name: kubernetes.io/cluster/CLUSTER_NAME
               value: owned
