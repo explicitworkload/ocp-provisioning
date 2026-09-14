@@ -41,7 +41,6 @@ spec:
           iamInstanceProfile:
             id: CLUSTER_NAME-worker-profile
           instanceType: g4dn.4xlarge
-          kind: AWSMachineProviderConfig
           placement:
             availabilityZone: GPU_AZ
             region: GPU_REGION
@@ -100,7 +99,6 @@ spec:
           iamInstanceProfile:
             id: CLUSTER_NAME-worker-profile
           instanceType: p4de.24xlarge
-          kind: AWSMachineProviderConfig
           placement:
             availabilityZone: GPU_AZ
             region: GPU_REGION
