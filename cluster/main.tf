@@ -158,8 +158,10 @@ resource "null_resource" "gpu_machineset" {
 			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
 			    ${path.module}/manifests/gpu-machineset.yaml.tpl | oc apply -f -
 
-			oc patch machineset "$INFRA_ID-gpu-${var.gpu_availability_zone}" -n openshift-machine-api --type=merge \
-			  -p "{\"spec\":{\"template\":{\"spec\":{\"providerSpec\":{\"value\":{\"securityGroups\":$SG_JSON}}}}}}"
+			for ms in $(oc get machineset -n openshift-machine-api -o name | grep gpu); do
+			  oc patch "$ms" -n openshift-machine-api --type=merge \
+			    -p "{\"spec\":{\"template\":{\"spec\":{\"providerSpec\":{\"value\":{\"securityGroups\":$SG_JSON}}}}}}"
+			done
 
 			echo "GPU MachineSet created. Node will provision in the background."
 		SCRIPT
