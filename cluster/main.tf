@@ -150,25 +150,18 @@ resource "null_resource" "gpu_machineset" {
 			INFRA_ID=$(oc get -o jsonpath='{.status.infrastructureName}' infrastructure cluster)
 			WORKER_MS=$(oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].metadata.name}')
 			AMI_ID=$(oc get machineset "$WORKER_MS" -n openshift-machine-api -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}')
+			SG_JSON=$(oc get machineset "$WORKER_MS" -n openshift-machine-api -o jsonpath='{.spec.template.spec.providerSpec.value.securityGroups}')
 
 			sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
 			    -e "s|AMI_ID|$AMI_ID|g" \
 			    -e "s|GPU_REGION|${var.aws_region}|g" \
 			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
-			    ${path.module}/manifests/gpu-machineset.yaml.tpl \
-			    | python3 -c "
-import sys, json, subprocess, yaml
-sg = json.loads(subprocess.check_output([
-    'oc', 'get', 'machineset', '$WORKER_MS', '-n', 'openshift-machine-api',
-    '-o', 'jsonpath={.spec.template.spec.providerSpec.value.securityGroups}'
-]))
-docs = list(yaml.safe_load_all(sys.stdin))
-for ms in docs:
-    ms['spec']['template']['spec']['providerSpec']['value']['securityGroups'] = sg
-yaml.dump_all(docs, sys.stdout, default_flow_style=False)
-" | oc apply -f -
+			    ${path.module}/manifests/gpu-machineset.yaml.tpl | oc apply -f -
 
-			echo "GPU MachineSets created (g4dn.2xlarge: 1 replica, p4de.24xlarge: 0 replicas)."
+			oc patch machineset "$INFRA_ID-gpu-${var.gpu_availability_zone}" -n openshift-machine-api --type=merge \
+			  -p "{\"spec\":{\"template\":{\"spec\":{\"providerSpec\":{\"value\":{\"securityGroups\":$SG_JSON}}}}}}"
+
+			echo "GPU MachineSet created. Node will provision in the background."
 		SCRIPT
   }
 
