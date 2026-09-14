@@ -22,16 +22,10 @@ variable "worker_instance_type" {
   description = "EC2 instance type for CPU worker nodes (8 vCPU, 32 GB)"
 }
 
-variable "gpu_instance_type" {
-  type        = string
-  default     = "g4dn.4xlarge"
-  description = "EC2 instance type for GPU worker node (16 vCPU, 64 GB, 1x T4)"
-}
-
 variable "gpu_availability_zone" {
   type        = string
-  default     = "ap-southeast-1b"
-  description = "Availability zone for the GPU worker node"
+  default     = "ap-southeast-1a"
+  description = "Availability zone for the GPU worker nodes"
 }
 
 variable "master_replicas" {

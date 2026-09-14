@@ -153,29 +153,28 @@ resource "null_resource" "gpu_machineset" {
 
 			sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
 			    -e "s|AMI_ID|$AMI_ID|g" \
-			    -e "s|GPU_INSTANCE_TYPE|${var.gpu_instance_type}|g" \
 			    -e "s|GPU_REGION|${var.aws_region}|g" \
 			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
 			    ${path.module}/manifests/gpu-machineset.yaml.tpl \
 			    | python3 -c "
 import sys, json, subprocess, yaml
-ms = yaml.safe_load(sys.stdin)
 sg = json.loads(subprocess.check_output([
     'oc', 'get', 'machineset', '$WORKER_MS', '-n', 'openshift-machine-api',
     '-o', 'jsonpath={.spec.template.spec.providerSpec.value.securityGroups}'
 ]))
-ms['spec']['template']['spec']['providerSpec']['value']['securityGroups'] = sg
-yaml.dump(ms, sys.stdout, default_flow_style=False)
+docs = list(yaml.safe_load_all(sys.stdin))
+for ms in docs:
+    ms['spec']['template']['spec']['providerSpec']['value']['securityGroups'] = sg
+yaml.dump_all(docs, sys.stdout, default_flow_style=False)
 " | oc apply -f -
 
-			echo "GPU MachineSet created. Node will provision in the background."
+			echo "GPU MachineSets created (g4dn.2xlarge: 1 replica, p4de.24xlarge: 0 replicas)."
 		SCRIPT
   }
 
   triggers = {
-    cluster_name      = local.cluster_name
-    gpu_instance_type = var.gpu_instance_type
-    gpu_az            = var.gpu_availability_zone
+    cluster_name = local.cluster_name
+    gpu_az       = var.gpu_availability_zone
   }
 }
 
@@ -332,6 +331,11 @@ resource "null_resource" "quay_registry" {
 			echo "Waiting for Quay Operator to be ready..."
 			until oc get csv -n quay-enterprise -o jsonpath='{.items[?(@.spec.displayName=="Red Hat Quay")].status.phase}' 2>/dev/null | grep -q Succeeded; do
 				sleep 30
+			done
+
+			echo "Waiting for QuayRegistry CRD..."
+			until oc get crd quayregistries.quay.redhat.com 2>/dev/null; do
+				sleep 15
 			done
 
 			echo "Creating Quay Registry..."
