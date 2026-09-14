@@ -228,6 +228,11 @@ resource "null_resource" "odf_storage" {
 			oc get nodes -l node-role.kubernetes.io/worker,!node-role.kubernetes.io/gpu --no-headers -o name \
 			  | xargs -I{} oc label {} cluster.ocs.openshift.io/openshift-storage="" --overwrite
 
+			echo "Waiting for StorageCluster CRD..."
+			until oc get crd storageclusters.ocs.openshift.io 2>/dev/null; do
+				sleep 15
+			done
+
 			echo "Applying ODF storage configuration..."
 			oc apply -f ${path.module}/operators/04-odf-storage.yaml
 
@@ -256,6 +261,11 @@ resource "null_resource" "openshift_ai" {
 				sleep 30
 			done
 
+			echo "Waiting for DataScienceCluster CRD..."
+			until oc get crd datascienceclusters.datasciencecluster.opendatahub.io 2>/dev/null; do
+				sleep 15
+			done
+
 			echo "Applying OpenShift AI configuration..."
 			oc apply -f ${path.module}/operators/05-openshift-ai.yaml
 
@@ -264,8 +274,8 @@ resource "null_resource" "openshift_ai" {
 				sleep 15
 			done
 
-			echo "Re-applying to create OdhDashboardConfig..."
-			oc apply -f ${path.module}/operators/05-openshift-ai.yaml
+			echo "Applying OdhDashboardConfig..."
+			oc apply -f ${path.module}/operators/07-openshift-ai-odhdashboardconfig.yaml
 
 			echo "OpenShift AI fully configured."
 		SCRIPT
