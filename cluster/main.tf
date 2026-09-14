@@ -314,7 +314,7 @@ resource "null_resource" "console_plugins" {
 
 # Phase 9: Configure Quay Registry (waits for Quay operator to be ready)
 resource "null_resource" "quay_registry" {
-  depends_on = [null_resource.operators]
+  depends_on = [null_resource.odf_storage]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
@@ -331,6 +331,11 @@ resource "null_resource" "quay_registry" {
 			echo "Waiting for QuayRegistry CRD..."
 			until oc get crd quayregistries.quay.redhat.com 2>/dev/null; do
 				sleep 15
+			done
+
+			echo "Waiting for NooBaa to be ready..."
+			until oc get noobaa noobaa -n openshift-storage -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Ready; do
+				sleep 30
 			done
 
 			echo "Creating Quay Registry..."
