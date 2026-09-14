@@ -42,7 +42,7 @@ variable "master_replicas" {
 
 variable "worker_replicas" {
   type        = number
-  default     = 3
+  default     = 5
   description = "Number of CPU worker nodes"
 }
 
