@@ -296,7 +296,7 @@ resource "null_resource" "console_plugins" {
 			${local.brew_init}
 			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-			PLUGINS=(odf-console pipelines-console-plugin gitops-plugin)
+			PLUGINS=(odf-console pipelines-console-plugin gitops-plugin kuadrant-console-plugin)
 			for plugin in "$${PLUGINS[@]}"; do
 				echo "Enabling console plugin: $plugin"
 				oc patch consoles.operator.openshift.io cluster --type=json \
