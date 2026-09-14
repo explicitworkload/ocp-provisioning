@@ -45,11 +45,7 @@ spec:
           placement:
             availabilityZone: GPU_AZ
             region: GPU_REGION
-          securityGroups:
-            - filters:
-                - name: tag:Name
-                  values:
-                    - CLUSTER_NAME-worker-sg
+          securityGroups: []
           subnet:
             filters:
               - name: tag:Name

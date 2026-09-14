@@ -148,14 +148,25 @@ resource "null_resource" "gpu_machineset" {
 			oc wait clusteroperators --all --for=condition=Available=True --timeout=600s
 
 			INFRA_ID=$(oc get -o jsonpath='{.status.infrastructureName}' infrastructure cluster)
-			AMI_ID=$(oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
+			WORKER_MS=$(oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].metadata.name}')
+			AMI_ID=$(oc get machineset "$WORKER_MS" -n openshift-machine-api -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}')
 
 			sed -e "s|CLUSTER_NAME|$INFRA_ID|g" \
 			    -e "s|AMI_ID|$AMI_ID|g" \
 			    -e "s|GPU_INSTANCE_TYPE|${var.gpu_instance_type}|g" \
 			    -e "s|GPU_REGION|${var.aws_region}|g" \
 			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
-			    ${path.module}/manifests/gpu-machineset.yaml.tpl | oc apply -f -
+			    ${path.module}/manifests/gpu-machineset.yaml.tpl \
+			    | python3 -c "
+import sys, json, subprocess, yaml
+ms = yaml.safe_load(sys.stdin)
+sg = json.loads(subprocess.check_output([
+    'oc', 'get', 'machineset', '$WORKER_MS', '-n', 'openshift-machine-api',
+    '-o', 'jsonpath={.spec.template.spec.providerSpec.value.securityGroups}'
+]))
+ms['spec']['template']['spec']['providerSpec']['value']['securityGroups'] = sg
+yaml.dump(ms, sys.stdout, default_flow_style=False)
+" | oc apply -f -
 
 			echo "GPU MachineSet created. Node will provision in the background."
 		SCRIPT
@@ -199,7 +210,7 @@ resource "null_resource" "operators" {
   }
 }
 
-# Phase 6: Configure ODF StorageCluster (waits for LSO + ODF operators to be ready)
+# Phase 6: Configure local storage and ODF StorageCluster
 resource "null_resource" "odf_storage" {
   depends_on = [null_resource.operators]
 
@@ -215,21 +226,19 @@ resource "null_resource" "odf_storage" {
 				sleep 30
 			done
 
-			echo "Waiting for ODF Operator to be ready..."
-			until oc get csv -n openshift-storage -o jsonpath='{.items[?(@.spec.displayName=="OpenShift Data Foundation")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-				sleep 30
-			done
-
 			echo "Labeling worker nodes for ODF storage..."
 			oc get nodes -l node-role.kubernetes.io/worker,!node-role.kubernetes.io/gpu --no-headers -o name \
 			  | xargs -I{} oc label {} cluster.ocs.openshift.io/openshift-storage="" --overwrite
+
+			echo "Applying local storage discovery and volume set..."
+			oc apply -f ${path.module}/operators/04-local-storage.yaml
 
 			echo "Waiting for StorageCluster CRD..."
 			until oc get crd storageclusters.ocs.openshift.io 2>/dev/null; do
 				sleep 15
 			done
 
-			echo "Applying ODF storage configuration..."
+			echo "Applying ODF StorageCluster..."
 			oc apply -f ${path.module}/operators/04-odf-storage.yaml
 
 			echo "ODF StorageCluster created. Devices will be discovered and adopted."
