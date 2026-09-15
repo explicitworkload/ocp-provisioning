@@ -18,8 +18,8 @@ variable "master_instance_type" {
 
 variable "worker_instance_type" {
   type        = string
-  default     = "m5.2xlarge"
-  description = "EC2 instance type for CPU worker nodes (8 vCPU, 32 GB)"
+  default     = "m5.4xlarge"
+  description = "EC2 instance type for CPU worker nodes (16 vCPU, 64 GB)"
 }
 
 variable "gpu_availability_zone" {
@@ -36,7 +36,7 @@ variable "master_replicas" {
 
 variable "worker_replicas" {
   type        = number
-  default     = 5
+  default     = 6
   description = "Number of CPU worker nodes"
 }
 
