@@ -204,7 +204,73 @@ resource "null_resource" "operators" {
   }
 }
 
-# Phase 6: Configure local storage and ODF StorageCluster
+# Phase 6: Create NodeFeatureDiscovery instance
+resource "null_resource" "nfd_instance" {
+  depends_on = [null_resource.operators]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-SCRIPT
+			set -eo pipefail
+			${local.brew_init}
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+
+			echo "Waiting for NFD Operator to be ready..."
+			until oc get csv -n openshift-nfd -o jsonpath='{.items[?(@.spec.displayName=="Node Feature Discovery Operator")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
+
+			echo "Waiting for NodeFeatureDiscovery CRD..."
+			until oc get crd nodefeaturediscoveries.nfd.openshift.io 2>/dev/null; do
+				sleep 15
+			done
+
+			echo "Creating NodeFeatureDiscovery instance..."
+			oc apply -f ${path.module}/operators/08-nfd-instance.yaml
+
+			echo "NodeFeatureDiscovery instance created."
+		SCRIPT
+  }
+
+  triggers = {
+    cluster_name = local.cluster_name
+  }
+}
+
+# Phase 7: Create NVIDIA GPU Operator ClusterPolicy
+resource "null_resource" "gpu_clusterpolicy" {
+  depends_on = [null_resource.nfd_instance]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-SCRIPT
+			set -eo pipefail
+			${local.brew_init}
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+
+			echo "Waiting for NVIDIA GPU Operator to be ready..."
+			until oc get csv -n nvidia-gpu-operator -o jsonpath='{.items[?(@.spec.displayName=="NVIDIA GPU Operator")].status.phase}' 2>/dev/null | grep -q Succeeded; do
+				sleep 30
+			done
+
+			echo "Waiting for ClusterPolicy CRD..."
+			until oc get crd clusterpolicies.nvidia.com 2>/dev/null; do
+				sleep 15
+			done
+
+			echo "Creating NVIDIA ClusterPolicy..."
+			oc apply -f ${path.module}/operators/09-nvidia-clusterpolicy.yaml
+
+			echo "NVIDIA ClusterPolicy created. GPU drivers and device plugin will deploy on GPU nodes."
+		SCRIPT
+  }
+
+  triggers = {
+    cluster_name = local.cluster_name
+  }
+}
+
+# Phase 8: Configure local storage and ODF StorageCluster
 resource "null_resource" "odf_storage" {
   depends_on = [null_resource.operators]
 
@@ -244,7 +310,7 @@ resource "null_resource" "odf_storage" {
   }
 }
 
-# Phase 7: Configure OpenShift AI (waits for RHOAI operator to be ready)
+# Phase 9: Configure OpenShift AI (waits for RHOAI operator to be ready)
 resource "null_resource" "openshift_ai" {
   depends_on = [null_resource.operators]
 
@@ -285,7 +351,7 @@ resource "null_resource" "openshift_ai" {
   }
 }
 
-# Phase 8: Enable console plugins
+# Phase 10: Enable console plugins
 resource "null_resource" "console_plugins" {
   depends_on = [null_resource.operators]
 
@@ -312,7 +378,7 @@ resource "null_resource" "console_plugins" {
   }
 }
 
-# Phase 9: Configure Quay Registry (waits for Quay operator to be ready)
+# Phase 11: Configure Quay Registry (waits for Quay operator to be ready)
 resource "null_resource" "quay_registry" {
   depends_on = [null_resource.odf_storage]
 

@@ -107,10 +107,12 @@ The cluster install is orchestrated in 9 phases:
 | 3 | `cluster_install` | Run `openshift-install create cluster` |
 | 4 | `gpu_machineset` | Apply GPU worker MachineSets and patch security groups |
 | 5 | `operators` | Install all operator subscriptions |
-| 6 | `odf_storage` | Configure Local Storage and ODF StorageCluster |
-| 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
-| 8 | `console_plugins` | Enable console plugins |
-| 9 | `quay_registry` | Deploy Quay Registry (waits for NooBaa) |
+| 6 | `nfd_instance` | Create NodeFeatureDiscovery instance for hardware detection |
+| 7 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
+| 8 | `odf_storage` | Configure Local Storage and ODF StorageCluster |
+| 9 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
+| 10 | `console_plugins` | Enable console plugins |
+| 11 | `quay_registry` | Deploy Quay Registry (waits for NooBaa) |
 
 ### Operators
 
