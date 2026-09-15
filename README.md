@@ -1,6 +1,6 @@
 # ocp-provisioning
 
-OpenTofu configurations for provisioning OpenShift Container Platform (OCP) infrastructure on AWS.
+Automated end-to-end provisioning of an OpenShift Container Platform (OCP) cluster on AWS using OpenTofu. This project stands up a fully configured cluster — from bastion host to GPU-enabled worker nodes — with day-2 operators, ODF-backed object storage, a private Quay registry, and OpenShift AI pre-configured for model serving, all in a single `tofu apply`. It is designed for repeatable demo and sandbox environments that can be torn down and rebuilt in under an hour.
 
 ## Project Structure
 
@@ -8,9 +8,9 @@ OpenTofu configurations for provisioning OpenShift Container Platform (OCP) infr
 ocp-provisioning/
 ├── bastion/                # RHEL 10 bastion host for OCP management
 ├── cluster/                # OpenShift cluster provisioning (IPI)
-│   ├── manifests/          # GPU worker MachineSet template
-│   ├── operators/          # Operator namespaces, groups, and subscriptions
-│   ├── main.tf             # Cluster install orchestration
+│   ├── manifests/          # GPU worker MachineSet templates
+│   ├── operators/          # Operator namespaces, groups, subscriptions, and configs
+│   ├── main.tf             # Cluster install orchestration (9 phases)
 │   ├── variables.tf        # Cluster configuration variables
 │   ├── outputs.tf          # Cluster endpoints and credentials
 │   └── install-config.yaml.tpl
@@ -23,7 +23,7 @@ ocp-provisioning/
 
 - An AWS account with credentials configured (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
 - An existing Route53 hosted zone for your base domain (e.g. `sandbox199.opentlc.com`)
-- Sufficient EC2 quotas: 3x `m5.xlarge`, 3x `m5.2xlarge`, 1x `g5.4xlarge`, plus 1x `t3.xlarge` for the bastion
+- Sufficient EC2 quotas: 3x `m5.xlarge`, 6x `m5.4xlarge`, 1x `g4dn.4xlarge`, plus 1x `t3.xlarge` for the bastion
 - Elastic IP quota of at least 10 in your target region
 
 ### Red Hat Pull Secret
@@ -87,26 +87,58 @@ ssh ec2-user@<bastion_public_ip>
 
 Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by OpenTofu. Run this **from the bastion host** inside a tmux session.
 
-**Cluster topology:**
+### Cluster Topology
 
 | Role | Instance Type | Count | Notes |
 |------|---------------|-------|-------|
 | Master | `m5.xlarge` (4 vCPU, 16 GB) | 3 | Control plane |
-| CPU Worker | `m5.2xlarge` (8 vCPU, 32 GB) | 3 | + 300 GB additional SSD each |
-| GPU Worker | `g5.4xlarge` (16 vCPU, 64 GB, 1x A10G) | 1 | NVIDIA GPU workloads |
+| CPU Worker | `m5.4xlarge` (16 vCPU, 64 GB) | 6 | + 300 GB additional gp3 SSD each |
+| GPU Worker | `g4dn.4xlarge` (16 vCPU, 64 GB, 1x T4) | 1 | NVIDIA GPU workloads |
+| GPU Worker | `p4de.24xlarge` (96 vCPU, 1.1 TB, 8x A100 80GB) | 0 | Scale-up ready (set replicas to 1) |
 
-**Operators installed:**
+### Provisioning Phases
 
-- OpenShift Data Foundation (balanced profile, adopts 300 GB worker SSDs via Local Storage Operator)
-- Node Feature Discovery
-- OpenShift AI 3.5 (KServe, OGX, AI Gateway, TrustyAI enabled)
-- NVIDIA GPU Operator
-- Lightspeed Operator
-- Cluster Observability Operator
-- OpenShift Pipelines
-- Red Hat Quay
-- Web Terminal
-- OpenShift GitOps
+The cluster install is orchestrated in 9 phases:
+
+| Phase | Resource | Description |
+|-------|----------|-------------|
+| 1 | `generate_manifests` | Generate install manifests from `install-config.yaml` |
+| 2 | `patch_worker_machinesets` | Add 300 GB gp3 SSD to each worker MachineSet |
+| 3 | `cluster_install` | Run `openshift-install create cluster` |
+| 4 | `gpu_machineset` | Apply GPU worker MachineSets and patch security groups |
+| 5 | `operators` | Install all operator subscriptions |
+| 6 | `odf_storage` | Configure Local Storage and ODF StorageCluster |
+| 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
+| 8 | `console_plugins` | Enable console plugins |
+| 9 | `quay_registry` | Deploy Quay Registry (waits for NooBaa) |
+
+### Operators
+
+| Operator | Channel | Purpose |
+|----------|---------|---------|
+| OpenShift Data Foundation | stable-4.22 | Storage (Ceph + NooBaa object storage via Local Storage) |
+| Local Storage Operator | stable | Discovers and manages worker node SSDs for ODF |
+| Node Feature Discovery | stable | Hardware feature detection for GPU scheduling |
+| NVIDIA GPU Operator | v26.7 | GPU drivers, device plugin, and monitoring |
+| OpenShift AI (RHOAI) | stable-3.5 | KServe, OGX, AI Gateway, TrustyAI |
+| Red Hat Lightspeed | stable | AI assistant for OpenShift console |
+| Cluster Observability Operator | stable | Monitoring and observability |
+| OpenShift Pipelines | latest | Tekton-based CI/CD pipelines |
+| Red Hat Quay | stable-3.18 | Private container registry (backed by NooBaa) |
+| OpenShift GitOps | latest | Argo CD-based GitOps |
+| Web Terminal | fast | In-console terminal |
+
+**Console plugins enabled:** odf-console, pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
+
+### Networking
+
+| Network | CIDR | Purpose |
+|---------|------|---------|
+| Machine Network | `10.0.0.0/16` | VPC subnet for node IPs |
+| Cluster Network | `10.128.0.0/14` (hostPrefix `/23`) | Pod IPs (510 pods max per node) |
+| Service Network | `172.30.0.0/16` | ClusterIP service IPs |
+
+CNI: OVNKubernetes
 
 ### Deploy Cluster
 
