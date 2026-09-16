@@ -5,6 +5,11 @@ metadata:
 spec:
   operator:
     defaultRuntime: crio
+  daemonsets:
+    priorityClassName: system-node-critical
+    updateStrategy: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: "1"
   driver:
     enabled: true
     upgradePolicy:
