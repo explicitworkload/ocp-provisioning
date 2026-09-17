@@ -20,13 +20,13 @@ controlPlane:
   replicas: ${master_replicas}
 networking:
   clusterNetwork:
-    - cidr: 10.128.0.0/14
+    - cidr: 10.244.0.0/14
       hostPrefix: 23
   machineNetwork:
     - cidr: 10.0.0.0/16
   networkType: OVNKubernetes
   serviceNetwork:
-    - 172.30.0.0/16
+    - 172.20.0.0/16
 platform:
   aws:
     region: ${aws_region}
