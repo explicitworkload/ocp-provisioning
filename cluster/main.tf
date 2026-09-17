@@ -156,14 +156,20 @@ resource "null_resource" "gpu_machineset" {
 			    -e "s|AMI_ID|$AMI_ID|g" \
 			    -e "s|GPU_REGION|${var.aws_region}|g" \
 			    -e "s|GPU_AZ|${var.gpu_availability_zone}|g" \
-			    ${path.module}/manifests/gpu-machineset.yaml.tpl | oc apply -f -
+			    ${path.module}/manifests/gpu-machineset.yaml.tpl \
+			  | sed 's/replicas: 1/replicas: 0/' \
+			  | oc apply -f -
 
 			for ms in $(oc get machineset -n openshift-machine-api -o name | grep gpu); do
 			  oc patch "$ms" -n openshift-machine-api --type=merge \
 			    -p "{\"spec\":{\"template\":{\"spec\":{\"providerSpec\":{\"value\":{\"securityGroups\":$SG_JSON}}}}}}"
 			done
 
-			echo "GPU MachineSet created. Node will provision in the background."
+			for ms in $(oc get machineset -n openshift-machine-api -o name | grep gpu-g4dn); do
+			  oc scale "$ms" -n openshift-machine-api --replicas=1
+			done
+
+			echo "GPU MachineSets created and scaled. Nodes will provision in the background."
 		SCRIPT
   }
 
