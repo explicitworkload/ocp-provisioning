@@ -28,11 +28,8 @@ spec:
     pvcSize: 20Gi
   templateDisablement:
     - vllm-spyre-ppc64le-runtime
-    - kserve-ovms
     - vllm-spyre-x86-runtime
     - autogluon-runtime
-    - vllm-cpu-runtime
     - vllm-spyre-s390x-runtime
     - vllm-gaudi-runtime
-    - vllm-cuda-runtime
   templateOrder: []

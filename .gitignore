@@ -48,3 +48,4 @@ tfplan
 
 pull-secret.json
 cluster/install-dir/
+.claude/
