@@ -1,0 +1,24 @@
+---
+- name: Get current console operator config
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operator.openshift.io/v1
+    kind: Console
+    name: cluster
+  register: console_config
+
+- name: Set current plugins list
+  ansible.builtin.set_fact:
+    current_plugins: "{{ console_config.resources[0].spec.plugins | default([]) }}"
+
+- name: Enable console plugins
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    kind: Console
+    api_version: operator.openshift.io/v1
+    name: cluster
+    definition:
+      spec:
+        plugins: "{{ (current_plugins + console_plugins) | unique }}"
+  when: (console_plugins | difference(current_plugins)) | length > 0

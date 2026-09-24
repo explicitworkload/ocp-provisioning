@@ -1,0 +1,142 @@
+---
+- name: Create model serving namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ model_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+        annotations:
+          openshift.io/description: "Model serving namespace for {{ model_name }}"
+
+- name: Wait for GPU node to be ready
+  ansible.builtin.command:
+    cmd: >-
+      oc --context {{ ocp_context }}
+      get nodes -l node-role.kubernetes.io/gpu
+      -o jsonpath='{.items[?(@.status.conditions[?(@.type=="Ready")].status=="True")].metadata.name}'
+  register: gpu_nodes
+  until: gpu_nodes.stdout | length > 0
+  retries: 60
+  delay: 30
+  changed_when: false
+
+- name: Display GPU node status
+  ansible.builtin.debug:
+    msg: "GPU node(s) ready: {{ gpu_nodes.stdout }}"
+
+- name: Create vLLM ServingRuntime
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: serving.kserve.io/v1alpha1
+      kind: ServingRuntime
+      metadata:
+        name: "vllm-{{ model_name }}"
+        namespace: "{{ model_namespace }}"
+        annotations:
+          opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+          opendatahub.io/template-display-name: "vLLM Runtime for {{ model_name }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+      spec:
+        annotations:
+          prometheus.io/port: "8080"
+          prometheus.io/path: "/metrics"
+        multiModel: false
+        supportedModelFormats:
+          - autoSelect: true
+            name: vLLM
+        containers:
+          - name: kserve-container
+            image: "{{ vllm_image }}"
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            command:
+              - python
+              - "-m"
+              - vllm.entrypoints.openai.api_server
+            args:
+              - "--port=8080"
+              - "--model=/mnt/models"
+              - "--served-model-name={{ model_name }}"
+              - "--max-model-len=8192"
+              - "--trust-remote-code"
+            env:
+              - name: HF_HUB_CACHE
+                value: /tmp
+              - name: HF_HOME
+                value: /tmp
+
+- name: Create InferenceService for {{ model_name }}
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: serving.kserve.io/v1beta1
+      kind: InferenceService
+      metadata:
+        name: "{{ model_name }}"
+        namespace: "{{ model_namespace }}"
+        annotations:
+          serving.kserve.io/deploymentMode: RawDeployment
+        labels:
+          opendatahub.io/dashboard: "true"
+      spec:
+        predictor:
+          model:
+            modelFormat:
+              name: vLLM
+            runtime: "vllm-{{ model_name }}"
+            storageUri: "oci://{{ model_image }}"
+          resources:
+            limits:
+              cpu: "{{ model_cpu_limit }}"
+              memory: "{{ model_memory_limit }}"
+              nvidia.com/gpu: "{{ model_gpu_count }}"
+            requests:
+              cpu: "{{ model_cpu_request }}"
+              memory: "{{ model_memory_request }}"
+              nvidia.com/gpu: "{{ model_gpu_count }}"
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          nodeSelector:
+            node-role.kubernetes.io/gpu: ""
+
+- name: Wait for InferenceService to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+  register: isvc
+  until: >-
+    isvc.resources | length > 0 and
+    isvc.resources[0].status is defined and
+    isvc.resources[0].status.conditions is defined and
+    isvc.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 60
+  delay: 30
+  ignore_errors: true
+
+- name: Display model serving status
+  ansible.builtin.debug:
+    msg: >-
+      InferenceService '{{ model_name }}' deployed in namespace '{{ model_namespace }}'.
+      {% if isvc.resources[0].status.url is defined %}
+      URL: {{ isvc.resources[0].status.url }}
+      {% else %}
+      Status: Waiting for model to become ready (GPU drivers and model download may take time).
+      Check with: oc get inferenceservice {{ model_name }} -n {{ model_namespace }}
+      {% endif %}
+  when: isvc.resources | length > 0

@@ -1,0 +1,29 @@
+---
+# OpenShift cluster context
+ocp_context: "default/api-ocp-fzdj5-sandbox2982-opentlc-com:6443/admin"
+
+# GPU Worker configuration
+gpu_instance_type: g4dn.4xlarge
+gpu_availability_zone: us-east-2a
+gpu_replicas: 1
+gpu_volume_size: 120
+
+# Model serving configuration
+model_namespace: qwen3-4b
+model_name: qwen3-4b
+model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
+vllm_image: "quay.io/modh/vllm:rhoai-2.25-cuda"
+
+# Quay configuration
+# Set to true and provide S3 config to deploy Quay Registry.
+# Without ODF, Quay needs external object storage (S3).
+deploy_quay_registry: false
+# quay_s3_bucket: ""
+# quay_s3_region: ""
+# quay_s3_access_key: ""
+# quay_s3_secret_key: ""
+
+# Console plugins to enable (odf-console excluded since ODF is not installed)
+console_plugins:
+  - pipelines-console-plugin
+  - gitops-plugin

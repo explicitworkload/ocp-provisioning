@@ -1,0 +1,62 @@
+---
+- name: Get cluster infrastructure details
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: config.openshift.io/v1
+    kind: Infrastructure
+    name: cluster
+  register: infra_info
+
+- name: Set cluster infrastructure name
+  ansible.builtin.set_fact:
+    cluster_infra_id: "{{ infra_info.resources[0].status.infrastructureName }}"
+
+- name: Get existing worker MachineSets
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: machine.openshift.io/v1beta1
+    kind: MachineSet
+    namespace: openshift-machine-api
+  register: machinesets
+
+- name: Extract worker MachineSet configuration
+  ansible.builtin.set_fact:
+    worker_ami: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.ami.id }}"
+    worker_security_groups: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.securityGroups }}"
+    worker_region: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.placement.region }}"
+
+- name: Check if GPU MachineSet already exists
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: machine.openshift.io/v1beta1
+    kind: MachineSet
+    namespace: openshift-machine-api
+    name: "{{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}"
+  register: existing_gpu_ms
+
+- name: Create GPU MachineSet
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
+
+- name: Wait for GPU machine to be provisioned
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: machine.openshift.io/v1beta1
+    kind: MachineSet
+    namespace: openshift-machine-api
+    name: "{{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}"
+  register: gpu_ms
+  until: >-
+    gpu_ms.resources | length > 0 and
+    (gpu_ms.resources[0].status.readyReplicas | default(0) | int) >= (gpu_replicas | int)
+  retries: 60
+  delay: 30
+  when: existing_gpu_ms.resources | length == 0 or (existing_gpu_ms.resources[0].status.readyReplicas | default(0) | int) < (gpu_replicas | int)
+
+- name: Display GPU MachineSet status
+  ansible.builtin.debug:
+    msg: >-
+      GPU MachineSet {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+      is ready with {{ gpu_replicas }} replica(s) using {{ gpu_instance_type }}

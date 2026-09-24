@@ -1,0 +1,12 @@
+---
+model_namespace: qwen3-4b
+model_name: qwen3-4b
+model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
+vllm_image: "quay.io/modh/vllm:rhoai-2.25-cuda"
+
+# Resource limits for the model server
+model_gpu_count: 1
+model_cpu_limit: "4"
+model_memory_limit: "16Gi"
+model_cpu_request: "2"
+model_memory_request: "8Gi"

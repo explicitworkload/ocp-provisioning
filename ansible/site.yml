@@ -1,0 +1,30 @@
+---
+- name: Configure OpenShift cluster with operators, GPU worker, and model serving
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  roles:
+    - role: operators
+      tags: [operators]
+
+    - role: gpu_worker
+      tags: [gpu]
+
+    - role: nfd
+      tags: [nfd, gpu]
+
+    - role: nvidia_gpu
+      tags: [nvidia, gpu]
+
+    - role: openshift_ai
+      tags: [openshift-ai]
+
+    - role: quay
+      tags: [quay]
+
+    - role: console_plugins
+      tags: [console]
+
+    - role: model_serving
+      tags: [model-serving]

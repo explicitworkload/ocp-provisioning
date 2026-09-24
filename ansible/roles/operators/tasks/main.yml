@@ -1,0 +1,128 @@
+---
+- name: Create operator namespaces
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  loop:
+    - openshift-nfd
+    - redhat-ods-operator
+    - nvidia-gpu-operator
+    - openshift-lightspeed
+    - openshift-observability-operator
+    - openshift-pipelines
+    - quay-enterprise
+    - openshift-gitops-operator
+  loop_control:
+    label: "{{ item }}"
+
+- name: Create operator groups
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      spec: "{{ item.spec }}"
+  loop:
+    - name: openshift-nfd-operatorgroup
+      namespace: openshift-nfd
+      spec:
+        targetNamespaces:
+          - openshift-nfd
+    - name: redhat-ods-operatorgroup
+      namespace: redhat-ods-operator
+      spec: {}
+    - name: nvidia-gpu-operatorgroup
+      namespace: nvidia-gpu-operator
+      spec:
+        targetNamespaces:
+          - nvidia-gpu-operator
+    - name: openshift-lightspeed-operatorgroup
+      namespace: openshift-lightspeed
+      spec:
+        targetNamespaces:
+          - openshift-lightspeed
+    - name: openshift-observability-operatorgroup
+      namespace: openshift-observability-operator
+      spec: {}
+    - name: quay-operatorgroup
+      namespace: quay-enterprise
+      spec: {}
+    - name: openshift-gitops-operatorgroup
+      namespace: openshift-gitops-operator
+      spec: {}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create operator subscriptions
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      spec:
+        channel: "{{ item.channel }}"
+        installPlanApproval: Automatic
+        name: "{{ item.name }}"
+        source: "{{ item.source }}"
+        sourceNamespace: openshift-marketplace
+  loop:
+    - name: nfd
+      namespace: openshift-nfd
+      channel: stable
+      source: redhat-operators
+    - name: rhcl-operator
+      namespace: openshift-operators
+      channel: stable
+      source: redhat-operators
+    - name: rhods-operator
+      namespace: redhat-ods-operator
+      channel: stable-3.5
+      source: redhat-operators
+    - name: gpu-operator-certified
+      namespace: nvidia-gpu-operator
+      channel: v26.7
+      source: certified-operators
+    - name: lightspeed-operator
+      namespace: openshift-lightspeed
+      channel: stable
+      source: redhat-operators
+    - name: cluster-observability-operator
+      namespace: openshift-observability-operator
+      channel: stable
+      source: redhat-operators
+    - name: openshift-pipelines-operator-rh
+      namespace: openshift-operators
+      channel: latest
+      source: redhat-operators
+    - name: quay-operator
+      namespace: quay-enterprise
+      channel: stable-3.18
+      source: redhat-operators
+    - name: web-terminal
+      namespace: openshift-operators
+      channel: fast
+      source: redhat-operators
+    - name: openshift-gitops-operator
+      namespace: openshift-gitops-operator
+      channel: latest
+      source: redhat-operators
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Wait for operator subscriptions to be processed
+  ansible.builtin.pause:
+    seconds: 30
+    prompt: "Waiting for operator subscriptions to be picked up by OLM..."

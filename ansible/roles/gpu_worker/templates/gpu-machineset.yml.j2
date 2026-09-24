@@ -1,0 +1,57 @@
+apiVersion: machine.openshift.io/v1beta1
+kind: MachineSet
+metadata:
+  name: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+  namespace: openshift-machine-api
+  labels:
+    machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
+spec:
+  replicas: {{ gpu_replicas }}
+  selector:
+    matchLabels:
+      machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
+      machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+  template:
+    metadata:
+      labels:
+        machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
+        machine.openshift.io/cluster-api-machine-role: worker
+        machine.openshift.io/cluster-api-machine-type: worker
+        machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+    spec:
+      metadata:
+        labels:
+          node-role.kubernetes.io/gpu: ""
+      providerSpec:
+        value:
+          apiVersion: machine.openshift.io/v1beta1
+          kind: AWSMachineProviderConfig
+          ami:
+            id: {{ worker_ami }}
+          blockDevices:
+            - ebs:
+                encrypted: true
+                iops: 0
+                kmsKey: {}
+                volumeSize: {{ gpu_volume_size }}
+                volumeType: gp3
+          credentialsSecret:
+            name: aws-cloud-credentials
+          deviceIndex: 0
+          iamInstanceProfile:
+            id: {{ cluster_infra_id }}-worker-profile
+          instanceType: {{ gpu_instance_type }}
+          placement:
+            availabilityZone: {{ gpu_availability_zone }}
+            region: {{ worker_region }}
+          securityGroups: {{ worker_security_groups | to_json }}
+          subnet:
+            filters:
+              - name: "tag:Name"
+                values:
+                  - "{{ cluster_infra_id }}-subnet-private-{{ gpu_availability_zone }}"
+          tags:
+            - name: "kubernetes.io/cluster/{{ cluster_infra_id }}"
+              value: owned
+          userDataSecret:
+            name: worker-user-data

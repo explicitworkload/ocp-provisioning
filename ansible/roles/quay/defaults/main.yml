@@ -1,0 +1,9 @@
+---
+# Quay Registry deployment requires object storage.
+# Without ODF, you must provide S3 configuration.
+# Set deploy_quay_registry to true and provide the S3 variables below.
+deploy_quay_registry: false
+# quay_s3_bucket: "my-quay-bucket"
+# quay_s3_region: "us-east-2"
+# quay_s3_access_key: ""
+# quay_s3_secret_key: ""

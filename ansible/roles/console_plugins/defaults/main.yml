@@ -1,0 +1,5 @@
+---
+# Console plugins to enable (odf-console excluded since ODF is not installed)
+console_plugins:
+  - pipelines-console-plugin
+  - gitops-plugin
