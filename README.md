@@ -11,14 +11,15 @@ Both are designed for repeatable demo and sandbox environments.
 
 ```
 ocp-provisioning/
-├── bastion/                # RHEL 10 bastion host for OCP management
-├── cluster/                # OpenShift cluster provisioning (IPI)
-│   ├── manifests/          # GPU worker MachineSet templates
-│   ├── operators/          # Operator namespaces, groups, subscriptions, and configs
-│   ├── main.tf             # Cluster install orchestration (11 phases)
-│   ├── variables.tf        # Cluster configuration variables
-│   ├── outputs.tf          # Cluster endpoints and credentials
-│   └── install-config.yaml.tpl
+├── terraform/              # Full cluster provisioning from scratch
+│   ├── bastion/            # RHEL 10 bastion host for OCP management
+│   └── cluster/            # OpenShift cluster provisioning (IPI)
+│       ├── manifests/      # GPU worker MachineSet templates
+│       ├── operators/      # Operator namespaces, groups, subscriptions, and configs
+│       ├── main.tf         # Cluster install orchestration (11 phases)
+│       ├── variables.tf    # Cluster configuration variables
+│       ├── outputs.tf      # Cluster endpoints and credentials
+│       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
 │   ├── site.yml            # Main playbook
 │   ├── group_vars/all.yml  # Configuration variables
@@ -76,7 +77,7 @@ Use this to provision a complete cluster from nothing, including the bastion hos
 
 #### Red Hat Pull Secret
 
-A pull secret is required to install OpenShift. Download it from the [Red Hat Console](https://console.redhat.com/openshift/install/pull-secret) and save it as `cluster/pull-secret.json`.
+A pull secret is required to install OpenShift. Download it from the [Red Hat Console](https://console.redhat.com/openshift/install/pull-secret) and save it as `terraform/cluster/pull-secret.json`.
 
 > **Do not commit `pull-secret.json` to the repository.** It is listed in `.gitignore`.
 
@@ -126,7 +127,7 @@ Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 export AWS_ACCESS_KEY_ID="<your-access-key>"
 export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
 
-cd bastion
+cd terraform/bastion
 tofu init && tofu apply
 ssh ec2-user@<bastion_public_ip>
 ```
@@ -198,7 +199,7 @@ export AWS_SECRET_ACCESS_KEY="<your-secret-key>"
 
 tmux new -s ocp
 
-cd ~/ocp-provisioning/cluster
+cd ~/ocp-provisioning/terraform/cluster
 
 # Save your Red Hat pull secret (download from https://console.redhat.com/openshift/install/pull-secret)
 vi pull-secret.json
@@ -215,13 +216,13 @@ After deployment, OpenTofu will output:
 
 - **Cluster name** — the generated name (e.g. `jgoh742`)
 - **Console URL** — `https://console-openshift-console.apps.<name>.sandbox199.opentlc.com`
-- **Kubeconfig path** — `cluster/install-dir/auth/kubeconfig`
-- **Kubeadmin password** — `cluster/install-dir/auth/kubeadmin-password`
+- **Kubeconfig path** — `terraform/cluster/install-dir/auth/kubeconfig`
+- **Kubeadmin password** — `terraform/cluster/install-dir/auth/kubeadmin-password`
 
 #### Destroy Cluster
 
 ```sh
-cd ~/ocp-provisioning/cluster
+cd ~/ocp-provisioning/terraform/cluster
 tofu destroy
 rm -rf install-dir
 ```

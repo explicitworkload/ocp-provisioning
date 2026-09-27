@@ -48,6 +48,7 @@ tfplan
 
 pull-secret.json
 cluster/install-dir/
+terraform/cluster/install-dir/
 .claude/
 
 # Ansible
