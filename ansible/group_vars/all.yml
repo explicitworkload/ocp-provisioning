@@ -12,7 +12,6 @@ gpu_volume_size: 120
 model_namespace: qwen3-4b
 model_name: qwen3-4b
 model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
-vllm_image: "quay.io/modh/vllm:rhoai-2.25-cuda"
 
 # Quay configuration
 # Set to true and provide S3 config to deploy Quay Registry.
