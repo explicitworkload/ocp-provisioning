@@ -62,16 +62,25 @@
         name: "{{ model_name }}"
         namespace: "{{ model_namespace }}"
         annotations:
-          serving.kserve.io/deploymentMode: RawDeployment
+          serving.kserve.io/deploymentMode: Standard
+          opendatahub.io/hardware-profile-name: default-profile
+          opendatahub.io/template-name: vllm-cuda-runtime-template
+          opendatahub.io/template-display-name: "vLLM NVIDIA GPU ServingRuntime for KServe"
+          security.opendatahub.io/enable-auth: "true"
         labels:
           opendatahub.io/dashboard: "true"
+          networking.kserve.io/visibility: exposed
       spec:
         predictor:
+          deploymentStrategy:
+            type: Recreate
           model:
             modelFormat:
               name: vLLM
             runtime: vllm-cuda-runtime
             storageUri: "oci://{{ model_image }}"
+            args:
+              - "--max-model-len={{ model_max_model_len }}"
             resources:
               limits:
                 cpu: "{{ model_cpu_limit }}"
@@ -87,6 +96,52 @@
               effect: NoSchedule
           nodeSelector:
             node-role.kubernetes.io/gpu: ""
+
+- name: Create RBAC for model inference access
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: kserve-inference-access
+      rules:
+        - apiGroups: ["serving.kserve.io"]
+          resources: ["inferenceservices"]
+          verbs: ["get"]
+
+- name: Create ServiceAccount for model access
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: "{{ model_name }}-sa"
+        namespace: "{{ model_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+
+- name: Bind inference access to ServiceAccount
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ model_name }}-inference-access"
+        namespace: "{{ model_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: kserve-inference-access
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ model_name }}-sa"
+          namespace: "{{ model_namespace }}"
 
 - name: Wait for InferenceService to be ready
   kubernetes.core.k8s_info:

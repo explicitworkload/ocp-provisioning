@@ -99,6 +99,8 @@
             managementState: Managed
           aigateway:
             managementState: Managed
+            modelsAsAService:
+              managementState: Managed
           trainingoperator:
             managementState: Removed
           trainer:

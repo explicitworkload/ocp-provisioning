@@ -9,3 +9,4 @@ model_cpu_limit: "4"
 model_memory_limit: "16Gi"
 model_cpu_request: "2"
 model_memory_request: "8Gi"
+model_max_model_len: 4096

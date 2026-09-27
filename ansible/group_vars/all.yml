@@ -26,3 +26,4 @@ deploy_quay_registry: false
 console_plugins:
   - pipelines-console-plugin
   - gitops-plugin
+  - kuadrant-console-plugin
