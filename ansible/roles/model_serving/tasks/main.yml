@@ -14,20 +14,25 @@
           openshift.io/description: "Model serving namespace for {{ model_name }}"
 
 - name: Wait for GPU node to be ready
-  ansible.builtin.command:
-    cmd: >-
-      oc --context {{ ocp_context }}
-      get nodes -l node-role.kubernetes.io/gpu
-      -o jsonpath='{.items[?(@.status.conditions[?(@.type=="Ready")].status=="True")].metadata.name}'
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/gpu="
   register: gpu_nodes
-  until: gpu_nodes.stdout | length > 0
+  until: >-
+    gpu_nodes.resources | length > 0 and
+    gpu_nodes.resources | map(attribute='status') |
+    map(attribute='conditions') | flatten |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
   retries: 60
   delay: 30
-  changed_when: false
 
 - name: Display GPU node status
   ansible.builtin.debug:
-    msg: "GPU node(s) ready: {{ gpu_nodes.stdout }}"
+    msg: "GPU node(s) ready: {{ gpu_nodes.resources | map(attribute='metadata') | map(attribute='name') | list }}"
 
 - name: Create vLLM ServingRuntime
   kubernetes.core.k8s:
@@ -95,15 +100,15 @@
               name: vLLM
             runtime: "vllm-{{ model_name }}"
             storageUri: "oci://{{ model_image }}"
-          resources:
-            limits:
-              cpu: "{{ model_cpu_limit }}"
-              memory: "{{ model_memory_limit }}"
-              nvidia.com/gpu: "{{ model_gpu_count }}"
-            requests:
-              cpu: "{{ model_cpu_request }}"
-              memory: "{{ model_memory_request }}"
-              nvidia.com/gpu: "{{ model_gpu_count }}"
+            resources:
+              limits:
+                cpu: "{{ model_cpu_limit }}"
+                memory: "{{ model_memory_limit }}"
+                nvidia.com/gpu: "{{ model_gpu_count }}"
+              requests:
+                cpu: "{{ model_cpu_request }}"
+                memory: "{{ model_memory_request }}"
+                nvidia.com/gpu: "{{ model_gpu_count }}"
           tolerations:
             - key: nvidia.com/gpu
               operator: Exists
