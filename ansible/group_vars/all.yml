@@ -1,6 +1,6 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-fzdj5-sandbox2982-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-pr5jf-sandbox5291-opentlc-com:6443/admin"
 
 # GPU Worker configuration
 gpu_instance_type: g4dn.4xlarge

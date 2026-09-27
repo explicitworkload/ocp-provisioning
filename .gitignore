@@ -49,3 +49,10 @@ tfplan
 pull-secret.json
 cluster/install-dir/
 .claude/
+
+# Ansible
+ansible/collections/
+*.retry
+ansible/vault-password*
+ansible/**/secrets.yml
+ansible/**/vault.yml

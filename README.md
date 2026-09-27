@@ -1,6 +1,11 @@
 # ocp-provisioning
 
-Automated end-to-end provisioning of an OpenShift Container Platform (OCP) cluster on AWS using OpenTofu. This project stands up a fully configured cluster — from bastion host to GPU-enabled worker nodes — with day-2 operators, ODF-backed object storage, a private Quay registry, and OpenShift AI pre-configured for model serving, all in a single `tofu apply`. It is designed for repeatable demo and sandbox environments that can be torn down and rebuilt in under an hour.
+Automated provisioning and day-2 configuration of OpenShift Container Platform (OCP) clusters on AWS. This project supports two workflows:
+
+1. **Terraform (full cluster)** — stands up a cluster from scratch via `openshift-install`, including bastion host, GPU workers, ODF storage, and all operators
+2. **Ansible (day-2 only)** — configures an existing cluster with operators, GPU workers, and model serving, without ODF or Local Storage
+
+Both are designed for repeatable demo and sandbox environments.
 
 ## Project Structure
 
@@ -10,29 +15,72 @@ ocp-provisioning/
 ├── cluster/                # OpenShift cluster provisioning (IPI)
 │   ├── manifests/          # GPU worker MachineSet templates
 │   ├── operators/          # Operator namespaces, groups, subscriptions, and configs
-│   ├── main.tf             # Cluster install orchestration (9 phases)
+│   ├── main.tf             # Cluster install orchestration (11 phases)
 │   ├── variables.tf        # Cluster configuration variables
 │   ├── outputs.tf          # Cluster endpoints and credentials
 │   └── install-config.yaml.tpl
+├── ansible/                # Day-2 Ansible playbook for existing clusters
+│   ├── site.yml            # Main playbook
+│   ├── group_vars/all.yml  # Configuration variables
+│   ├── roles/              # 8 roles (operators, gpu_worker, nfd, nvidia_gpu, etc.)
+│   └── README.md           # Ansible-specific docs
 └── README.md
 ```
 
-## Prerequisites
+---
 
-### AWS
+## Option A: Ansible Playbook (Day-2 on an Existing Cluster)
+
+Use this when you already have an OpenShift 4.22+ cluster on AWS and want to install operators, add a GPU worker node, and deploy a model.
+
+**What it does:**
+
+- Installs 10 operators (NFD, RHOAI 3.5, NVIDIA GPU, Lightspeed, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link)
+- Creates a `g4dn.4xlarge` GPU MachineSet by auto-discovering cluster config
+- Configures OpenShift AI with KServe raw deployment
+- Deploys Qwen3-4B on vLLM via a modelcar OCI image
+- **Excludes** ODF and Local Storage Operator
+
+### Quick Start
+
+```bash
+# Prerequisites
+pip install ansible kubernetes
+ansible-galaxy collection install kubernetes.core
+
+# Configure
+cd ansible
+# Edit group_vars/all.yml and set ocp_context to your cluster context
+# Find it with: oc config current-context
+
+# Run
+ansible-playbook site.yml
+```
+
+See [ansible/README.md](ansible/README.md) for full variable reference, tags, and Quay S3 configuration.
+
+---
+
+## Option B: Terraform (Full Cluster from Scratch)
+
+Use this to provision a complete cluster from nothing, including the bastion host, ODF storage, and all operators.
+
+### Prerequisites
+
+#### AWS
 
 - An AWS account with credentials configured (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
 - An existing Route53 hosted zone for your base domain (e.g. `sandbox199.opentlc.com`)
 - Sufficient EC2 quotas: 3x `m5.xlarge`, 6x `m5.4xlarge`, 1x `g4dn.4xlarge`, plus 1x `t3.xlarge` for the bastion
 - Elastic IP quota of at least 10 in your target region
 
-### Red Hat Pull Secret
+#### Red Hat Pull Secret
 
 A pull secret is required to install OpenShift. Download it from the [Red Hat Console](https://console.redhat.com/openshift/install/pull-secret) and save it as `cluster/pull-secret.json`.
 
 > **Do not commit `pull-secret.json` to the repository.** It is listed in `.gitignore`.
 
-### SSH Key Pair
+#### SSH Key Pair
 
 An SSH key pair is needed in two places:
 
@@ -46,7 +94,7 @@ scp ~/.ssh/id_rsa.pub ec2-user@<bastion_public_ip>:~/.ssh/id_rsa.pub
 scp ~/.ssh/id_rsa ec2-user@<bastion_public_ip>:~/.ssh/id_rsa
 ```
 
-### Tools
+#### Tools
 
 The following are required on your local machine:
 
@@ -55,7 +103,7 @@ The following are required on your local machine:
 
 All other tools (oc, kubectl, openshift-install, etc.) are installed automatically on the bastion host via Homebrew.
 
-## Bastion Host
+### Bastion Host
 
 Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 
@@ -72,7 +120,7 @@ Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 - tmux with [TPM](https://github.com/tmux-plugins/tpm) and powerline
 - Git, wget, curl, jq, and other common utilities
 
-### Deploy Bastion
+#### Deploy Bastion
 
 ```sh
 export AWS_ACCESS_KEY_ID="<your-access-key>"
@@ -83,11 +131,11 @@ tofu init && tofu apply
 ssh ec2-user@<bastion_public_ip>
 ```
 
-## OpenShift Cluster
+### OpenShift Cluster
 
 Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by OpenTofu. Run this **from the bastion host** inside a tmux session.
 
-### Cluster Topology
+#### Cluster Topology
 
 | Role | Instance Type | Count | Notes |
 |------|---------------|-------|-------|
@@ -96,9 +144,7 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | GPU Worker | `g4dn.4xlarge` (16 vCPU, 64 GB, 1x T4) | 1 | NVIDIA GPU workloads |
 | GPU Worker | `p4de.24xlarge` (96 vCPU, 1.1 TB, 8x A100 80GB) | 0 | Scale-up ready (set replicas to 1) |
 
-### Provisioning Phases
-
-The cluster install is orchestrated in 9 phases:
+#### Provisioning Phases
 
 | Phase | Resource | Description |
 |-------|----------|-------------|
@@ -114,7 +160,7 @@ The cluster install is orchestrated in 9 phases:
 | 10 | `console_plugins` | Enable console plugins |
 | 11 | `quay_registry` | Deploy Quay Registry (waits for NooBaa) |
 
-### Operators
+#### Operators
 
 | Operator | Channel | Purpose |
 |----------|---------|---------|
@@ -132,7 +178,7 @@ The cluster install is orchestrated in 9 phases:
 
 **Console plugins enabled:** odf-console, pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
 
-### Networking
+#### Networking
 
 | Network | CIDR | Purpose |
 |---------|------|---------|
@@ -142,7 +188,7 @@ The cluster install is orchestrated in 9 phases:
 
 CNI: OVNKubernetes
 
-### Deploy Cluster
+#### Deploy Cluster
 
 From the bastion host:
 
@@ -163,7 +209,7 @@ tofu apply
 
 A random cluster name (e.g. `jgoh742`) is generated automatically. The cluster will be available at `jgoh742.sandbox199.opentlc.com`.
 
-### Cluster Outputs
+#### Cluster Outputs
 
 After deployment, OpenTofu will output:
 
@@ -172,7 +218,7 @@ After deployment, OpenTofu will output:
 - **Kubeconfig path** — `cluster/install-dir/auth/kubeconfig`
 - **Kubeadmin password** — `cluster/install-dir/auth/kubeadmin-password`
 
-### Destroy Cluster
+#### Destroy Cluster
 
 ```sh
 cd ~/ocp-provisioning/cluster
