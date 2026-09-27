@@ -162,3 +162,35 @@
           - vllm-spyre-s390x-runtime
           - vllm-gaudi-runtime
         templateOrder: []
+
+- name: Add GPU accelerator to default hardware profile
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: infrastructure.opendatahub.io/v1
+      kind: HardwareProfile
+      metadata:
+        name: default-profile
+        namespace: redhat-ods-applications
+      spec:
+        identifiers:
+          - displayName: CPU
+            identifier: cpu
+            resourceType: CPU
+            defaultCount: 2
+            minCount: 1
+            maxCount: 4
+          - displayName: Memory
+            identifier: memory
+            resourceType: Memory
+            defaultCount: 4Gi
+            minCount: 2Gi
+            maxCount: 8Gi
+          - displayName: GPU
+            identifier: nvidia.com/gpu
+            resourceType: Accelerator
+            defaultCount: 1
+            minCount: 1
+            maxCount: 2
+  ignore_errors: true
