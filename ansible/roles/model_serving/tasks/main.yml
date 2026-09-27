@@ -66,9 +66,13 @@
           opendatahub.io/hardware-profile-name: default-profile
           opendatahub.io/template-name: vllm-cuda-runtime-template
           opendatahub.io/template-display-name: "vLLM NVIDIA GPU ServingRuntime for KServe"
+          opendatahub.io/model-type: generative
+          openshift.io/display-name: "{{ model_name }}"
+          openshift.io/description: "{{ model_name }} language model served via vLLM on GPU"
           security.opendatahub.io/enable-auth: "true"
         labels:
           opendatahub.io/dashboard: "true"
+          opendatahub.io/genai-asset: "true"
           networking.kserve.io/visibility: exposed
       spec:
         predictor:

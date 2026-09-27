@@ -99,8 +99,6 @@
             managementState: Managed
           aigateway:
             managementState: Managed
-            modelsAsAService:
-              managementState: Managed
           trainingoperator:
             managementState: Removed
           trainer:
@@ -113,6 +111,18 @@
             managementState: Managed
           llamastackoperator:
             managementState: Removed
+
+- name: Get cluster ingress domain
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: config.openshift.io/v1
+    kind: Ingress
+    name: cluster
+  register: cluster_ingress
+
+- name: Set cluster apps domain
+  ansible.builtin.set_fact:
+    ocp_apps_domain: "{{ cluster_ingress.resources[0].spec.domain }}"
 
 - name: Wait for OdhDashboardConfig CRD
   kubernetes.core.k8s_info:
@@ -147,6 +157,8 @@
           vLLMDeploymentOnMaaS: true
         genAiStudioConfig:
           aiAssetCustomEndpoints:
+            clusterDomains:
+              - ".{{ ocp_apps_domain }}"
             externalProviders: true
         globalMLflowNamespaces: []
         hardwareProfileOrder: []
