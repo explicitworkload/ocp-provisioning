@@ -38,8 +38,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 
 - Installs 10 operators (NFD, RHOAI 3.5, NVIDIA GPU, Lightspeed, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link)
 - Creates a `g4dn.4xlarge` GPU MachineSet by auto-discovering cluster config
-- Configures OpenShift AI with KServe raw deployment
-- Deploys Qwen3-4B on vLLM via a modelcar OCI image
+- Configures OpenShift AI with KServe, OGX (GenAI Studio playground), and AI gateway
+- Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
 - **Excludes** ODF and Local Storage Operator
 
 ### Quick Start

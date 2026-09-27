@@ -29,11 +29,20 @@ Creates an AWS `g4dn.4xlarge` MachineSet (1x NVIDIA T4, 16 GB VRAM) by auto-disc
 
 ### OpenShift AI 3.5
 
-Configures DSCInitialization, DataScienceCluster, and OdhDashboardConfig with KServe (raw deployment mode), model registry, AI gateway, and related components.
+Configures DSCInitialization, DataScienceCluster, and OdhDashboardConfig with:
+- KServe (Standard deployment mode) with external endpoints and bearer token auth
+- OGX (GenAI Studio playground)
+- AI gateway, model registry, and hardware profiles with GPU accelerator
+- Auto-discovers cluster apps domain for GenAI Studio `clusterDomains` config
 
 ### Model Serving
 
-Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using a vLLM ServingRuntime on a GPU node via KServe raw deployment.
+Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using the pre-installed RHOAI vLLM CUDA ServingRuntime on a GPU node. The InferenceService is configured with:
+- External endpoint via `networking.kserve.io/visibility: exposed`
+- Bearer token auth via `security.opendatahub.io/enable-auth`
+- GenAI Studio integration via `opendatahub.io/genai-asset` label
+- `Recreate` deployment strategy to avoid GPU contention during rollouts
+- RBAC (ClusterRole + RoleBinding) for ServiceAccount-based token access
 
 ## Prerequisites
 
@@ -89,9 +98,9 @@ All variables are in `group_vars/all.yml`:
 | `model_namespace` | `qwen3-4b` | Namespace for the model deployment |
 | `model_name` | `qwen3-4b` | InferenceService name |
 | `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |
-| `vllm_image` | `quay.io/modh/vllm:rhoai-2.25-cuda` | vLLM runtime container image |
+| `model_max_model_len` | `8192` | vLLM max model context length (must fit GPU VRAM) |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (requires S3 config) |
-| `console_plugins` | `[pipelines-console-plugin, gitops-plugin]` | Console plugins to enable |
+| `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin]` | Console plugins to enable |
 
 ## Quay without ODF
 
