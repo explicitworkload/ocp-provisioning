@@ -34,6 +34,18 @@
   ansible.builtin.debug:
     msg: "GPU node(s) ready: {{ gpu_nodes.resources | map(attribute='metadata') | map(attribute='name') | list }}"
 
+- name: Wait for vLLM CUDA ServingRuntime template
+  ansible.builtin.command:
+    cmd: >-
+      oc --context {{ ocp_context }}
+      get template vllm-cuda-runtime-template
+      -n redhat-ods-applications
+  register: vllm_template_check
+  until: vllm_template_check.rc == 0
+  retries: 30
+  delay: 15
+  changed_when: false
+
 - name: Instantiate vLLM CUDA ServingRuntime from RHOAI template
   ansible.builtin.command:
     cmd: >-
