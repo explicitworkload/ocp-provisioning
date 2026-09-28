@@ -4,6 +4,21 @@
   connection: local
   gather_facts: false
 
+  pre_tasks:
+    - name: Set OAuth access token max age to 90 days
+      kubernetes.core.k8s:
+        context: "{{ ocp_context }}"
+        state: present
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: OAuth
+          metadata:
+            name: cluster
+          spec:
+            tokenConfig:
+              accessTokenMaxAgeSeconds: 7776000
+      tags: [always]
+
   roles:
     - role: operators
       tags: [operators]
