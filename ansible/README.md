@@ -31,8 +31,9 @@ Creates an AWS `g4dn.4xlarge` MachineSet (1x NVIDIA T4, 16 GB VRAM) by auto-disc
 
 Configures DSCInitialization, DataScienceCluster, and OdhDashboardConfig with:
 - KServe (Standard deployment mode) with external endpoints and bearer token auth
-- OGX (GenAI Studio playground)
-- AI gateway, model registry, and hardware profiles with GPU accelerator
+- OGX (GenAI Studio playground) — patched post-creation since DSC ignores unknown fields
+- AI Gateway — patched post-creation (same reason as OGX)
+- Model registry, hardware profiles with GPU accelerator
 - Auto-discovers cluster apps domain for GenAI Studio `clusterDomains` config
 
 ### Model Serving
@@ -43,6 +44,14 @@ Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using 
 - GenAI Studio integration via `opendatahub.io/genai-asset` label
 - `Recreate` deployment strategy to avoid GPU contention during rollouts
 - RBAC (ClusterRole + RoleBinding) for ServiceAccount-based token access
+- Tool/function calling via `--enable-auto-tool-choice` and `--tool-call-parser=hermes`
+
+### GenAI Studio Playground (OGX)
+
+Deploys the full GenAI Studio playground stack:
+- **pgvector PostgreSQL** — vector database for RAG (PVC-backed, with `vector` extension installed)
+- **OGXServer** — Llama Stack-based playground with vLLM inference, pgvector vector_io, and RAG support
+- **Llama Stack ConfigMap** — full provider config (inference, vector_io, responses, files, tool_runtime)
 
 ## Prerequisites
 
@@ -98,7 +107,8 @@ All variables are in `group_vars/all.yml`:
 | `model_namespace` | `qwen3-4b` | Namespace for the model deployment |
 | `model_name` | `qwen3-4b` | InferenceService name |
 | `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |
-| `model_max_model_len` | `8192` | vLLM max model context length (must fit GPU VRAM) |
+| `model_max_model_len` | `16384` | vLLM max model context length (must fit GPU VRAM) |
+| `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (requires S3 config) |
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin]` | Console plugins to enable |
 
@@ -156,7 +166,7 @@ ansible/
     ├── openshift_ai/       # DSCI, DSC, OdhDashboardConfig
     ├── quay/               # QuayRegistry (conditional)
     ├── console_plugins/    # Console plugin enablement
-    └── model_serving/      # vLLM ServingRuntime + InferenceService
+    └── model_serving/      # RBAC, pgvector, OGXServer, ServingRuntime, InferenceService
 ```
 
 ## Idempotency
