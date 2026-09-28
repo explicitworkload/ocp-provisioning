@@ -462,7 +462,7 @@
               - name: VLLM_TLS_VERIFY
                 value: "false"
               - name: VLLM_MAX_TOKENS_1
-                value: "{{ model_max_model_len | string }}"
+                value: "{{ model_max_output_tokens | string }}"
               - name: VLLM_API_TOKEN_1
                 valueFrom:
                   secretKeyRef:
