@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "openshift-mcp-server": {
+      "type": "http",
+      "url": "https://openshift-mcp-server-openshift-mcp-server.apps.ocp.54892.sandbox1278.opentlc.com/mcp"
+    }
+  }
+}

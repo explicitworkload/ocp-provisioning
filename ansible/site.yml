@@ -28,3 +28,6 @@
 
     - role: model_serving
       tags: [model-serving]
+
+    - role: litellm
+      tags: [litellm]

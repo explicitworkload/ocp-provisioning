@@ -6,7 +6,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 
 ## What gets installed
 
-### Operators (10 subscriptions)
+### Operators (9 subscriptions)
 
 | Operator | Namespace | Channel |
 |----------|-----------|---------|
@@ -14,7 +14,6 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 | Red Hat OpenShift AI | redhat-ods-operator | stable-3.5 |
 | NVIDIA GPU Operator | nvidia-gpu-operator | v26.7 |
 | Red Hat Connectivity Link | openshift-operators | stable |
-| OpenShift Lightspeed | openshift-lightspeed | stable |
 | Cluster Observability | openshift-observability-operator | stable |
 | OpenShift Pipelines | openshift-operators | latest |
 | Red Hat Quay | quay-enterprise | stable-3.18 |
@@ -52,6 +51,15 @@ Deploys the full GenAI Studio playground stack:
 - **pgvector PostgreSQL** — vector database for RAG (PVC-backed, with `vector` extension installed)
 - **OGXServer** — Llama Stack-based playground with vLLM inference, pgvector vector_io, and RAG support
 - **Llama Stack ConfigMap** — full provider config (inference, vector_io, responses, files, tool_runtime)
+
+### LiteLLM Proxy
+
+Deploys a LiteLLM proxy with PostgreSQL backend for unified OpenAI-compatible API access:
+- **PostgreSQL** — persistent storage for API keys, teams, budgets, and usage logs
+- **LiteLLM proxy** — routes requests to multiple LLM backends via a single endpoint
+- **Qwen3-4B** — proxied from the cluster's InferenceService
+- **Azure GPT-4** — via Azure AD client credentials with reusable credential stored in LiteLLM DB
+- Exposed via OpenShift Route with edge TLS
 
 ## Prerequisites
 
@@ -107,10 +115,13 @@ All variables are in `group_vars/all.yml`:
 | `model_namespace` | `qwen3-4b` | Namespace for the model deployment |
 | `model_name` | `qwen3-4b` | InferenceService name |
 | `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |
-| `model_max_model_len` | `16384` | vLLM max model context length (must fit GPU VRAM) |
+| `model_max_model_len` | `32768` | vLLM max model context length (must fit GPU VRAM) |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (requires S3 config) |
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin]` | Console plugins to enable |
+| `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
+| `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
+| `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 
 ## Quay without ODF
 
@@ -146,6 +157,7 @@ ansible-playbook site.yml --tags openshift-ai   # OpenShift AI config only
 ansible-playbook site.yml --tags model-serving  # Model deployment only
 ansible-playbook site.yml --tags quay           # Quay only
 ansible-playbook site.yml --tags console        # Console plugins only
+ansible-playbook site.yml --tags litellm        # LiteLLM proxy only
 ```
 
 ## Playbook structure
@@ -166,7 +178,8 @@ ansible/
     ├── openshift_ai/       # DSCI, DSC, OdhDashboardConfig
     ├── quay/               # QuayRegistry (conditional)
     ├── console_plugins/    # Console plugin enablement
-    └── model_serving/      # RBAC, pgvector, OGXServer, ServingRuntime, InferenceService
+    ├── model_serving/      # RBAC, pgvector, OGXServer, ServingRuntime, InferenceService
+    └── litellm/            # LiteLLM proxy, PostgreSQL, reusable Azure credentials
 ```
 
 ## Idempotency

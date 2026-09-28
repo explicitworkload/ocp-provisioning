@@ -1,0 +1,3 @@
+---
+mcp_server_namespace: openshift-mcp-server
+mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"

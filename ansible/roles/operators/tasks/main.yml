@@ -12,7 +12,6 @@
     - openshift-nfd
     - redhat-ods-operator
     - nvidia-gpu-operator
-    - openshift-lightspeed
     - openshift-observability-operator
     - openshift-pipelines
     - quay-enterprise
@@ -45,11 +44,6 @@
       spec:
         targetNamespaces:
           - nvidia-gpu-operator
-    - name: openshift-lightspeed-operatorgroup
-      namespace: openshift-lightspeed
-      spec:
-        targetNamespaces:
-          - openshift-lightspeed
     - name: openshift-observability-operatorgroup
       namespace: openshift-observability-operator
       spec: {}
@@ -95,10 +89,6 @@
       namespace: nvidia-gpu-operator
       channel: v26.7
       source: certified-operators
-    - name: lightspeed-operator
-      namespace: openshift-lightspeed
-      channel: stable
-      source: redhat-operators
     - name: cluster-observability-operator
       namespace: openshift-observability-operator
       channel: stable

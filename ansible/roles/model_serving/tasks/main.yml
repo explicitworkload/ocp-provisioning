@@ -598,6 +598,7 @@
           networking.kserve.io/visibility: exposed
       spec:
         predictor:
+          timeout: 300
           deploymentStrategy:
             type: Recreate
           model:

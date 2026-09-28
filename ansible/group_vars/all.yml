@@ -1,11 +1,11 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-pr5jf-sandbox5291-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-54892-sandbox1278-opentlc-com:6443/admin"
 
 # GPU Worker configuration
 gpu_instance_type: g4dn.4xlarge
 gpu_availability_zone: us-east-2a
-gpu_replicas: 1
+gpu_replicas: 2
 gpu_volume_size: 120
 
 # Model serving configuration

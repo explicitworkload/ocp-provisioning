@@ -63,7 +63,7 @@
     context: "{{ ocp_context }}"
     state: present
     definition:
-      apiVersion: datasciencecluster.opendatahub.io/v1
+      apiVersion: datasciencecluster.opendatahub.io/v2
       kind: DataScienceCluster
       metadata:
         name: default-dsc
@@ -74,8 +74,6 @@
           workbenches:
             managementState: Managed
             workbenchNamespace: rhods-notebooks
-          aipipelines:
-            managementState: Managed
           kserve:
             managementState: Managed
             nim:
@@ -111,24 +109,8 @@
             managementState: Managed
           llamastackoperator:
             managementState: Removed
-
-- name: Ensure OGX is Managed in DataScienceCluster
-  ansible.builtin.command:
-    cmd: >-
-      oc --context {{ ocp_context }}
-      patch datasciencecluster default-dsc
-      --type merge
-      -p '{"spec":{"components":{"ogx":{"managementState":"Managed"}}}}'
-  changed_when: false
-
-- name: Ensure AI Gateway is Managed in DataScienceCluster
-  ansible.builtin.command:
-    cmd: >-
-      oc --context {{ ocp_context }}
-      patch datasciencecluster default-dsc
-      --type merge
-      -p '{"spec":{"components":{"aigateway":{"managementState":"Managed"}}}}'
-  changed_when: false
+          mcplifecycleoperator:
+            managementState: Managed
 
 - name: Get cluster ingress domain
   kubernetes.core.k8s_info:
@@ -226,3 +208,159 @@
             minCount: 1
             maxCount: 2
   ignore_errors: true
+
+# --- MCP Server for OpenShift ---
+
+- name: Create MCP server namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ mcp_server_namespace }}"
+
+- name: Create MCP server ServiceAccount
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: mcp-viewer
+        namespace: "{{ mcp_server_namespace }}"
+
+- name: Bind cluster view role to MCP server ServiceAccount
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: mcp-viewer-binding
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+        - kind: ServiceAccount
+          name: mcp-viewer
+          namespace: "{{ mcp_server_namespace }}"
+
+- name: Create MCP server config
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openshift-mcp-server-config
+        namespace: "{{ mcp_server_namespace }}"
+      data:
+        config.toml: |
+          log_level = 5
+          port = "8080"
+          read_only = true
+          toolsets = ["core", "config"]
+
+- name: Wait for MCPServer CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: mcpservers.mcp.x-k8s.io
+  register: mcp_crd
+  until: mcp_crd.resources | length > 0
+  retries: 20
+  delay: 15
+
+- name: Create OpenShift MCP Server
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: mcp.x-k8s.io/v1alpha1
+      kind: MCPServer
+      metadata:
+        name: openshift-mcp-server
+        namespace: "{{ mcp_server_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+      spec:
+        source:
+          type: ContainerImage
+          containerImage:
+            ref: "{{ mcp_server_image }}"
+        config:
+          port: 8080
+          arguments:
+            - --config
+            - /etc/mcp-config/config.toml
+          storage:
+            - path: /etc/mcp-config
+              source:
+                type: ConfigMap
+                configMap:
+                  name: openshift-mcp-server-config
+        runtime:
+          security:
+            serviceAccountName: mcp-viewer
+
+- name: Wait for MCP Server to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: mcp.x-k8s.io/v1alpha1
+    kind: MCPServer
+    namespace: "{{ mcp_server_namespace }}"
+    name: openshift-mcp-server
+  register: mcp_server
+  until: >-
+    mcp_server.resources | length > 0 and
+    mcp_server.resources[0].status is defined and
+    mcp_server.resources[0].status.conditions is defined and
+    mcp_server.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 20
+  delay: 15
+  ignore_errors: true
+
+- name: Expose MCP Server via route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: openshift-mcp-server
+        namespace: "{{ mcp_server_namespace }}"
+      spec:
+        to:
+          kind: Service
+          name: openshift-mcp-server
+        port:
+          targetPort: 8080
+        tls:
+          termination: edge
+
+- name: Register MCP Server for GenAI Studio playground
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: gen-ai-aa-mcp-servers
+        namespace: redhat-ods-applications
+      data:
+        OpenShift-MCP-Server: |
+          {
+            "url": "http://openshift-mcp-server.{{ mcp_server_namespace }}.svc.cluster.local:8080/mcp",
+            "description": "MCP server for Kubernetes and OpenShift cluster operations (read-only)"
+          }
