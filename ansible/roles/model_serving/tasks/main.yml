@@ -607,6 +607,8 @@
             storageUri: "oci://{{ model_image }}"
             args:
               - "--max-model-len={{ model_max_model_len }}"
+              - "--enable-auto-tool-choice"
+              - "--tool-call-parser=hermes"
             resources:
               limits:
                 cpu: "{{ model_cpu_limit }}"
