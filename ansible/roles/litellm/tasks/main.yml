@@ -224,22 +224,6 @@
     name: azure-api-keys
   register: azure_secret
 
-- name: Create Azure credentials secret for LiteLLM
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: azure-credentials
-        namespace: "{{ litellm_namespace }}"
-      type: Opaque
-      stringData:
-        AZURE_CLIENT_ID: "{{ azure_secret.resources[0].data.client_id | b64decode }}"
-        AZURE_CLIENT_SECRET: "{{ azure_secret.resources[0].data.client_secret | b64decode }}"
-        AZURE_TENANT_ID: "{{ azure_secret.resources[0].data.tenant_id | b64decode }}"
-
 # --- LiteLLM Proxy ---
 
 - name: Create LiteLLM config
@@ -265,6 +249,8 @@
               litellm_params:
                 model: azure/gpt-4
                 litellm_credential_name: {{ litellm_azure_credential_name }}
+          litellm_settings:
+            drop_params: true
           general_settings:
             master_key: os.environ/LITELLM_MASTER_KEY
             database_url: os.environ/DATABASE_URL
@@ -309,21 +295,6 @@
                       secretKeyRef:
                         name: litellm-secrets
                         key: QWEN_API_KEY
-                  - name: AZURE_CLIENT_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: azure-credentials
-                        key: AZURE_CLIENT_ID
-                  - name: AZURE_CLIENT_SECRET
-                    valueFrom:
-                      secretKeyRef:
-                        name: azure-credentials
-                        key: AZURE_CLIENT_SECRET
-                  - name: AZURE_TENANT_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: azure-credentials
-                        key: AZURE_TENANT_ID
                   - name: LITELLM_MASTER_KEY
                     valueFrom:
                       secretKeyRef:
@@ -460,3 +431,106 @@
     litellm_creds.json.credentials |
     selectattr('credential_name', 'equalto', litellm_azure_credential_name) |
     list | length == 0
+
+# --- Admin User ---
+
+- name: Check if LiteLLM admin user exists
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/user/info?user_email={{ litellm_admin_email }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: litellm_admin_check
+
+- name: Create LiteLLM admin user
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/user/new"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      user_email: "{{ litellm_admin_email }}"
+      user_role: proxy_admin
+      auto_create_key: true
+    validate_certs: false
+    status_code: [200, 201]
+  when: litellm_admin_check.status == 404
+
+# --- Virtual Key & AI Asset Endpoint ---
+
+- name: Check for existing LiteLLM virtual key secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: endpoint-api-key-1
+  register: existing_vkey_secret
+
+- name: Generate LiteLLM virtual key
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/key/generate"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      key_alias: openshift-ai
+      models: []
+    validate_certs: false
+    status_code: [200, 201]
+  register: litellm_vkey
+  when: existing_vkey_secret.resources | length == 0
+
+- name: Store LiteLLM virtual key in model namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: endpoint-api-key-1
+        namespace: "{{ model_namespace }}"
+      type: Opaque
+      stringData:
+        api_key: "{{ litellm_vkey.json.key }}"
+  when: existing_vkey_secret.resources | length == 0
+
+- name: Create AI Asset Endpoint for LiteLLM models
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: gen-ai-aa-custom-model-endpoints
+        namespace: "{{ model_namespace }}"
+      data:
+        config.yaml: |
+          providers:
+            inference:
+            - provider_id: endpoint-1
+              provider_type: remote::openai
+              config:
+                base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
+                allowed_models:
+                - {{ litellm_azure_model_name }}
+                custom_gen_ai:
+                  api_key:
+                    secretRef:
+                      name: endpoint-api-key-1
+                      key: api_key
+          registered_resources:
+            models:
+            - provider_id: endpoint-1
+              model_id: {{ litellm_azure_model_name }}
+              model_type: llm
+              metadata:
+                display_name: {{ litellm_azure_model_name }}

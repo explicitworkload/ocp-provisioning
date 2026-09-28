@@ -11,6 +11,8 @@ litellm_master_key: "{{ lookup('password', '/dev/null chars=ascii_letters,digits
 litellm_ui_username: admin
 litellm_ui_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"
 
+litellm_admin_email: admin@example.com
+
 litellm_azure_endpoint: "https://llm-gpt4-lightspeed.cognitiveservices.azure.com"
 litellm_azure_api_version: "2024-06-01"
 litellm_azure_model_name: "Mistral-Small-4-119B-2603"

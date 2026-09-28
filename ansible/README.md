@@ -28,12 +28,12 @@ Creates an AWS `g4dn.4xlarge` MachineSet (1x NVIDIA T4, 16 GB VRAM) by auto-disc
 
 ### OpenShift AI 3.5
 
-Configures DSCInitialization, DataScienceCluster, and OdhDashboardConfig with:
+Configures DSCInitialization, DataScienceCluster (v2 API), and OdhDashboardConfig with:
 - KServe (Standard deployment mode) with external endpoints and bearer token auth
-- OGX (GenAI Studio playground) — patched post-creation since DSC ignores unknown fields
-- AI Gateway — patched post-creation (same reason as OGX)
+- OGX (GenAI Studio playground), AI Gateway, and MCP Lifecycle Operator
 - Model registry, hardware profiles with GPU accelerator
 - Auto-discovers cluster apps domain for GenAI Studio `clusterDomains` config
+- OpenShift MCP Server deployment with cluster-wide read-only access
 
 ### Model Serving
 
@@ -48,7 +48,7 @@ Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using 
 ### GenAI Studio Playground (OGX)
 
 Deploys the full GenAI Studio playground stack:
-- **pgvector PostgreSQL** — vector database for RAG (PVC-backed, with `vector` extension installed)
+- **pgvector PostgreSQL** — vector database for RAG (PVC-backed, with `vector` extension installed, init script, NetworkPolicy, and `gen-ai.opendatahub.io/pgvector` labels for provisioner compatibility)
 - **OGXServer** — Llama Stack-based playground with vLLM inference, pgvector vector_io, and RAG support
 - **Llama Stack ConfigMap** — full provider config (inference, vector_io, responses, files, tool_runtime)
 
@@ -59,7 +59,10 @@ Deploys a LiteLLM proxy with PostgreSQL backend for unified OpenAI-compatible AP
 - **LiteLLM proxy** — routes requests to multiple LLM backends via a single endpoint
 - **Qwen3-4B** — proxied from the cluster's InferenceService
 - **Azure GPT-4** — via Azure AD client credentials with reusable credential stored in LiteLLM DB
+- **Admin user** — `proxy_admin` role created via API for UI access
+- **AI Asset Endpoint** — registers Azure model in GenAI Studio via `gen-ai-aa-custom-model-endpoints` ConfigMap with virtual key
 - Exposed via OpenShift Route with edge TLS
+- Credentials (master key, UI password) auto-generated and persisted in cluster secrets
 
 ## Prerequisites
 
@@ -121,6 +124,7 @@ All variables are in `group_vars/all.yml`:
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin]` | Console plugins to enable |
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
+| `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 
 ## Quay without ODF

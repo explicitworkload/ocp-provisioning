@@ -142,9 +142,27 @@
         namespace: "{{ model_namespace }}"
         labels:
           opendatahub.io/dashboard: "true"
+          gen-ai.opendatahub.io/pgvector: "true"
       type: Opaque
       stringData:
         password: vectorpass123
+
+- name: Create pgvector init ConfigMap
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: genai-pgvector-init
+        namespace: "{{ model_namespace }}"
+        labels:
+          gen-ai.opendatahub.io/pgvector: "true"
+      data:
+        enable-pgvector.sh: |
+          #!/bin/bash
+          psql -U postgres -d "${POSTGRESQL_DATABASE}" -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 - name: Create pgvector PVC
   kubernetes.core.k8s:
@@ -156,6 +174,8 @@
       metadata:
         name: genai-pgvector-storage
         namespace: "{{ model_namespace }}"
+        labels:
+          gen-ai.opendatahub.io/pgvector: "true"
       spec:
         accessModes:
           - ReadWriteOnce
@@ -173,12 +193,42 @@
       metadata:
         name: genai-pgvector
         namespace: "{{ model_namespace }}"
+        labels:
+          gen-ai.opendatahub.io/pgvector: "true"
       spec:
         selector:
           app: genai-pgvector
         ports:
           - port: 5432
             targetPort: 5432
+
+- name: Create pgvector NetworkPolicy
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: genai-pgvector
+        namespace: "{{ model_namespace }}"
+        labels:
+          gen-ai.opendatahub.io/pgvector: "true"
+      spec:
+        ingress:
+          - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/instance: genai-playground
+            ports:
+              - port: 5432
+                protocol: TCP
+        podSelector:
+          matchLabels:
+            app: genai-pgvector
+            gen-ai.opendatahub.io/pgvector: "true"
+        policyTypes:
+          - Ingress
 
 - name: Deploy pgvector PostgreSQL
   kubernetes.core.k8s:
