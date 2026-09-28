@@ -112,6 +112,15 @@
           llamastackoperator:
             managementState: Removed
 
+- name: Ensure OGX is Managed in DataScienceCluster
+  ansible.builtin.command:
+    cmd: >-
+      oc --context {{ ocp_context }}
+      patch datasciencecluster default-dsc
+      --type merge
+      -p '{"spec":{"components":{"ogx":{"managementState":"Managed"}}}}'
+  changed_when: false
+
 - name: Get cluster ingress domain
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
