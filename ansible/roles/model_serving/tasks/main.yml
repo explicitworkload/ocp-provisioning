@@ -66,6 +66,204 @@
   ansible.builtin.debug:
     msg: "GPU node(s) ready: {{ gpu_nodes.resources | map(attribute='metadata') | map(attribute='name') | list }}"
 
+- name: Create RBAC for model inference access
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: kserve-inference-access
+      rules:
+        - apiGroups: ["serving.kserve.io"]
+          resources: ["inferenceservices"]
+          verbs: ["get"]
+
+- name: Create ServiceAccount for model access
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: "{{ model_name }}-sa"
+        namespace: "{{ model_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+
+- name: Bind inference access to ServiceAccount
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ model_name }}-inference-access"
+        namespace: "{{ model_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: kserve-inference-access
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ model_name }}-sa"
+          namespace: "{{ model_namespace }}"
+
+- name: Create token secret for ServiceAccount
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ model_name }}-sa-token"
+        namespace: "{{ model_namespace }}"
+        annotations:
+          kubernetes.io/service-account.name: "{{ model_name }}-sa"
+        labels:
+          opendatahub.io/dashboard: "true"
+      type: kubernetes.io/service-account-token
+
+# --- pgvector for GenAI Studio ---
+
+- name: Create pgvector credentials secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: genai-pgvector-credentials
+        namespace: "{{ model_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+      type: Opaque
+      stringData:
+        password: vectorpass123
+
+- name: Create pgvector PVC
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: genai-pgvector-storage
+        namespace: "{{ model_namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+
+- name: Create pgvector Service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: genai-pgvector
+        namespace: "{{ model_namespace }}"
+      spec:
+        selector:
+          app: genai-pgvector
+        ports:
+          - port: 5432
+            targetPort: 5432
+
+- name: Deploy pgvector PostgreSQL
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: genai-pgvector
+        namespace: "{{ model_namespace }}"
+        labels:
+          gen-ai.opendatahub.io/pgvector: "true"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: genai-pgvector
+        template:
+          metadata:
+            labels:
+              app: genai-pgvector
+              gen-ai.opendatahub.io/pgvector: "true"
+          spec:
+            containers:
+              - name: postgresql
+                image: registry.redhat.io/rhel9/postgresql-16
+                ports:
+                  - containerPort: 5432
+                env:
+                  - name: POSTGRESQL_DATABASE
+                    value: vectordb
+                  - name: POSTGRESQL_USER
+                    value: vectoruser
+                  - name: POSTGRESQL_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        key: password
+                        name: genai-pgvector-credentials
+                resources:
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+                  requests:
+                    cpu: 250m
+                    memory: 512Mi
+                livenessProbe:
+                  exec:
+                    command: ["pg_isready", "-U", "vectoruser", "-d", "vectordb"]
+                  periodSeconds: 20
+                readinessProbe:
+                  exec:
+                    command: ["pg_isready", "-U", "vectoruser", "-d", "vectordb"]
+                  periodSeconds: 10
+                volumeMounts:
+                  - name: pgdata
+                    mountPath: /var/lib/pgsql/data
+            volumes:
+              - name: pgdata
+                persistentVolumeClaim:
+                  claimName: genai-pgvector-storage
+
+- name: Wait for pgvector to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ model_namespace }}"
+    name: genai-pgvector
+  register: pgvector_deploy
+  until: >-
+    pgvector_deploy.resources | length > 0 and
+    pgvector_deploy.resources[0].status.readyReplicas is defined and
+    pgvector_deploy.resources[0].status.readyReplicas >= 1
+  retries: 20
+  delay: 15
+
+- name: Install pgvector extension
+  ansible.builtin.command:
+    cmd: >-
+      oc --context {{ ocp_context }}
+      exec deployment/genai-pgvector -n {{ model_namespace }}
+      -- psql -U postgres -d vectordb -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  changed_when: false
+
 # --- GenAI Studio Playground (OGX) ---
 
 - name: Wait for OGX operator to be ready
@@ -264,7 +462,7 @@
               - name: VLLM_TLS_VERIFY
                 value: "false"
               - name: VLLM_MAX_TOKENS_1
-                value: "{{ model_max_model_len }}"
+                value: "{{ model_max_model_len | string }}"
               - name: VLLM_API_TOKEN_1
                 valueFrom:
                   secretKeyRef:
@@ -424,68 +622,6 @@
               effect: NoSchedule
           nodeSelector:
             node-role.kubernetes.io/gpu: ""
-
-- name: Create RBAC for model inference access
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    definition:
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: ClusterRole
-      metadata:
-        name: kserve-inference-access
-      rules:
-        - apiGroups: ["serving.kserve.io"]
-          resources: ["inferenceservices"]
-          verbs: ["get"]
-
-- name: Create ServiceAccount for model access
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    definition:
-      apiVersion: v1
-      kind: ServiceAccount
-      metadata:
-        name: "{{ model_name }}-sa"
-        namespace: "{{ model_namespace }}"
-        labels:
-          opendatahub.io/dashboard: "true"
-
-- name: Bind inference access to ServiceAccount
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    definition:
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: RoleBinding
-      metadata:
-        name: "{{ model_name }}-inference-access"
-        namespace: "{{ model_namespace }}"
-      roleRef:
-        apiGroup: rbac.authorization.k8s.io
-        kind: ClusterRole
-        name: kserve-inference-access
-      subjects:
-        - kind: ServiceAccount
-          name: "{{ model_name }}-sa"
-          namespace: "{{ model_namespace }}"
-
-- name: Create token secret for ServiceAccount
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: "{{ model_name }}-sa-token"
-        namespace: "{{ model_namespace }}"
-        annotations:
-          kubernetes.io/service-account.name: "{{ model_name }}-sa"
-        labels:
-          opendatahub.io/dashboard: "true"
-      type: kubernetes.io/service-account-token
 
 - name: Wait for InferenceService to be ready
   kubernetes.core.k8s_info:
