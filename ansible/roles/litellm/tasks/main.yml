@@ -396,6 +396,17 @@
   ansible.builtin.set_fact:
     litellm_url: "https://{{ litellm_route.resources[0].spec.host }}"
 
+- name: Wait for LiteLLM API to be responsive
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/health/liveliness"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: litellm_health
+  until: litellm_health.status == 200
+  retries: 20
+  delay: 15
+
 - name: Check if Azure reusable credential exists
   ansible.builtin.uri:
     url: "{{ litellm_url }}/credentials"

@@ -47,10 +47,9 @@ Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using 
 
 ### GenAI Studio Playground (OGX)
 
-Deploys the full GenAI Studio playground stack:
+Prepares the pgvector resources for the GenAI Studio playground provisioner:
 - **pgvector PostgreSQL** — vector database for RAG (PVC-backed, with `vector` extension installed, init script, NetworkPolicy, and `gen-ai.opendatahub.io/pgvector` labels for provisioner compatibility)
-- **OGXServer** — Llama Stack-based playground with vLLM inference, pgvector vector_io, and RAG support
-- **Llama Stack ConfigMap** — full provider config (inference, vector_io, responses, files, tool_runtime)
+- The OGXServer and Llama Stack config are created by the GenAI Studio provisioner when you click "Configure" in the playground UI
 
 ### LiteLLM Proxy
 
