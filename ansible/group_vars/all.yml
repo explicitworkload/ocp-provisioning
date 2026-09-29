@@ -1,12 +1,19 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-8pflt-sandbox2210-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-xjbtl-sandbox425-opentlc-com:6443/admin"
 
 # GPU Worker configuration
-gpu_instance_type: g4dn.4xlarge
 gpu_availability_zone: us-east-2a
-gpu_replicas: 2
 gpu_volume_size: 120
+gpu_machinesets:
+  - instance_type: g4dn.4xlarge
+    replicas: 0
+  - instance_type: g6e.4xlarge
+    replicas: 1
+  - instance_type: p4d.24xlarge
+    replicas: 0
+  - instance_type: p4de.24xlarge
+    replicas: 0
 
 # Model serving configuration
 model_namespace: qwen3-4b

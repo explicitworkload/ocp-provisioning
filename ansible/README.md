@@ -24,7 +24,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 
 ### GPU Worker
 
-Creates an AWS `g4dn.4xlarge` MachineSet (1x NVIDIA T4, 16 GB VRAM) by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets.
+Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets. Supports multiple instance types with configurable replica counts (use `replicas: 0` for scale-up-ready MachineSets).
 
 ### OpenShift AI 3.5
 
@@ -107,10 +107,9 @@ All variables are in `group_vars/all.yml`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ocp_context` | (empty) | Kube context from `oc config current-context` |
-| `gpu_instance_type` | `g4dn.4xlarge` | AWS instance type for GPU worker |
-| `gpu_availability_zone` | `us-east-2a` | AZ for GPU MachineSet |
-| `gpu_replicas` | `1` | Number of GPU worker nodes |
-| `gpu_volume_size` | `120` | Root volume size (GB) for GPU worker |
+| `gpu_machinesets` | `[{instance_type: g4dn.4xlarge, replicas: 1}]` | List of GPU MachineSets to create (instance type + replica count) |
+| `gpu_availability_zone` | `us-east-2a` | AZ for GPU MachineSets |
+| `gpu_volume_size` | `120` | Root volume size (GB) for GPU workers |
 | `model_namespace` | `qwen3-4b` | Namespace for the model deployment |
 | `model_name` | `qwen3-4b` | InferenceService name |
 | `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |

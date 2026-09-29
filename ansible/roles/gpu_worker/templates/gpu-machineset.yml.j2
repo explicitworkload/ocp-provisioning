@@ -1,23 +1,23 @@
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
 metadata:
-  name: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+  name: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
   namespace: openshift-machine-api
   labels:
     machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
 spec:
-  replicas: {{ gpu_replicas }}
+  replicas: {{ item.replicas }}
   selector:
     matchLabels:
       machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
-      machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+      machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
   template:
     metadata:
       labels:
         machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
         machine.openshift.io/cluster-api-machine-role: worker
         machine.openshift.io/cluster-api-machine-type: worker
-        machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-gpu-{{ gpu_availability_zone }}
+        machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
     spec:
       metadata:
         labels:
@@ -40,7 +40,7 @@ spec:
           deviceIndex: 0
           iamInstanceProfile:
             id: {{ cluster_infra_id }}-worker-profile
-          instanceType: {{ gpu_instance_type }}
+          instanceType: {{ item.instance_type }}
           placement:
             availabilityZone: {{ gpu_availability_zone }}
             region: {{ worker_region }}
