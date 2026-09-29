@@ -219,7 +219,7 @@
           - from:
               - podSelector:
                   matchLabels:
-                    app.kubernetes.io/instance: genai-playground
+                    app: ogx
             ports:
               - port: 5432
                 protocol: TCP
