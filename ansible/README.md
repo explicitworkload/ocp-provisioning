@@ -67,23 +67,26 @@ Deploys a LiteLLM proxy with PostgreSQL backend for unified OpenAI-compatible AP
 
 - An existing OpenShift 4.22+ cluster on AWS
 - `oc` CLI authenticated (`oc login`)
-- Python 3.x with `ansible` and `kubernetes` packages
-- The `kubernetes.core` Ansible collection
-
-```bash
-pip install ansible kubernetes
-ansible-galaxy collection install -r requirements.yml
-```
+- Python 3.x
 
 ## Quick start
 
-1. Log in to your cluster:
+1. Set up a Python virtual environment and install dependencies:
+
+   ```bash
+   cd ansible
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install ansible kubernetes
+   ```
+
+2. Log in to your cluster:
 
    ```bash
    oc login https://api.<cluster>.<domain>:6443 -u admin -p <password>
    ```
 
-2. Set your context in `group_vars/all.yml`:
+3. Set your context in `group_vars/all.yml`:
 
    ```yaml
    ocp_context: "<your oc context>"
@@ -91,13 +94,7 @@ ansible-galaxy collection install -r requirements.yml
 
    Find it with `oc config current-context`.
 
-3. Run the playbook:
-
-   ```bash
-   ansible-playbook site.yml
-   ```
-
-   Or use the wrapper script (handles terminal IO quirks):
+4. Run the playbook:
 
    ```bash
    ./run.sh

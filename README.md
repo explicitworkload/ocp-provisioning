@@ -46,17 +46,17 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 ### Quick Start
 
 ```bash
-# Prerequisites
-pip install ansible kubernetes
-ansible-galaxy collection install kubernetes.core
-
-# Configure
+# Set up virtual environment and install dependencies
 cd ansible
+python3 -m venv .venv
+source .venv/bin/activate
+pip install ansible kubernetes
+
 # Edit group_vars/all.yml and set ocp_context to your cluster context
 # Find it with: oc config current-context
 
 # Run
-ansible-playbook site.yml
+./run.sh
 ```
 
 See [ansible/README.md](ansible/README.md) for full variable reference, tags, and Quay S3 configuration.
