@@ -314,32 +314,6 @@
       -- psql -U postgres -d vectordb -c "CREATE EXTENSION IF NOT EXISTS vector;"
   changed_when: false
 
-            replicas: 1
-            resources:
-              limits:
-                cpu: "2"
-                memory: 12Gi
-              requests:
-                cpu: 250m
-                memory: 500Mi
-
-- name: Wait for OGXServer to be ready
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
-    api_version: ogx.io/v1beta1
-    kind: OGXServer
-    namespace: "{{ model_namespace }}"
-    name: genai-playground
-  register: ogx_server
-  until: >-
-    ogx_server.resources | length > 0 and
-    ogx_server.resources[0].status is defined and
-    ogx_server.resources[0].status.phase is defined and
-    ogx_server.resources[0].status.phase == 'Ready'
-  retries: 30
-  delay: 15
-  ignore_errors: true
-
 # --- Model Serving ---
 
 - name: Wait for vLLM CUDA ServingRuntime template
