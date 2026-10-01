@@ -744,22 +744,27 @@ def ai_models():
         )
         r.raise_for_status()
         models = r.json().get("data", [])
-        results = []
-        for m in models:
-            model_id = m["id"]
-            healthy = True
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _probe(model_id):
             try:
-                probe = http_requests.post(
+                p = http_requests.post(
                     f"{LITELLM_URL}/v1/chat/completions",
                     headers=_llm_headers(),
                     json={"model": model_id, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
-                    timeout=10,
+                    timeout=3,
                 )
-                if probe.status_code >= 500:
-                    healthy = False
+                return model_id, p.status_code < 500
             except Exception:
-                healthy = False
-            results.append({"id": model_id, "healthy": healthy})
+                return model_id, False
+
+        health = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_probe, m["id"]): m["id"] for m in models}
+            for f in as_completed(futures):
+                mid, ok = f.result()
+                health[mid] = ok
+        results = [{"id": m["id"], "healthy": health.get(m["id"], False)} for m in models]
         return jsonify({"models": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
