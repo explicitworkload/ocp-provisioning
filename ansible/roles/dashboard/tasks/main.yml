@@ -1,0 +1,164 @@
+---
+- name: Create dashboard namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ dashboard_namespace }}"
+
+- name: Create dashboard ImageStream
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: image.openshift.io/v1
+      kind: ImageStream
+      metadata:
+        name: ops-dashboard
+        namespace: "{{ dashboard_namespace }}"
+
+- name: Create dashboard BuildConfig
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: build.openshift.io/v1
+      kind: BuildConfig
+      metadata:
+        name: ops-dashboard
+        namespace: "{{ dashboard_namespace }}"
+      spec:
+        source:
+          type: Git
+          git:
+            uri: "https://github.com/explicitworkload/ocp-provisioning.git"
+            ref: main
+          contextDir: dashboard
+        strategy:
+          type: Docker
+          dockerStrategy: {}
+        output:
+          to:
+            kind: ImageStreamTag
+            name: "ops-dashboard:{{ dashboard_image_tag }}"
+        triggers:
+          - type: ConfigChange
+
+- name: Wait for dashboard build to complete
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: build.openshift.io/v1
+    kind: Build
+    namespace: "{{ dashboard_namespace }}"
+    label_selectors:
+      - "openshift.io/build-config.name=ops-dashboard"
+  register: dashboard_builds
+  until: >-
+    dashboard_builds.resources | length > 0 and
+    dashboard_builds.resources | selectattr('status.phase', 'defined') |
+    selectattr('status.phase', 'equalto', 'Complete') | list | length > 0
+  retries: 30
+  delay: 30
+
+- name: Create dashboard Deployment
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ops-dashboard
+        namespace: "{{ dashboard_namespace }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ops-dashboard
+        template:
+          metadata:
+            labels:
+              app: ops-dashboard
+          spec:
+            containers:
+              - name: dashboard
+                image: "image-registry.openshift-image-registry.svc:5000/{{ dashboard_namespace }}/ops-dashboard:{{ dashboard_image_tag }}"
+                ports:
+                  - containerPort: 8080
+                env:
+                  - name: BOOKINFO_URL
+                    value: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
+                  - name: GATUS_URL
+                    value: ""
+                readinessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 10
+                  periodSeconds: 30
+
+- name: Create dashboard Service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ops-dashboard
+        namespace: "{{ dashboard_namespace }}"
+      spec:
+        selector:
+          app: ops-dashboard
+        ports:
+          - port: 8080
+            targetPort: 8080
+            name: http
+
+- name: Create dashboard Route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: ops-dashboard
+        namespace: "{{ dashboard_namespace }}"
+      spec:
+        host: "dashboard.{{ ocp_apps_domain }}"
+        to:
+          kind: Service
+          name: ops-dashboard
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+
+- name: Wait for dashboard to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ dashboard_namespace }}"
+    name: ops-dashboard
+  register: dashboard_deploy
+  until: >-
+    dashboard_deploy.resources | length > 0 and
+    dashboard_deploy.resources[0].status.readyReplicas is defined and
+    dashboard_deploy.resources[0].status.readyReplicas >= 1
+  retries: 20
+  delay: 15
+
+- name: Display dashboard URL
+  ansible.builtin.debug:
+    msg: "Operations Dashboard: https://dashboard.{{ ocp_apps_domain }}"

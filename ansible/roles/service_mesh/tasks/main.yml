@@ -128,6 +128,8 @@
             config_map_name: istio-default
             istio_sidecar_injector_config_map_name: istio-sidecar-injector-default
             istiod_deployment_name: istiod-default
+          grafana:
+            enabled: false
           prometheus:
             url: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
             auth:
@@ -181,17 +183,16 @@
         name: istio-proxies
         namespace: "{{ service_mesh_namespace }}"
       spec:
+        namespaceSelector:
+          any: true
         selector:
           matchExpressions:
-            - key: istio-prometheus-ignore
-              operator: DoesNotExist
+            - key: security.istio.io/tlsMode
+              operator: Exists
         podMetricsEndpoints:
           - path: /stats/prometheus
-            interval: 30s
-            relabelings:
-              - action: keep
-                sourceLabels: [__meta_kubernetes_pod_container_name]
-                regex: "istio-proxy"
+            port: "15090"
+            interval: 15s
 
 - name: Create ServiceMonitor for istiod
   kubernetes.core.k8s:

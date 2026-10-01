@@ -84,3 +84,6 @@
 
     - role: bookinfo_demo
       tags: [bookinfo, service-mesh-demo]
+
+    - role: dashboard
+      tags: [dashboard]

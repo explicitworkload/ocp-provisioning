@@ -1,0 +1,3 @@
+---
+dashboard_namespace: dashboard
+dashboard_image_tag: latest
