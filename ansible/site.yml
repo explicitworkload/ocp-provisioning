@@ -64,26 +64,17 @@
     - role: nfd
       tags: [nfd, gpu]
 
-    - role: nvidia_gpu
-      tags: [nvidia, gpu]
-
-    - role: openshift_ai
-      tags: [openshift-ai]
-
     - role: odf
       tags: [odf]
 
     - role: quay
       tags: [quay]
 
+    - role: openshift_ai
+      tags: [openshift-ai]
+
     - role: console_plugins
       tags: [console]
-
-    - role: model_serving
-      tags: [model-serving]
-
-    - role: litellm
-      tags: [litellm]
 
     - role: bookinfo_demo
       tags: [bookinfo, service-mesh-demo]
@@ -93,3 +84,12 @@
 
     - role: gatus
       tags: [gatus]
+
+    - role: nvidia_gpu
+      tags: [nvidia, gpu]
+
+    - role: model_serving
+      tags: [model-serving]
+
+    - role: litellm
+      tags: [litellm]
