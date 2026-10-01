@@ -712,10 +712,11 @@ function renderChatMessages() {
     .map(function (m) {
       var cls = m.role === "user" ? "user" : m.role === "tool" ? "tool-result" : "assistant";
       var roleLabel = m.role === "tool" ? "TOOL RESULT" : m.role.toUpperCase();
+      var body = m.role === "user" ? escapeHtml(m.content || "") : renderMarkdown(m.content || "");
       return (
         '<div class="chat-msg ' + cls + '">' +
         '<div class="chat-msg-role">' + roleLabel + "</div>" +
-        '<div>' + escapeHtml(m.content || "") + "</div>" +
+        '<div>' + body + "</div>" +
         "</div>"
       );
     })
@@ -727,6 +728,17 @@ function escapeHtml(text) {
   var div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function renderMarkdown(text) {
+  var html = escapeHtml(text);
+  html = html.replace(/```([\s\S]*?)```/g, '<pre class="chat-code-block">$1</pre>');
+  html = html.replace(/`([^`]+)`/g, '<code class="chat-code-inline">$1</code>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  html = html.replace(/^(\d+)\.\s/gm, '<span class="chat-list-num">$1.</span> ');
+  html = html.replace(/^[-•]\s/gm, '<span class="chat-list-num">•</span> ');
+  return html;
 }
 
 async function sendChat() {

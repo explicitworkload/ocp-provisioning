@@ -1264,6 +1264,33 @@ footer a:hover { color: var(--text-primary); }
 .chat-msg.assistant .chat-msg-role { color: var(--blue-400); }
 .chat-msg.tool-result .chat-msg-role { color: var(--amber-400); }
 
+.chat-code-block {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin: 8px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.chat-code-inline {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-base);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  color: var(--green-400);
+}
+
+.chat-list-num {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 .chat-input-row {
   display: flex;
   gap: 8px;
