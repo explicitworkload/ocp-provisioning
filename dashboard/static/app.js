@@ -26,7 +26,7 @@ function showToast(message, type) {
 }
 
 // === Task Panel ===
-var taskPanelCollapsed = false;
+var taskPanelCollapsed = true;
 
 function toggleTaskPanel() {
   var panel = document.getElementById("task-panel");

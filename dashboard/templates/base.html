@@ -28,9 +28,9 @@
         <span class="sidebar-icon">&#129302;</span>
         <span class="sidebar-label">AI</span>
       </a>
-      <a href="https://{{ gatus_host }}" target="_blank" class="sidebar-item" title="Gatus">
+      <a href="/health" class="sidebar-item {% if active_page == 'health' %}active{% endif %}" title="Health">
         <span class="sidebar-icon">&#9829;</span>
-        <span class="sidebar-label">Gatus</span>
+        <span class="sidebar-label">Health</span>
       </a>
       <a href="/help" class="sidebar-item {% if active_page == 'help' %}active{% endif %}" title="Help">
         <span class="sidebar-icon">?</span>
@@ -68,7 +68,7 @@
   </div>
 
   <!-- Floating Task Panel -->
-  <div class="task-panel" id="task-panel">
+  <div class="task-panel collapsed" id="task-panel">
     <div class="task-panel-header" onclick="toggleTaskPanel()">
       <span class="task-panel-title">&#9642; TASK LOG</span>
       <span class="task-panel-badge" id="task-badge" style="display:none">0</span>

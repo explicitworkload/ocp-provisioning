@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Operations Dashboard — Health{% endblock %}
+{% block heading %}Health Monitor{% endblock %}
+{% block subtitle %}Gatus Endpoints{% endblock %}
+
+{% block content %}
+    <div class="embed-frame">
+      <iframe id="gatus-frame" src="https://{{ gatus_host }}" frameborder="0" allowfullscreen></iframe>
+    </div>
+{% endblock %}

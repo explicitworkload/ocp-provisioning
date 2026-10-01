@@ -257,6 +257,12 @@ def platform_page():
     return render_template("platform.html", gatus_host=GATUS_HOST, active_page="platform")
 
 
+@app.route("/health")
+@login_required
+def health_page():
+    return render_template("health.html", gatus_host=GATUS_HOST, active_page="health")
+
+
 @app.route("/ai")
 @login_required
 def ai_page():
