@@ -45,7 +45,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
 - Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying Qwen3-4B and Azure GPT-4 via reusable credentials
-- Deploys Bookinfo demo app with Istio sidecar injection, Operations Dashboard, and Gatus health monitoring
+- Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring
+- Deploys Operations Dashboard with Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries) and sustained traffic generator
 
 ### Quick Start
 
@@ -182,7 +183,7 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | OpenShift GitOps | latest | Argo CD-based GitOps |
 | Web Terminal | fast | In-console terminal |
 
-**Console plugins enabled:** odf-console, pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
+**Console plugins enabled:** odf-console, odf-client-console, pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
 
 #### Networking
 

@@ -86,7 +86,14 @@ Deploys the Istio Bookinfo sample application with sidecar injection, all four m
 
 ### Operations Dashboard
 
-A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Features a traffic generator for Bookinfo to populate Kiali graphs, task log, and real-time clock. Exposed at `dashboard.<apps-domain>`.
+A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Features:
+- **Traffic generator** — burst mode (fixed request count) or sustained mode (continuous for up to 60 minutes) with configurable concurrency (1–50 threads)
+- **Traffic shifting** — route traffic across Reviews v1/v2/v3 by percentage for canary deployment demos
+- **Fault injection** — inject delays or HTTP errors into the ratings service to test resilience
+- **Circuit breaker** — limit connections to the reviews service to demonstrate cascading failure prevention
+- **Request timeout & retries** — set timeouts and auto-retries on the reviews service
+- **Help page** — built-in guide with demo scenarios for each feature
+- Links to Gatus health monitor, task log with live progress bars
 
 ### Gatus
 
@@ -149,7 +156,7 @@ All variables are in `group_vars/all.yml`:
 | `model_max_model_len` | `32768` | vLLM max model context length (must fit GPU VRAM) |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
-| `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console]` | Console plugins to enable |
+| `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console, odf-client-console]` | Console plugins to enable |
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
