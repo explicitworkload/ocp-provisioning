@@ -384,6 +384,59 @@ input[type="number"]:focus {
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* === MESH GRID === */
+.mesh-grid { grid-template-columns: 1fr 1fr; }
+
+@media (max-width: 800px) { .mesh-grid { grid-template-columns: 1fr; } }
+
+.input-sm { width: 60px !important; }
+
+input[type="text"].input-text {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 12px;
+  width: 70px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input[type="text"].input-text:focus {
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+}
+
+.btn-reset {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.btn-reset:hover {
+  border-color: var(--red-500);
+  color: var(--red-400);
+  background: var(--red-900);
+}
+
+.weight-total {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 50px;
+}
+
 /* === TASK LOG === */
 .task-log {
   background: var(--bg-surface);

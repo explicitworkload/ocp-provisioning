@@ -72,6 +72,120 @@
     </section>
 
     <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>SERVICE MESH CONTROLS</h2>
+      <div class="grid mesh-grid">
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9878;</span>
+            Traffic Shifting
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Route traffic across Reviews v1 (no stars), v2 (black stars), v3 (red stars) by percentage.</p>
+            <div class="input-row">
+              <label for="shift-v1">v1</label>
+              <input type="number" id="shift-v1" value="34" min="0" max="100" class="input-sm">
+              <label for="shift-v2">v2</label>
+              <input type="number" id="shift-v2" value="33" min="0" max="100" class="input-sm">
+              <label for="shift-v3">v3</label>
+              <input type="number" id="shift-v3" value="33" min="0" max="100" class="input-sm">
+              <span class="weight-total" id="weight-total">= 100%</span>
+            </div>
+            <div class="input-row">
+              <button class="btn btn-primary" onclick="applyTrafficShift()">Apply</button>
+              <button class="btn btn-reset" onclick="resetMesh('traffic-shift')">Reset</button>
+            </div>
+          </div>
+          <div class="card-footer" id="shift-status">STANDBY</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9888;</span>
+            Fault Injection
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Inject failures into the ratings service to test resilience. Delay adds latency; Abort returns HTTP errors.</p>
+            <div class="input-row">
+              <div class="mode-toggle" id="fault-mode-toggle">
+                <button class="mode-btn active" data-mode="delay" onclick="setFaultMode('delay')">Delay</button>
+                <button class="mode-btn" data-mode="abort" onclick="setFaultMode('abort')">Abort</button>
+              </div>
+            </div>
+            <div class="input-row" id="fault-delay-inputs">
+              <label for="fault-delay">Delay (ms)</label>
+              <input type="number" id="fault-delay" value="5000" min="100" max="30000" step="100">
+              <label for="fault-pct">%</label>
+              <input type="number" id="fault-pct" value="100" min="1" max="100" class="input-sm">
+            </div>
+            <div class="input-row" id="fault-abort-inputs" style="display:none">
+              <label for="fault-status">HTTP Status</label>
+              <input type="number" id="fault-status" value="500" min="400" max="599">
+              <label for="fault-abort-pct">%</label>
+              <input type="number" id="fault-abort-pct" value="100" min="1" max="100" class="input-sm">
+            </div>
+            <div class="input-row">
+              <button class="btn btn-primary" onclick="applyFaultInjection()">Inject</button>
+              <button class="btn btn-reset" onclick="resetMesh('fault-injection')">Reset</button>
+            </div>
+          </div>
+          <div class="card-footer" id="fault-status-bar">STANDBY</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9889;</span>
+            Circuit Breaker
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Limit connections to the reviews service. When limits are exceeded, requests are rejected to prevent cascading failures.</p>
+            <div class="input-row">
+              <label for="cb-max-conn">Max Conn</label>
+              <input type="number" id="cb-max-conn" value="1" min="1" max="100" class="input-sm">
+              <label for="cb-max-pending">Pending</label>
+              <input type="number" id="cb-max-pending" value="1" min="1" max="100" class="input-sm">
+              <label for="cb-max-req">Requests</label>
+              <input type="number" id="cb-max-req" value="1" min="1" max="100" class="input-sm">
+            </div>
+            <div class="input-row">
+              <button class="btn btn-primary" onclick="applyCircuitBreaker()">Apply</button>
+              <button class="btn btn-reset" onclick="resetMesh('circuit-breaker')">Reset</button>
+            </div>
+          </div>
+          <div class="card-footer" id="cb-status">STANDBY</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9201;</span>
+            Request Timeout &amp; Retries
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Set request timeouts and automatic retries for the reviews service. Combine with fault injection to demonstrate resilience.</p>
+            <div class="input-row">
+              <label for="timeout-val">Timeout</label>
+              <input type="text" id="timeout-val" value="3s" class="input-text">
+              <label for="retry-attempts">Retries</label>
+              <input type="number" id="retry-attempts" value="2" min="0" max="10" class="input-sm">
+              <label for="retry-timeout">Per Try</label>
+              <input type="text" id="retry-timeout" value="2s" class="input-text">
+            </div>
+            <div class="input-row">
+              <button class="btn btn-primary" onclick="applyTimeout()">Apply</button>
+              <button class="btn btn-reset" onclick="resetMesh('timeout')">Reset</button>
+            </div>
+          </div>
+          <div class="card-footer" id="timeout-status">STANDBY</div>
+        </div>
+
+      </div>
+
+      <div class="input-row" style="justify-content:flex-end;margin-top:4px">
+        <button class="btn btn-reset" onclick="resetAllMesh()">&#8634; Reset All Mesh Policies</button>
+      </div>
+    </section>
+
+    <section class="panel-group">
       <h2 class="section-title"><span class="marker"></span>TASK LOG</h2>
       <div class="task-log" id="task-log">
         <div class="log-empty">No operations recorded</div>

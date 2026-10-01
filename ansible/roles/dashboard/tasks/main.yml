@@ -63,6 +63,38 @@
   retries: 30
   delay: 30
 
+- name: Create RBAC for dashboard to manage Istio resources
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: ops-dashboard-mesh
+      rules:
+        - apiGroups: ["networking.istio.io"]
+          resources: ["virtualservices", "destinationrules"]
+          verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+- name: Bind dashboard SA to mesh ClusterRole
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ops-dashboard-mesh
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: ops-dashboard-mesh
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+
 - name: Create dashboard Deployment
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
