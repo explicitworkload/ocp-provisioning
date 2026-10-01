@@ -241,13 +241,19 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html", gatus_url=GATUS_URL, gatus_host=GATUS_HOST)
+    return render_template("index.html", gatus_url=GATUS_URL, gatus_host=GATUS_HOST, active_page="dashboard")
+
+
+@app.route("/platform")
+@login_required
+def platform_page():
+    return render_template("platform.html", gatus_host=GATUS_HOST, active_page="platform")
 
 
 @app.route("/help")
 @login_required
 def help_page():
-    return render_template("help.html")
+    return render_template("help.html", gatus_host=GATUS_HOST, active_page="help")
 
 
 @app.route("/api/traffic/bookinfo", methods=["POST"])
@@ -464,7 +470,7 @@ def reset_timeout():
 @app.route("/api/mesh/reset-all", methods=["POST"])
 @login_required
 def reset_all_mesh():
-    for name in ["reviews", "ratings", "bookinfo"]:
+    for name in ["reviews", "ratings"]:
         _delete_istio_resource("networking.istio.io", "v1", "virtualservices",
                                BOOKINFO_NS, name)
     _delete_istio_resource("networking.istio.io", "v1", "destinationrules",

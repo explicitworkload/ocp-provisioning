@@ -1,80 +1,111 @@
+// === Clock ===
 function updateClock() {
-  const now = new Date();
-  const utc = now.toISOString().replace("T", " ").slice(0, 19) + "Z";
-  const local = now.toLocaleTimeString("en-GB", { hour12: false }) + " SGT";
-  document.getElementById("clock").textContent = local + " | " + utc;
+  var el = document.getElementById("clock");
+  if (!el) return;
+  var now = new Date();
+  var local = now.toLocaleTimeString("en-GB", { hour12: false }) + " SGT";
+  var utc = now.toISOString().replace("T", " ").slice(0, 19) + "Z";
+  el.textContent = local + " | " + utc;
 }
 setInterval(updateClock, 1000);
 updateClock();
 
-let pollInterval = null;
-let activeTaskId = null;
+// === Toast Notifications ===
+function showToast(message, type) {
+  var container = document.getElementById("toast-container");
+  if (!container) return;
+  var icons = { success: "&#10003;", error: "&#10007;", info: "&#9642;" };
+  var toast = document.createElement("div");
+  toast.className = "toast " + (type || "info");
+  toast.innerHTML = '<span class="toast-icon">' + (icons[type] || icons.info) + "</span>" + message;
+  container.appendChild(toast);
+  setTimeout(function () {
+    toast.classList.add("toast-fade-out");
+    setTimeout(function () { toast.remove(); }, 300);
+  }, 4000);
+}
+
+// === Task Panel ===
+var taskPanelCollapsed = false;
+
+function toggleTaskPanel() {
+  var panel = document.getElementById("task-panel");
+  if (!panel) return;
+  taskPanelCollapsed = !taskPanelCollapsed;
+  panel.classList.toggle("collapsed", taskPanelCollapsed);
+}
+
+// === Traffic Generator ===
+var pollInterval = null;
+var activeTaskId = null;
+var previousTaskCount = 0;
 
 function setMode(mode) {
-  document.querySelectorAll(".mode-btn").forEach((b) => {
+  document.querySelectorAll("#mode-toggle .mode-btn").forEach(function (b) {
     b.classList.toggle("active", b.dataset.mode === mode);
   });
-  document.getElementById("burst-inputs").style.display =
-    mode === "burst" ? "flex" : "none";
-  document.getElementById("sustained-inputs").style.display =
-    mode === "sustained" ? "flex" : "none";
+  var burst = document.getElementById("burst-inputs");
+  var sustained = document.getElementById("sustained-inputs");
+  if (burst) burst.style.display = mode === "burst" ? "flex" : "none";
+  if (sustained) sustained.style.display = mode === "sustained" ? "flex" : "none";
 }
 
 async function launchTraffic() {
-  const btn = document.getElementById("btn-traffic");
-  const count = parseInt(document.getElementById("traffic-count").value) || 100;
-  const concurrency =
-    parseInt(document.getElementById("traffic-concurrency").value) || 10;
-  const footer = document.getElementById("traffic-status");
+  var btn = document.getElementById("btn-traffic");
+  var count = parseInt(document.getElementById("traffic-count").value) || 100;
+  var concurrency = parseInt(document.getElementById("traffic-concurrency").value) || 10;
+  var footer = document.getElementById("traffic-status");
 
   btn.disabled = true;
   footer.textContent = "INITIATING...";
   footer.className = "card-footer active";
 
   try {
-    const res = await fetch("/api/traffic/bookinfo", {
+    var res = await fetch("/api/traffic/bookinfo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count, concurrency }),
+      body: JSON.stringify({ count: count, concurrency: concurrency }),
     });
-    const task = await res.json();
+    var task = await res.json();
     footer.textContent = "TASK " + task.id.toUpperCase() + " DISPATCHED";
+    showToast("Traffic task " + task.id + " started — " + count + " requests", "info");
     startPolling();
   } catch (e) {
     footer.textContent = "ERROR: " + e.message;
     footer.className = "card-footer error";
     btn.disabled = false;
+    showToast("Traffic error: " + e.message, "error");
   }
 }
 
 async function launchSustained() {
-  const btn = document.getElementById("btn-sustained");
-  const btnStop = document.getElementById("btn-stop");
-  const duration =
-    parseFloat(document.getElementById("traffic-duration").value) || 15;
-  const concurrency =
-    parseInt(document.getElementById("sustained-concurrency").value) || 10;
-  const footer = document.getElementById("traffic-status");
+  var btn = document.getElementById("btn-sustained");
+  var btnStop = document.getElementById("btn-stop");
+  var duration = parseFloat(document.getElementById("traffic-duration").value) || 15;
+  var concurrency = parseInt(document.getElementById("sustained-concurrency").value) || 10;
+  var footer = document.getElementById("traffic-status");
 
   btn.disabled = true;
   footer.textContent = "STARTING SUSTAINED TRAFFIC...";
   footer.className = "card-footer active";
 
   try {
-    const res = await fetch("/api/traffic/bookinfo", {
+    var res = await fetch("/api/traffic/bookinfo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ duration, concurrency }),
+      body: JSON.stringify({ duration: duration, concurrency: concurrency }),
     });
-    const task = await res.json();
+    var task = await res.json();
     activeTaskId = task.id;
     btnStop.style.display = "inline-flex";
     footer.textContent = "SUSTAINED — " + duration + "m @ " + concurrency + " threads";
+    showToast("Sustained traffic started — " + duration + "m @ " + concurrency + " threads", "info");
     startPolling();
   } catch (e) {
     footer.textContent = "ERROR: " + e.message;
     footer.className = "card-footer error";
     btn.disabled = false;
+    showToast("Traffic error: " + e.message, "error");
   }
 }
 
@@ -83,14 +114,13 @@ async function stopTraffic() {
   try {
     await fetch("/api/traffic/stop/" + activeTaskId, { method: "POST" });
     document.getElementById("traffic-status").textContent = "STOPPING...";
-  } catch (e) {
-    // ignore
-  }
+    showToast("Stopping sustained traffic...", "info");
+  } catch (e) { /* ignore */ }
 }
 
 function formatTime(secs) {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
+  var m = Math.floor(secs / 60);
+  var s = secs % 60;
   return m + ":" + String(s).padStart(2, "0");
 }
 
@@ -102,105 +132,106 @@ function startPolling() {
 
 async function refreshTasks() {
   try {
-    const res = await fetch("/api/tasks");
-    const tasks = await res.json();
+    var res = await fetch("/api/tasks");
+    var tasks = await res.json();
     renderTaskLog(tasks);
 
-    const running = tasks.some(
-      (t) => t.status === "running" || t.status === "queued"
-    );
-    const btnBurst = document.getElementById("btn-traffic");
-    const btnSustained = document.getElementById("btn-sustained");
-    const btnStop = document.getElementById("btn-stop");
-    const footer = document.getElementById("traffic-status");
+    // Toast for newly completed tasks
+    if (tasks.length > 0 && previousTaskCount > 0) {
+      var completed = tasks.filter(function (t) { return t.status === "complete"; });
+      if (completed.length > previousTaskCount) {
+        var last = completed[0];
+        showToast(last.type.toUpperCase() + " complete — " + last.success + " OK / " + last.fail + " FAIL", last.fail > 0 ? "error" : "success");
+      }
+    }
+    previousTaskCount = tasks.filter(function (t) { return t.status === "complete"; }).length;
 
-    if (!running && pollInterval) {
+    // Update badge
+    var running = tasks.filter(function (t) { return t.status === "running"; });
+    var badge = document.getElementById("task-badge");
+    if (badge) {
+      if (running.length > 0) {
+        badge.textContent = running.length;
+        badge.style.display = "inline";
+      } else {
+        badge.style.display = "none";
+      }
+    }
+
+    var hasRunning = tasks.some(function (t) { return t.status === "running" || t.status === "queued"; });
+    var btnBurst = document.getElementById("btn-traffic");
+    var btnSustained = document.getElementById("btn-sustained");
+    var btnStop = document.getElementById("btn-stop");
+    var footer = document.getElementById("traffic-status");
+
+    if (!hasRunning && pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
-      btnBurst.disabled = false;
-      btnSustained.disabled = false;
-      btnStop.style.display = "none";
+      if (btnBurst) btnBurst.disabled = false;
+      if (btnSustained) btnSustained.disabled = false;
+      if (btnStop) btnStop.style.display = "none";
       activeTaskId = null;
-      const last = tasks[0];
-      if (last && last.status === "complete") {
-        const dur = last.duration
-          ? " in " + formatTime(last.elapsed || 0)
-          : "";
-        footer.textContent =
-          "COMPLETE — " + last.success + " OK / " + last.fail + " FAIL" + dur;
-        footer.className =
-          last.fail > 0 ? "card-footer error" : "card-footer active";
+      var last = tasks[0];
+      if (last && last.status === "complete" && footer) {
+        var dur = last.duration ? " in " + formatTime(last.elapsed || 0) : "";
+        footer.textContent = "COMPLETE — " + last.success + " OK / " + last.fail + " FAIL" + dur;
+        footer.className = last.fail > 0 ? "card-footer error" : "card-footer active";
       }
-    } else if (running) {
-      const active = tasks.find((t) => t.status === "running");
-      if (active) {
+    } else if (hasRunning) {
+      var active = tasks.find(function (t) { return t.status === "running"; });
+      if (active && footer) {
         if (active.duration) {
-          const elapsed = active.elapsed || 0;
-          const remaining = active.duration - elapsed;
-          footer.textContent =
-            "SUSTAINED — " +
-            formatTime(elapsed) +
-            " / " +
-            formatTime(active.duration) +
-            " | " +
-            active.progress +
-            " reqs | " +
-            active.success +
-            " OK";
+          var elapsed = active.elapsed || 0;
+          footer.textContent = "SUSTAINED — " + formatTime(elapsed) + " / " + formatTime(active.duration) + " | " + active.progress + " reqs | " + active.success + " OK";
         } else {
-          const pct = Math.round((active.progress / active.total) * 100);
-          footer.textContent =
-            "EXECUTING — " +
-            active.progress +
-            "/" +
-            active.total +
-            " (" +
-            pct +
-            "%)";
+          var pct = Math.round((active.progress / active.total) * 100);
+          footer.textContent = "EXECUTING — " + active.progress + "/" + active.total + " (" + pct + "%)";
         }
         footer.className = "card-footer active";
       }
     }
-  } catch (e) {
-    // silently retry
-  }
+  } catch (e) { /* silently retry */ }
 }
 
 function renderTaskLog(tasks) {
-  const log = document.getElementById("task-log");
+  var log = document.getElementById("task-log");
+  if (!log) return;
   if (!tasks.length) {
-    log.innerHTML = '<div class="log-empty">NO OPERATIONS RECORDED</div>';
+    log.innerHTML = '<div class="log-empty">No operations recorded</div>';
     return;
   }
 
   log.innerHTML = tasks
-    .map((t) => {
-      const pct =
+    .map(function (t) {
+      var pct =
         t.duration && t.status === "running"
           ? Math.round(((t.elapsed || 0) / t.duration) * 100)
           : t.total > 0
             ? Math.round((t.progress / t.total) * 100)
-            : 0;
-      const time = t.started_at
+            : t.status === "complete" ? 100 : 0;
+      var time = t.started_at
         ? new Date(t.started_at).toLocaleTimeString("en-GB", { hour12: false })
         : "";
-      let detail;
+      var detail;
       if (t.status === "complete") {
         detail = t.success + " OK / " + t.fail + " FAIL";
       } else if (t.status === "running" && t.duration) {
         detail = formatTime(t.elapsed || 0) + " / " + formatTime(t.duration) + " | " + t.progress + " reqs";
       } else if (t.status === "running") {
         detail = t.progress + "/" + t.total;
+      } else if (t.status === "error") {
+        detail = t.detail || "FAILED";
       } else {
         detail = "QUEUED";
       }
 
+      var statusClass = t.status;
       return (
         '<div class="log-entry">' +
-        '<div class="log-status ' + t.status + '"></div>' +
-        '<span class="log-type">' + t.type.toUpperCase() + "</span>" +
+        '<div class="log-status ' + statusClass + '"></div>' +
+        '<span class="log-type">' + (t.type || "task").toUpperCase() + "</span>" +
         '<span class="log-detail">' + detail + "</span>" +
-        '<div class="log-bar-wrap"><div class="log-bar ' + t.status + '" style="width:' + pct + '%"></div></div>' +
+        '<div class="log-bar-wrap"><div class="log-bar ' + statusClass + '" style="width:' + pct + '%"></div></div>' +
         '<span class="log-time">' + time + "</span>" +
         "</div>"
       );
@@ -208,14 +239,15 @@ function renderTaskLog(tasks) {
     .join("");
 }
 
-// --- Service Mesh Controls ---
+// === Service Mesh Controls ===
 
 function updateWeightTotal() {
-  const v1 = parseInt(document.getElementById("shift-v1").value) || 0;
-  const v2 = parseInt(document.getElementById("shift-v2").value) || 0;
-  const v3 = parseInt(document.getElementById("shift-v3").value) || 0;
-  const total = v1 + v2 + v3;
-  const el = document.getElementById("weight-total");
+  var v1 = parseInt(document.getElementById("shift-v1").value) || 0;
+  var v2 = parseInt(document.getElementById("shift-v2").value) || 0;
+  var v3 = parseInt(document.getElementById("shift-v3").value) || 0;
+  var total = v1 + v2 + v3;
+  var el = document.getElementById("weight-total");
+  if (!el) return;
   el.textContent = "= " + total + "%";
   el.style.color = total === 100 ? "var(--green-400)" : "var(--red-400)";
 }
@@ -231,14 +263,15 @@ function setFaultMode(mode) {
   document.querySelectorAll("#fault-mode-toggle .mode-btn").forEach(function (b) {
     b.classList.toggle("active", b.dataset.mode === mode);
   });
-  document.getElementById("fault-delay-inputs").style.display =
-    mode === "delay" ? "flex" : "none";
-  document.getElementById("fault-abort-inputs").style.display =
-    mode === "abort" ? "flex" : "none";
+  var delay = document.getElementById("fault-delay-inputs");
+  var abort = document.getElementById("fault-abort-inputs");
+  if (delay) delay.style.display = mode === "delay" ? "flex" : "none";
+  if (abort) abort.style.display = mode === "abort" ? "flex" : "none";
 }
 
 function setStatusBar(id, text, type) {
   var el = document.getElementById(id);
+  if (!el) return;
   el.textContent = text;
   el.className = "card-footer" + (type ? " " + type : "");
 }
@@ -257,11 +290,14 @@ async function applyTrafficShift() {
     var data = await res.json();
     if (res.ok) {
       setStatusBar("shift-status", "APPLIED — v1:" + v1 + "% v2:" + v2 + "% v3:" + v3 + "%", "active");
+      showToast("Traffic shift applied — v1:" + v1 + "% v2:" + v2 + "% v3:" + v3 + "%", "success");
     } else {
       setStatusBar("shift-status", "ERROR: " + data.error, "error");
+      showToast("Traffic shift error: " + data.error, "error");
     }
   } catch (e) {
     setStatusBar("shift-status", "ERROR: " + e.message, "error");
+    showToast("Traffic shift error: " + e.message, "error");
   }
 }
 
@@ -287,9 +323,11 @@ async function applyFaultInjection() {
         ? "DELAY " + body.delay_ms + "ms @ " + body.percentage + "%"
         : "ABORT HTTP " + body.status_code + " @ " + body.percentage + "%";
       setStatusBar("fault-status-bar", "ACTIVE — " + label, "error");
+      showToast("Fault injection active — " + label, "success");
     } else {
       var data = await res.json();
       setStatusBar("fault-status-bar", "ERROR: " + data.error, "error");
+      showToast("Fault injection error", "error");
     }
   } catch (e) {
     setStatusBar("fault-status-bar", "ERROR: " + e.message, "error");
@@ -310,9 +348,8 @@ async function applyCircuitBreaker() {
       body: JSON.stringify(body),
     });
     if (res.ok) {
-      setStatusBar("cb-status",
-        "ACTIVE — max:" + body.maxConnections + " pending:" + body.maxPendingRequests + " req:" + body.maxRequests,
-        "active");
+      setStatusBar("cb-status", "ACTIVE — max:" + body.maxConnections + " pending:" + body.maxPendingRequests + " req:" + body.maxRequests, "active");
+      showToast("Circuit breaker applied", "success");
     }
   } catch (e) {
     setStatusBar("cb-status", "ERROR: " + e.message, "error");
@@ -333,9 +370,8 @@ async function applyTimeout() {
       body: JSON.stringify(body),
     });
     if (res.ok) {
-      setStatusBar("timeout-status",
-        "ACTIVE — timeout:" + body.timeout + " retries:" + body.retries + " @" + body.retryTimeout,
-        "active");
+      setStatusBar("timeout-status", "ACTIVE — timeout:" + body.timeout + " retries:" + body.retries + " @" + body.retryTimeout, "active");
+      showToast("Timeout & retries applied", "success");
     }
   } catch (e) {
     setStatusBar("timeout-status", "ERROR: " + e.message, "error");
@@ -352,9 +388,8 @@ async function resetMesh(feature) {
   try {
     await fetch("/api/mesh/" + feature, { method: "DELETE" });
     setStatusBar(statusMap[feature], "STANDBY", "");
-  } catch (e) {
-    // ignore
-  }
+    showToast(feature.replace("-", " ") + " reset", "info");
+  } catch (e) { /* ignore */ }
 }
 
 async function resetAllMesh() {
@@ -363,12 +398,11 @@ async function resetAllMesh() {
     ["shift-status", "fault-status-bar", "cb-status", "timeout-status"].forEach(function (id) {
       setStatusBar(id, "STANDBY", "");
     });
-  } catch (e) {
-    // ignore
-  }
+    showToast("All mesh policies reset", "success");
+  } catch (e) { /* ignore */ }
 }
 
-// --- Platform Admin ---
+// === Platform Admin ===
 
 async function refreshPlatform() {
   var container = document.getElementById("platform-machinesets");
@@ -381,16 +415,18 @@ async function refreshPlatform() {
       setStatusBar("platform-status", "ERROR: " + (data.error || "unknown"), "error");
       return;
     }
-    renderMachineSets(data.machinesets, data.nodes);
-    var totalNodes = data.nodes.filter(function (n) { return n.ready; }).length;
-    setStatusBar("platform-status", totalNodes + " NODES READY", "active");
+    renderMachineSets(data.machinesets);
+    renderNodes(data.nodes);
+    var totalReady = data.nodes.filter(function (n) { return n.ready; }).length;
+    setStatusBar("platform-status", totalReady + " NODES READY", "active");
   } catch (e) {
     setStatusBar("platform-status", "ERROR: " + e.message, "error");
   }
 }
 
-function renderMachineSets(machinesets, nodes) {
+function renderMachineSets(machinesets) {
   var container = document.getElementById("platform-machinesets");
+  if (!container) return;
   if (!machinesets.length) {
     container.innerHTML = '<div class="log-empty">No MachineSets found</div>';
     return;
@@ -416,6 +452,27 @@ function renderMachineSets(machinesets, nodes) {
     .join("");
 }
 
+function renderNodes(nodes) {
+  var container = document.getElementById("platform-nodes");
+  if (!container) return;
+  if (!nodes.length) {
+    container.innerHTML = '<div class="log-empty">No nodes found</div>';
+    return;
+  }
+  container.innerHTML = nodes
+    .map(function (n) {
+      var statusClass = n.ready ? "ready" : "not-ready";
+      return (
+        '<div class="node-row">' +
+        '<div class="node-status ' + statusClass + '"></div>' +
+        '<span class="node-name">' + n.name + "</span>" +
+        '<span class="node-roles">' + n.roles.join(", ") + "</span>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
 async function scaleMachineSet(name) {
   var input = document.getElementById("scale-" + name);
   var replicas = parseInt(input.value);
@@ -430,12 +487,17 @@ async function scaleMachineSet(name) {
     var data = await res.json();
     if (res.ok) {
       setStatusBar("platform-status", "SCALED " + name + " → " + replicas, "active");
+      showToast("Scaled " + name + " to " + replicas + " replicas", "success");
+      addPlatformTask("scale", "Scaled " + name + " → " + replicas);
       setTimeout(refreshPlatform, 3000);
     } else {
       setStatusBar("platform-status", "ERROR: " + data.error, "error");
+      showToast("Scale error: " + data.error, "error");
+      addPlatformTask("scale-error", "Failed to scale " + name);
     }
   } catch (e) {
     setStatusBar("platform-status", "ERROR: " + e.message, "error");
+    showToast("Scale error: " + e.message, "error");
   }
 }
 
@@ -450,15 +512,42 @@ async function shutdownCluster() {
     var data = await res.json();
     if (res.ok) {
       setStatusBar("platform-status", "SHUTDOWN INITIATED — " + data.scaled.length + " MACHINESETS SCALED TO 0", "error");
+      showToast("Shutdown initiated — " + data.scaled.length + " MachineSets scaling to 0", "error");
+      addPlatformTask("shutdown", "Shutdown — " + data.scaled.length + " MachineSets → 0");
       setTimeout(refreshPlatform, 5000);
     } else {
       setStatusBar("platform-status", "ERROR: " + data.error, "error");
+      showToast("Shutdown error: " + data.error, "error");
     }
   } catch (e) {
     setStatusBar("platform-status", "ERROR: " + e.message, "error");
   }
 }
 
-// initial load
+function addPlatformTask(type, detail) {
+  var log = document.getElementById("task-log");
+  if (!log) return;
+  var empty = log.querySelector(".log-empty");
+  if (empty) empty.remove();
+  var time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  var statusClass = type.includes("error") ? "error" : "complete";
+  var entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML =
+    '<div class="log-status ' + statusClass + '"></div>' +
+    '<span class="log-type">PLATFORM</span>' +
+    '<span class="log-detail">' + detail + "</span>" +
+    '<div class="log-bar-wrap"><div class="log-bar ' + statusClass + '" style="width:100%"></div></div>' +
+    '<span class="log-time">' + time + "</span>";
+  log.insertBefore(entry, log.firstChild);
+
+  // Expand task panel if collapsed
+  var panel = document.getElementById("task-panel");
+  if (panel && panel.classList.contains("collapsed")) {
+    taskPanelCollapsed = false;
+    panel.classList.remove("collapsed");
+  }
+}
+
+// === Init ===
 startPolling();
-if (document.getElementById("platform-machinesets")) refreshPlatform();

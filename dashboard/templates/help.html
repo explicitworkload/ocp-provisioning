@@ -1,32 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Operations Dashboard — Help</title>
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <header>
-    <div class="header-left">
-      <div class="insignia">
-        <svg viewBox="0 0 192 145" xmlns="http://www.w3.org/2000/svg">
-          <path d="M157.77,62.61a14,14,0,0,1,.31,3.42c0,14.88-18.1,17.46-30.61,17.46C78.83,83.49,42.53,53.26,42.53,44a6.43,6.43,0,0,1,.22-1.94l-3.66,9.06a18.45,18.45,0,0,0-1.51,7.33c0,18.11,41,45.48,87.74,45.48,20.69,0,36.43-7.76,36.43-21.77,0-1.08,0-1.94-1.73-10.13Z" fill="#a30000"/>
-          <path d="M127.47,83.49c12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42l-7.45-32.36c-1.72-7.12-3.23-10.35-15.73-16.6C124.89,8.69,103.76.5,97.51.5,91.69.5,90,8,83.06,8c-6.68,0-11.64-5.6-17.89-5.6-6,0-9.91,4.09-12.93,12.5,0,0-8.41,23.72-9.49,27.16A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33C22.27,52,.5,55,.5,74.22c0,31.48,74.59,70.28,133.65,70.28,45.28,0,56.7-20.48,56.7-36.65,0-12.72-11-27.16-30.83-35.78" fill="#e00"/>
-        </svg>
-      </div>
-      <div class="header-title">
-        <h1>Operations Dashboard</h1>
-        <span class="subtitle">Help Guide</span>
-      </div>
-    </div>
-    <div class="header-right">
-      <a href="/" class="help-btn" title="Back to Dashboard">&larr;</a>
-    </div>
-  </header>
+{% extends "base.html" %}
 
-  <main>
+{% block title %}Operations Dashboard — Help{% endblock %}
+{% block heading %}Help Guide{% endblock %}
+{% block subtitle %}Documentation{% endblock %}
+
+{% block content %}
     <section class="panel-group">
       <h2 class="section-title"><span class="marker"></span>OVERVIEW</h2>
       <div class="help-content">
@@ -139,6 +117,21 @@
     </section>
 
     <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>PLATFORM ADMIN</h2>
+      <div class="help-content">
+        <p>The <strong>Platform</strong> page lets you scale worker and GPU MachineSets up or down, and view the current node status. Use the <strong>Shutdown All Workers</strong> button to scale all worker and GPU MachineSets to 0 replicas.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Scale</span> Set the desired replica count for each MachineSet (0 &ndash; 10)</div>
+          <div class="help-param"><span class="param-name">Refresh</span> Reload current node and MachineSet status</div>
+          <div class="help-param"><span class="param-name">Shutdown</span> Scales all non-master MachineSets to 0 (requires confirmation)</div>
+        </div>
+        <div class="help-tip">
+          <strong>Demo tip:</strong> Use the Platform page to scale GPU MachineSets from 0 to 1 during a live demo to show on-demand GPU provisioning. New nodes take 5&ndash;10 minutes to become Ready.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
       <h2 class="section-title"><span class="marker"></span>RESET ALL</h2>
       <div class="help-content">
         <p>The <strong>Reset All Mesh Policies</strong> button at the bottom of the Service Mesh Controls section removes all VirtualServices and DestinationRules created by this dashboard, returning the mesh to its default round-robin behaviour. Each card also has its own individual Reset button.</p>
@@ -156,11 +149,4 @@
         </ul>
       </div>
     </section>
-  </main>
-
-  <footer>
-    <span>OPS DASHBOARD v1.0</span>
-    <span>Built by <a href="mailto:jgoh@redhat.com">jgoh@redhat.com</a> | <a href="https://github.com/explicitworkload" target="_blank">github.com/explicitworkload</a></span>
-  </footer>
-</body>
-</html>
+{% endblock %}
