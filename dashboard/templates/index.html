@@ -40,7 +40,7 @@
             <p class="card-desc">Generate synthetic load against the Bookinfo service mesh demo. Requests are distributed across reviews v1, v2, and v3 to populate Kiali traffic graphs.</p>
             <div class="input-row">
               <label for="traffic-count">Requests</label>
-              <input type="number" id="traffic-count" value="100" min="1" max="1000" step="10">
+              <input type="number" id="traffic-count" value="100" min="1" max="10000" step="10">
               <label for="traffic-concurrency">Concurrency</label>
               <input type="number" id="traffic-concurrency" value="10" min="1" max="50" step="1">
               <button class="btn btn-primary" id="btn-traffic" onclick="launchTraffic()">

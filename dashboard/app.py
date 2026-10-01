@@ -54,7 +54,7 @@ def index():
 @app.route("/api/traffic/bookinfo", methods=["POST"])
 def generate_bookinfo_traffic():
     body = request.get_json(silent=True) or {}
-    count = min(int(body.get("count", 100)), 1000)
+    count = min(int(body.get("count", 100)), 10000)
     concurrency = max(1, min(int(body.get("concurrency", 1)), 50))
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {
