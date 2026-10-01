@@ -1,0 +1,3 @@
+---
+gatus_namespace: gatus
+gatus_image: ghcr.io/twin/gatus:latest

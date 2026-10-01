@@ -1,0 +1,260 @@
+---
+- name: Create openshift-storage namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ odf_namespace }}"
+        labels:
+          openshift.io/cluster-monitoring: "true"
+
+- name: Create ODF OperatorGroup
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: openshift-storage-operatorgroup
+        namespace: "{{ odf_namespace }}"
+      spec:
+        targetNamespaces:
+          - "{{ odf_namespace }}"
+
+- name: Create ODF Operator Subscription
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: odf-operator
+        namespace: "{{ odf_namespace }}"
+      spec:
+        channel: "{{ odf_channel }}"
+        installPlanApproval: Automatic
+        name: odf-operator
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+
+- name: Wait for ODF Operator CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: "{{ odf_namespace }}"
+    label_selectors:
+      - "operators.coreos.com/odf-operator.openshift-storage="
+  register: odf_csvs
+  until: >-
+    odf_csvs.resources | length > 0 and
+    odf_csvs.resources | selectattr('status.phase', 'defined') |
+    selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: 60
+  delay: 30
+
+- name: Get non-GPU worker nodes for ODF
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/worker="
+  register: worker_nodes
+
+- name: Select non-GPU worker nodes
+  ansible.builtin.set_fact:
+    odf_nodes: >-
+      {{ worker_nodes.resources
+         | rejectattr('metadata.labels.nvidia.com/gpu.present', 'defined')
+         | map(attribute='metadata.name')
+         | list
+         | sort
+         | list }}
+
+- name: Label worker nodes for ODF storage
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          cluster.ocs.openshift.io/openshift-storage: ""
+  loop: "{{ odf_nodes[:3] }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Wait for StorageCluster CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: storageclusters.ocs.openshift.io
+  register: sc_crd
+  until: sc_crd.resources | length > 0
+  retries: 60
+  delay: 30
+
+- name: Create OCS StorageCluster
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: ocs.openshift.io/v1
+      kind: StorageCluster
+      metadata:
+        name: ocs-storagecluster
+        namespace: "{{ odf_namespace }}"
+      spec:
+        storageDeviceSets:
+          - name: ocs-deviceset
+            count: "{{ odf_device_set_count }}"
+            replica: "{{ odf_device_set_replica }}"
+            dataPVCTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: "{{ odf_storage_size }}"
+                storageClassName: "{{ odf_storage_class }}"
+                volumeMode: Block
+            resources:
+              requests:
+                cpu: "1"
+                memory: 5Gi
+              limits:
+                cpu: "2"
+                memory: 5Gi
+            portable: true
+            placement: {}
+
+- name: Wait for NooBaa CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: noobaas.noobaa.io
+  register: noobaa_crd
+  until: noobaa_crd.resources | length > 0
+  retries: 30
+  delay: 15
+
+- name: Configure NooBaa to use manual default backing store
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: noobaa.io/v1alpha1
+      kind: NooBaa
+      metadata:
+        name: noobaa
+        namespace: "{{ odf_namespace }}"
+      spec:
+        manualDefaultBackingStore: true
+  register: noobaa_patch
+  retries: 10
+  delay: 15
+  until: noobaa_patch is succeeded
+
+- name: Wait for BackingStore CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: backingstores.noobaa.io
+  register: bs_crd
+  until: bs_crd.resources | length > 0
+  retries: 30
+  delay: 15
+
+- name: Create PV pool backing store for NooBaa
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: noobaa.io/v1alpha1
+      kind: BackingStore
+      metadata:
+        name: noobaa-pv-backing-store
+        namespace: "{{ odf_namespace }}"
+      spec:
+        type: pv-pool
+        pvPool:
+          numVolumes: 1
+          storageClass: "{{ odf_storage_class }}"
+          resources:
+            requests:
+              storage: 50Gi
+
+- name: Wait for PV backing store to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    namespace: "{{ odf_namespace }}"
+    name: noobaa-pv-backing-store
+  register: pv_bs
+  until: >-
+    pv_bs.resources | length > 0 and
+    pv_bs.resources[0].status is defined and
+    pv_bs.resources[0].status.phase is defined and
+    pv_bs.resources[0].status.phase == 'Ready'
+  retries: 30
+  delay: 15
+
+- name: Wait for default BucketClass
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: BucketClass
+    namespace: "{{ odf_namespace }}"
+    name: noobaa-default-bucket-class
+  register: default_bc
+  until: default_bc.resources | length > 0
+  retries: 20
+  delay: 15
+
+- name: Update default BucketClass to use PV backing store
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: noobaa.io/v1alpha1
+      kind: BucketClass
+      metadata:
+        name: noobaa-default-bucket-class
+        namespace: "{{ odf_namespace }}"
+      spec:
+        placementPolicy:
+          tiers:
+            - backingStores:
+                - noobaa-pv-backing-store
+
+- name: Wait for StorageCluster to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: ocs.openshift.io/v1
+    kind: StorageCluster
+    namespace: "{{ odf_namespace }}"
+    name: ocs-storagecluster
+  register: storage_cluster
+  until: >-
+    storage_cluster.resources | length > 0 and
+    storage_cluster.resources[0].status is defined and
+    storage_cluster.resources[0].status.phase is defined and
+    storage_cluster.resources[0].status.phase == 'Ready'
+  retries: 60
+  delay: 30
+
+- name: Display ODF status
+  ansible.builtin.debug:
+    msg: "ODF StorageCluster is ready in {{ odf_namespace }}"

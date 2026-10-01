@@ -1,0 +1,7 @@
+---
+odf_namespace: openshift-storage
+odf_channel: stable-4.22
+odf_storage_class: gp3-csi
+odf_storage_size: 1Ti
+odf_device_set_count: 3
+odf_device_set_replica: 1

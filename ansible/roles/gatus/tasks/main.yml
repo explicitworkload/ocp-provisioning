@@ -1,0 +1,155 @@
+---
+- name: Create gatus namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ gatus_namespace }}"
+
+- name: Create Gatus ConfigMap
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: gatus-config
+        namespace: "{{ gatus_namespace }}"
+      data:
+        config.yaml: |
+          endpoints:
+            - name: Bookinfo Productpage
+              url: "https://bookinfo.{{ ocp_apps_domain }}/productpage"
+              interval: 60s
+              conditions:
+                - "[STATUS] == 200"
+              client:
+                insecure: true
+            - name: Kiali
+              url: "https://kiali.{{ ocp_apps_domain }}"
+              interval: 60s
+              conditions:
+                - "[STATUS] == any(200, 301, 302, 403)"
+              client:
+                insecure: true
+            - name: Operations Dashboard
+              url: "https://dashboard.{{ ocp_apps_domain }}"
+              interval: 60s
+              conditions:
+                - "[STATUS] == 200"
+              client:
+                insecure: true
+            - name: OpenShift Console
+              url: "https://console-openshift-console.{{ ocp_apps_domain }}"
+              interval: 60s
+              conditions:
+                - "[STATUS] == any(200, 301, 302, 403)"
+              client:
+                insecure: true
+
+- name: Create Gatus Deployment
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gatus
+        namespace: "{{ gatus_namespace }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: gatus
+        template:
+          metadata:
+            labels:
+              app: gatus
+          spec:
+            containers:
+              - name: gatus
+                image: "{{ gatus_image }}"
+                ports:
+                  - containerPort: 8080
+                volumeMounts:
+                  - name: gatus-config
+                    mountPath: /config/config.yaml
+                    subPath: config.yaml
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  initialDelaySeconds: 10
+                  periodSeconds: 30
+            volumes:
+              - name: gatus-config
+                configMap:
+                  name: gatus-config
+
+- name: Create Gatus Service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: gatus
+        namespace: "{{ gatus_namespace }}"
+      spec:
+        selector:
+          app: gatus
+        ports:
+          - port: 8080
+            targetPort: 8080
+            name: http
+
+- name: Create Gatus Route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: gatus
+        namespace: "{{ gatus_namespace }}"
+      spec:
+        host: "gatus.{{ ocp_apps_domain }}"
+        to:
+          kind: Service
+          name: gatus
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+
+- name: Wait for Gatus to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ gatus_namespace }}"
+    name: gatus
+  register: gatus_deploy
+  until: >-
+    gatus_deploy.resources | length > 0 and
+    gatus_deploy.resources[0].status.readyReplicas is defined and
+    gatus_deploy.resources[0].status.readyReplicas >= 1
+  retries: 20
+  delay: 15
+
+- name: Display Gatus URL
+  ansible.builtin.debug:
+    msg: "Gatus health dashboard: https://gatus.{{ ocp_apps_domain }}"

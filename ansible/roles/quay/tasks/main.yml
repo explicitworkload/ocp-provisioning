@@ -26,6 +26,25 @@
   retries: 20
   delay: 15
 
+- name: Check if ODF StorageCluster is ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: ocs.openshift.io/v1
+    kind: StorageCluster
+    namespace: openshift-storage
+    name: ocs-storagecluster
+  register: odf_cluster
+  when: deploy_quay_registry | bool
+
+- name: Set ODF availability
+  ansible.builtin.set_fact:
+    odf_available: >-
+      {{ odf_cluster.resources | default([]) | length > 0 and
+         odf_cluster.resources[0].status is defined and
+         odf_cluster.resources[0].status.phase is defined and
+         odf_cluster.resources[0].status.phase == 'Ready' }}
+  when: deploy_quay_registry | bool
+
 - name: Create Quay config bundle secret with S3 storage
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -53,11 +72,61 @@
             - s3Storage
   when:
     - deploy_quay_registry | bool
+    - not (odf_available | bool)
     - quay_s3_bucket is defined
     - quay_s3_access_key is defined
     - quay_s3_secret_key is defined
 
-- name: Create Quay Registry
+- name: Create Quay Registry with ODF managed storage
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: quay.redhat.com/v1
+      kind: QuayRegistry
+      metadata:
+        name: registry
+        namespace: quay-enterprise
+      spec:
+        components:
+          - kind: clair
+            managed: true
+            overrides:
+              replicas: 1
+          - kind: postgres
+            managed: true
+          - kind: objectstorage
+            managed: true
+          - kind: redis
+            managed: true
+          - kind: horizontalpodautoscaler
+            managed: false
+          - kind: route
+            managed: true
+          - kind: mirror
+            managed: false
+          - kind: monitoring
+            managed: true
+          - kind: tls
+            managed: true
+          - kind: quay
+            managed: true
+            overrides:
+              replicas: 1
+              resources:
+                limits:
+                  cpu: "4"
+                  memory: 8Gi
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+          - kind: clairpostgres
+            managed: true
+  when:
+    - deploy_quay_registry | bool
+    - odf_available | bool
+
+- name: Create Quay Registry with S3 storage
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -103,12 +172,14 @@
                   memory: 8Gi
           - kind: clairpostgres
             managed: true
-  when: deploy_quay_registry | bool
+  when:
+    - deploy_quay_registry | bool
+    - not (odf_available | bool)
 
 - name: Note about Quay Registry
   ansible.builtin.debug:
     msg: >-
       Quay operator is installed but QuayRegistry was not created.
-      Without ODF, Quay requires external object storage (S3).
-      Set deploy_quay_registry=true and provide S3 variables to deploy.
+      Set deploy_quay_registry=true to deploy. With ODF, object storage
+      is managed automatically. Without ODF, provide S3 variables.
   when: not (deploy_quay_registry | bool)

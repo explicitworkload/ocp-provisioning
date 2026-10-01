@@ -21,16 +21,18 @@ model_name: qwen3-4b
 model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
 
 # Quay configuration
-# Set to true and provide S3 config to deploy Quay Registry.
-# Without ODF, Quay needs external object storage (S3).
-deploy_quay_registry: false
+# With ODF installed, Quay can use managed object storage (NooBaa).
+# Set to true to deploy the QuayRegistry CR.
+deploy_quay_registry: true
+# S3 config only needed when ODF is not available:
 # quay_s3_bucket: ""
 # quay_s3_region: ""
 # quay_s3_access_key: ""
 # quay_s3_secret_key: ""
 
-# Console plugins to enable (odf-console excluded since ODF is not installed)
+# Console plugins to enable
 console_plugins:
   - pipelines-console-plugin
   - gitops-plugin
   - kuadrant-console-plugin
+  - odf-console

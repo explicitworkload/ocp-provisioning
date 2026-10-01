@@ -3,7 +3,7 @@
 Automated provisioning and day-2 configuration of OpenShift Container Platform (OCP) clusters on AWS. This project supports two workflows:
 
 1. **Terraform (full cluster)** — stands up a cluster from scratch via `openshift-install`, including bastion host, GPU workers, ODF storage, and all operators
-2. **Ansible (day-2 only)** — configures an existing cluster with operators, GPU workers, and model serving, without ODF or Local Storage
+2. **Ansible (day-2 only)** — configures an existing cluster with operators, Service Mesh, ODF, Quay, GPU workers, model serving, and demo tooling
 
 Both are designed for repeatable demo and sandbox environments.
 
@@ -21,10 +21,11 @@ ocp-provisioning/
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook
+│   ├── site.yml            # Main playbook (15 roles)
 │   ├── group_vars/all.yml  # Configuration variables
-│   ├── roles/              # 9 roles (operators, gpu_worker, nfd, nvidia_gpu, openshift_ai, etc.)
+│   ├── roles/              # operators, service_mesh, network_observability, gpu_worker, odf, quay, etc.
 │   └── README.md           # Ansible-specific docs
+├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
 └── README.md
 ```
 
@@ -36,12 +37,15 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 
 **What it does:**
 
-- Installs 9 operators (NFD, RHOAI 3.5, NVIDIA GPU, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link)
-- Creates GPU MachineSets (g4dn.4xlarge, g6e.2xlarge, p4d.24xlarge, p4de.24xlarge) by auto-discovering cluster config
+- Installs 12 operators (NFD, RHOAI 3.5, NVIDIA GPU, Service Mesh 3, Kiali, Network Observability, ODF, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link)
+- Deploys Service Mesh 3 (Istio + Kiali) with Thanos Querier integration and Network Observability (eBPF FlowCollector)
+- Deploys ODF with gp3 EBS-backed Ceph storage and NooBaa object storage
+- Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
+- Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, p4d.24xlarge, p4de.24xlarge) by auto-discovering cluster config
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
 - Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying Qwen3-4B and Azure GPT-4 via reusable credentials
-- **Excludes** ODF, Local Storage Operator, and OpenShift Lightspeed (assumed pre-installed)
+- Deploys Bookinfo demo app with Istio sidecar injection, Operations Dashboard, and Gatus health monitoring
 
 ### Quick Start
 

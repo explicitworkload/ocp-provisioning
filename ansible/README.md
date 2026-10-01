@@ -1,12 +1,12 @@
 # OCP Day-2 Ansible Playbook
 
-Ansible playbook for configuring an existing OpenShift 4.22+ cluster with operators, a GPU worker node, and model serving via OpenShift AI 3.5.
+Ansible playbook for configuring an existing OpenShift 4.22+ cluster with operators, a GPU worker node, Service Mesh, ODF storage, Quay registry, and model serving via OpenShift AI 3.5.
 
 This playbook does **not** create the cluster from scratch. It assumes you already have an OpenShift cluster running on AWS and are authenticated via `oc login`.
 
 ## What gets installed
 
-### Operators (9 subscriptions)
+### Operators (12 subscriptions)
 
 | Operator | Namespace | Channel |
 |----------|-----------|---------|
@@ -19,12 +19,29 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 | Red Hat Quay | quay-enterprise | stable-3.18 |
 | Web Terminal | openshift-operators | fast |
 | OpenShift GitOps | openshift-gitops-operator | latest |
+| Network Observability | openshift-operators | stable |
+| Service Mesh 3 (Sail) | openshift-operators | stable |
+| Kiali (OSSM) | openshift-operators | stable |
 
-**Excluded:** OpenShift Data Foundation (ODF) and Local Storage Operator (LSO).
+### Service Mesh 3
+
+Deploys the full Istio service mesh stack:
+- IstioCNI and Istio control plane in `istio-system`
+- Kiali with OpenShift auth, integrated with Thanos Querier for Prometheus metrics
+- OSSMConsole for OpenShift console integration
+- PodMonitor and ServiceMonitor for Istio metrics scraping via user workload monitoring
+
+### Network Observability
+
+Deploys FlowCollector with eBPF agent for network traffic visibility directly in the OpenShift console.
 
 ### GPU Worker
 
 Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets. Supports multiple instance types with configurable replica counts (use `replicas: 0` for scale-up-ready MachineSets).
+
+### ODF (OpenShift Data Foundation)
+
+Deploys ODF with Ceph storage on existing worker nodes using dynamically provisioned gp3 EBS volumes (1Ti per OSD). Configures NooBaa with PV-pool backing store for object storage. Provides `ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, and NooBaa storage classes.
 
 ### OpenShift AI 3.5
 
@@ -62,6 +79,22 @@ Deploys a LiteLLM proxy with PostgreSQL backend for unified OpenAI-compatible AP
 - **AI Asset Endpoint** — registers Azure model in GenAI Studio via `gen-ai-aa-custom-model-endpoints` ConfigMap with virtual key
 - Exposed via OpenShift Route with edge TLS
 - Credentials (master key, UI password) auto-generated and persisted in cluster secrets
+
+### Bookinfo Demo
+
+Deploys the Istio Bookinfo sample application with sidecar injection, all four microservices (productpage, details, ratings, reviews v1/v2/v3), Gateway, VirtualService, and a Route at `bookinfo.<apps-domain>`.
+
+### Operations Dashboard
+
+A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Features a traffic generator for Bookinfo to populate Kiali graphs, task log, and real-time clock. Exposed at `dashboard.<apps-domain>`.
+
+### Gatus
+
+Deploys [Gatus](https://github.com/TwiN/gatus) health monitoring with endpoints for Bookinfo, Kiali, the Operations Dashboard, and the OpenShift Console. Exposed at `gatus.<apps-domain>`.
+
+### Quay Registry
+
+Deploys Red Hat Quay backed by ODF managed object storage (NooBaa). Falls back to S3 config when ODF is unavailable.
 
 ## Prerequisites
 
@@ -115,8 +148,8 @@ All variables are in `group_vars/all.yml`:
 | `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |
 | `model_max_model_len` | `32768` | vLLM max model context length (must fit GPU VRAM) |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
-| `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (requires S3 config) |
-| `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin]` | Console plugins to enable |
+| `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
+| `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console]` | Console plugins to enable |
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
@@ -150,13 +183,19 @@ ansible-playbook site.yml \
 Run specific roles with tags:
 
 ```bash
-ansible-playbook site.yml --tags operators      # Operators only
-ansible-playbook site.yml --tags gpu            # GPU MachineSet + NFD + NVIDIA
-ansible-playbook site.yml --tags openshift-ai   # OpenShift AI config only
-ansible-playbook site.yml --tags model-serving  # Model deployment only
-ansible-playbook site.yml --tags quay           # Quay only
-ansible-playbook site.yml --tags console        # Console plugins only
-ansible-playbook site.yml --tags litellm        # LiteLLM proxy only
+ansible-playbook site.yml --tags operators          # Operators only
+ansible-playbook site.yml --tags service-mesh       # Service Mesh 3 + Kiali
+ansible-playbook site.yml --tags network-observability  # Network Observability
+ansible-playbook site.yml --tags gpu                # GPU MachineSet + NFD + NVIDIA
+ansible-playbook site.yml --tags odf                # ODF storage
+ansible-playbook site.yml --tags quay               # Quay registry
+ansible-playbook site.yml --tags openshift-ai       # OpenShift AI config only
+ansible-playbook site.yml --tags model-serving      # Model deployment only
+ansible-playbook site.yml --tags console            # Console plugins only
+ansible-playbook site.yml --tags litellm            # LiteLLM proxy only
+ansible-playbook site.yml --tags bookinfo           # Bookinfo demo app
+ansible-playbook site.yml --tags dashboard          # Operations dashboard
+ansible-playbook site.yml --tags gatus              # Gatus health monitoring
 ```
 
 ## Playbook structure
@@ -170,15 +209,21 @@ ansible/
 ├── inventory/hosts.yml
 ├── group_vars/all.yml
 └── roles/
-    ├── operators/          # Namespaces, OperatorGroups, Subscriptions
-    ├── gpu_worker/         # GPU MachineSet (auto-discovers cluster config)
-    ├── nfd/                # NodeFeatureDiscovery instance
-    ├── nvidia_gpu/         # NVIDIA ClusterPolicy
-    ├── openshift_ai/       # DSCI, DSC, OdhDashboardConfig
-    ├── quay/               # QuayRegistry (conditional)
-    ├── console_plugins/    # Console plugin enablement
-    ├── model_serving/      # RBAC, pgvector, OGXServer, ServingRuntime, InferenceService
-    └── litellm/            # LiteLLM proxy, PostgreSQL, reusable Azure credentials
+    ├── operators/              # Namespaces, OperatorGroups, Subscriptions (12 operators)
+    ├── service_mesh/           # Istio, IstioCNI, Kiali, OSSMConsole, monitoring
+    ├── network_observability/  # FlowCollector with eBPF agent
+    ├── gpu_worker/             # GPU MachineSet (auto-discovers cluster config)
+    ├── nfd/                    # NodeFeatureDiscovery instance
+    ├── nvidia_gpu/             # NVIDIA ClusterPolicy
+    ├── odf/                    # ODF StorageCluster with gp3 volumes + NooBaa
+    ├── openshift_ai/           # DSCI, DSC, OdhDashboardConfig, MCP server
+    ├── quay/                   # QuayRegistry (ODF-backed or S3 fallback)
+    ├── console_plugins/        # Console plugin enablement
+    ├── model_serving/          # RBAC, pgvector, OGXServer, ServingRuntime, InferenceService
+    ├── litellm/                # LiteLLM proxy, PostgreSQL, reusable Azure credentials
+    ├── bookinfo_demo/          # Istio Bookinfo sample app with sidecar injection
+    ├── dashboard/              # Operations dashboard (BuildConfig from Git)
+    └── gatus/                  # Gatus health monitoring
 ```
 
 ## Idempotency

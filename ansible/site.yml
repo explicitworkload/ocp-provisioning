@@ -70,6 +70,9 @@
     - role: openshift_ai
       tags: [openshift-ai]
 
+    - role: odf
+      tags: [odf]
+
     - role: quay
       tags: [quay]
 
@@ -87,3 +90,6 @@
 
     - role: dashboard
       tags: [dashboard]
+
+    - role: gatus
+      tags: [gatus]
