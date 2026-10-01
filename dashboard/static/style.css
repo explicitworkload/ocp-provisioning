@@ -474,6 +474,14 @@ footer {
   border-top: 1px solid var(--border-subtle);
 }
 
+footer a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+footer a:hover { color: var(--text-primary); }
+
 /* === SCROLLBAR === */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
