@@ -248,6 +248,7 @@
         name: bookinfo
         namespace: "{{ bookinfo_namespace }}"
       spec:
+        host: "bookinfo.{{ ocp_apps_domain }}"
         to:
           kind: Service
           name: productpage

@@ -84,3 +84,144 @@
     selectattr('status', 'equalto', 'True') | list | length > 0
   retries: 30
   delay: 15
+
+- name: Wait for Kiali Operator CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: openshift-operators
+    label_selectors:
+      - "operators.coreos.com/kiali-ossm.openshift-operators="
+  register: kiali_csvs
+  until: >-
+    kiali_csvs.resources | length > 0 and
+    kiali_csvs.resources | selectattr('status.phase', 'defined') |
+    selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: 30
+  delay: 30
+
+- name: Create Kiali instance
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: kiali.io/v1alpha1
+      kind: Kiali
+      metadata:
+        name: kiali
+        namespace: "{{ service_mesh_namespace }}"
+      spec:
+        auth:
+          strategy: openshift
+        deployment:
+          namespace: "{{ service_mesh_namespace }}"
+          accessible_namespaces:
+            - "**"
+        server:
+          web_fqdn: "kiali.{{ ocp_apps_domain }}"
+          web_port: ""
+          web_root: /
+          web_schema: https
+        external_services:
+          istio:
+            config_map_name: istio-default
+            istio_sidecar_injector_config_map_name: istio-sidecar-injector-default
+            istiod_deployment_name: istiod-default
+          prometheus:
+            url: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
+            auth:
+              type: bearer
+              use_kiali_token: true
+            thanos_proxy:
+              enabled: true
+            query_scope: {}
+
+- name: Create OSSMConsole for OpenShift Console integration
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: kiali.io/v1alpha1
+      kind: OSSMConsole
+      metadata:
+        name: ossmconsole
+        namespace: "{{ service_mesh_namespace }}"
+      spec:
+        kiali:
+          serviceName: kiali
+          serviceNamespace: "{{ service_mesh_namespace }}"
+
+- name: Grant Kiali SA cluster-monitoring-view role
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: kiali-monitoring-view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-monitoring-view
+      subjects:
+        - kind: ServiceAccount
+          name: kiali-service-account
+          namespace: "{{ service_mesh_namespace }}"
+
+- name: Create PodMonitor for Istio sidecar proxies
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: monitoring.coreos.com/v1
+      kind: PodMonitor
+      metadata:
+        name: istio-proxies
+        namespace: "{{ service_mesh_namespace }}"
+      spec:
+        selector:
+          matchExpressions:
+            - key: istio-prometheus-ignore
+              operator: DoesNotExist
+        podMetricsEndpoints:
+          - path: /stats/prometheus
+            interval: 30s
+            relabelings:
+              - action: keep
+                sourceLabels: [__meta_kubernetes_pod_container_name]
+                regex: "istio-proxy"
+
+- name: Create ServiceMonitor for istiod
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: istiod
+        namespace: "{{ service_mesh_namespace }}"
+      spec:
+        selector:
+          matchLabels:
+            istio: pilot
+        endpoints:
+          - port: http-monitoring
+            interval: 30s
+
+- name: Wait for Kiali to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ service_mesh_namespace }}"
+    name: kiali
+  register: kiali_deploy
+  until: >-
+    kiali_deploy.resources | length > 0 and
+    kiali_deploy.resources[0].status.readyReplicas is defined and
+    kiali_deploy.resources[0].status.readyReplicas >= 1
+  retries: 20
+  delay: 15
