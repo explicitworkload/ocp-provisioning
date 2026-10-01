@@ -26,6 +26,7 @@
       <div class="status-pill online">NOMINAL</div>
       <a href="https://{{ gatus_host }}" target="_blank" class="nav-link" title="Gatus Health Monitor">Gatus</a>
       <a href="/help" class="help-btn" title="Help">?</a>
+      <a href="/logout" class="help-btn" title="Sign Out">&#x23FB;</a>
     </div>
   </header>
 
@@ -184,6 +185,29 @@
 
       <div class="input-row" style="justify-content:flex-end;margin-top:4px">
         <button class="btn btn-reset" onclick="resetAllMesh()">&#8634; Reset All Mesh Policies</button>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>PLATFORM ADMIN</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9881;</span>
+            Cluster Nodes
+          </div>
+          <div class="card-body">
+            <p class="card-desc">View and scale worker and GPU MachineSets. Changes take effect immediately &mdash; new nodes take 5&ndash;10 minutes to provision.</p>
+            <div id="platform-machinesets" class="platform-table">
+              <div class="log-empty">Loading...</div>
+            </div>
+            <div class="input-row" style="margin-top:8px">
+              <button class="btn btn-primary" onclick="refreshPlatform()">&#8635; Refresh</button>
+              <button class="btn btn-reset btn-danger" onclick="shutdownCluster()">&#9632; Shutdown All Workers</button>
+            </div>
+          </div>
+          <div class="card-footer" id="platform-status">STANDBY</div>
+        </div>
       </div>
     </section>
 

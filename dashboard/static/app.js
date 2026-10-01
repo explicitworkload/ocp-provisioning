@@ -368,5 +368,97 @@ async function resetAllMesh() {
   }
 }
 
+// --- Platform Admin ---
+
+async function refreshPlatform() {
+  var container = document.getElementById("platform-machinesets");
+  if (!container) return;
+  setStatusBar("platform-status", "LOADING...", "active");
+  try {
+    var res = await fetch("/api/platform/status");
+    var data = await res.json();
+    if (!res.ok) {
+      setStatusBar("platform-status", "ERROR: " + (data.error || "unknown"), "error");
+      return;
+    }
+    renderMachineSets(data.machinesets, data.nodes);
+    var totalNodes = data.nodes.filter(function (n) { return n.ready; }).length;
+    setStatusBar("platform-status", totalNodes + " NODES READY", "active");
+  } catch (e) {
+    setStatusBar("platform-status", "ERROR: " + e.message, "error");
+  }
+}
+
+function renderMachineSets(machinesets, nodes) {
+  var container = document.getElementById("platform-machinesets");
+  if (!machinesets.length) {
+    container.innerHTML = '<div class="log-empty">No MachineSets found</div>';
+    return;
+  }
+  container.innerHTML = machinesets
+    .map(function (ms) {
+      var badge = ms.isGpu
+        ? '<span class="platform-badge gpu">GPU</span>'
+        : '<span class="platform-badge worker">WORKER</span>';
+      return (
+        '<div class="platform-row">' +
+        badge +
+        '<span class="platform-name">' + ms.name + "</span>" +
+        '<span class="platform-type">' + ms.instanceType + "</span>" +
+        '<span class="platform-ready">' + ms.ready + "/" + ms.replicas + " ready</span>" +
+        '<div class="platform-replicas">' +
+        '<input type="number" min="0" max="10" value="' + ms.replicas + '" id="scale-' + ms.name + '">' +
+        '<button class="btn-scale" onclick="scaleMachineSet(\'' + ms.name + '\')">Scale</button>' +
+        "</div>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+async function scaleMachineSet(name) {
+  var input = document.getElementById("scale-" + name);
+  var replicas = parseInt(input.value);
+  if (isNaN(replicas) || replicas < 0) return;
+  setStatusBar("platform-status", "SCALING " + name + " TO " + replicas + "...", "active");
+  try {
+    var res = await fetch("/api/platform/scale", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machineset: name, replicas: replicas }),
+    });
+    var data = await res.json();
+    if (res.ok) {
+      setStatusBar("platform-status", "SCALED " + name + " → " + replicas, "active");
+      setTimeout(refreshPlatform, 3000);
+    } else {
+      setStatusBar("platform-status", "ERROR: " + data.error, "error");
+    }
+  } catch (e) {
+    setStatusBar("platform-status", "ERROR: " + e.message, "error");
+  }
+}
+
+async function shutdownCluster() {
+  if (!confirm("This will scale ALL worker and GPU MachineSets to 0 replicas. Continue?")) return;
+  setStatusBar("platform-status", "SHUTTING DOWN...", "error");
+  try {
+    var res = await fetch("/api/platform/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    var data = await res.json();
+    if (res.ok) {
+      setStatusBar("platform-status", "SHUTDOWN INITIATED — " + data.scaled.length + " MACHINESETS SCALED TO 0", "error");
+      setTimeout(refreshPlatform, 5000);
+    } else {
+      setStatusBar("platform-status", "ERROR: " + data.error, "error");
+    }
+  } catch (e) {
+    setStatusBar("platform-status", "ERROR: " + e.message, "error");
+  }
+}
+
 // initial load
 startPolling();
+if (document.getElementById("platform-machinesets")) refreshPlatform();

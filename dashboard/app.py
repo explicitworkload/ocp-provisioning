@@ -1,3 +1,4 @@
+import functools
 import os
 import time
 import threading
@@ -6,10 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import requests as http_requests
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from kubernetes import client, config
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32).hex())
 
 BOOKINFO_URL = os.environ.get(
     "BOOKINFO_URL",
@@ -17,7 +19,9 @@ BOOKINFO_URL = os.environ.get(
 )
 GATUS_URL = os.environ.get("GATUS_URL", "")
 GATUS_HOST = os.environ.get("GATUS_HOST", "")
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 BOOKINFO_NS = "bookinfo"
+MACHINE_API_NS = "openshift-machine-api"
 
 try:
     config.load_incluster_config()
@@ -25,8 +29,23 @@ except config.ConfigException:
     config.load_kube_config()
 
 k8s_custom = client.CustomObjectsApi()
+k8s_apps = client.AppsV1Api()
+k8s_core = client.CoreV1Api()
 
 tasks = {}
+
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not DASHBOARD_PASSWORD:
+            return f(*args, **kwargs)
+        if not session.get("authenticated"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "unauthorized"}), 401
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
 
 
 def _single_request(url):
@@ -196,19 +215,43 @@ def _get_ratings_virtualservice(fault=None):
     }
 
 
+# --- Auth Routes ---
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not DASHBOARD_PASSWORD:
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == DASHBOARD_PASSWORD:
+            session["authenticated"] = True
+            return redirect(url_for("index"))
+        return render_template("login.html", error="Invalid password")
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 # --- Routes ---
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html", gatus_url=GATUS_URL, gatus_host=GATUS_HOST)
 
 
 @app.route("/help")
+@login_required
 def help_page():
     return render_template("help.html")
 
 
 @app.route("/api/traffic/bookinfo", methods=["POST"])
+@login_required
 def generate_bookinfo_traffic():
     body = request.get_json(silent=True) or {}
     concurrency = max(1, min(int(body.get("concurrency", 10)), 50))
@@ -260,6 +303,7 @@ def generate_bookinfo_traffic():
 
 
 @app.route("/api/traffic/stop/<task_id>", methods=["POST"])
+@login_required
 def stop_traffic(task_id):
     if task_id not in tasks:
         return jsonify({"error": "not found"}), 404
@@ -270,6 +314,7 @@ def stop_traffic(task_id):
 # --- Service Mesh Controls ---
 
 @app.route("/api/mesh/traffic-shift", methods=["POST"])
+@login_required
 def traffic_shift():
     body = request.get_json(silent=True) or {}
     v1 = int(body.get("v1", 34))
@@ -291,6 +336,7 @@ def traffic_shift():
 
 
 @app.route("/api/mesh/traffic-shift", methods=["DELETE"])
+@login_required
 def reset_traffic_shift():
     _delete_istio_resource("networking.istio.io", "v1", "virtualservices",
                            BOOKINFO_NS, "reviews")
@@ -300,6 +346,7 @@ def reset_traffic_shift():
 
 
 @app.route("/api/mesh/fault-injection", methods=["POST"])
+@login_required
 def fault_injection():
     body = request.get_json(silent=True) or {}
     fault_type = body.get("type", "delay")
@@ -338,6 +385,7 @@ def fault_injection():
 
 
 @app.route("/api/mesh/fault-injection", methods=["DELETE"])
+@login_required
 def reset_fault_injection():
     _delete_istio_resource("networking.istio.io", "v1", "virtualservices",
                            BOOKINFO_NS, "ratings")
@@ -349,6 +397,7 @@ def reset_fault_injection():
 
 
 @app.route("/api/mesh/circuit-breaker", methods=["POST"])
+@login_required
 def circuit_breaker():
     body = request.get_json(silent=True) or {}
     cb_config = {
@@ -368,6 +417,7 @@ def circuit_breaker():
 
 
 @app.route("/api/mesh/circuit-breaker", methods=["DELETE"])
+@login_required
 def reset_circuit_breaker():
     _delete_istio_resource("networking.istio.io", "v1", "destinationrules",
                            BOOKINFO_NS, "reviews")
@@ -375,6 +425,7 @@ def reset_circuit_breaker():
 
 
 @app.route("/api/mesh/timeout", methods=["POST"])
+@login_required
 def request_timeout():
     body = request.get_json(silent=True) or {}
     timeout_s = body.get("timeout", "3s")
@@ -401,6 +452,7 @@ def request_timeout():
 
 
 @app.route("/api/mesh/timeout", methods=["DELETE"])
+@login_required
 def reset_timeout():
     _delete_istio_resource("networking.istio.io", "v1", "virtualservices",
                            BOOKINFO_NS, "reviews")
@@ -410,6 +462,7 @@ def reset_timeout():
 
 
 @app.route("/api/mesh/reset-all", methods=["POST"])
+@login_required
 def reset_all_mesh():
     for name in ["reviews", "ratings", "bookinfo"]:
         _delete_istio_resource("networking.istio.io", "v1", "virtualservices",
@@ -420,16 +473,118 @@ def reset_all_mesh():
 
 
 @app.route("/api/tasks")
+@login_required
 def list_tasks():
     ordered = sorted(tasks.values(), key=lambda t: t["started_at"], reverse=True)
     return jsonify(ordered[:20])
 
 
 @app.route("/api/tasks/<task_id>")
+@login_required
 def get_task(task_id):
     if task_id not in tasks:
         return jsonify({"error": "not found"}), 404
     return jsonify(tasks[task_id])
+
+
+# --- Platform Admin ---
+
+def _get_machinesets():
+    ms_list = k8s_custom.list_namespaced_custom_object(
+        "machine.openshift.io", "v1beta1", MACHINE_API_NS, "machinesets"
+    )
+    results = []
+    for ms in ms_list.get("items", []):
+        name = ms["metadata"]["name"]
+        spec_replicas = ms["spec"].get("replicas", 0)
+        ready = (ms.get("status") or {}).get("readyReplicas", 0)
+        instance_type = (
+            ms.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("providerSpec", {})
+            .get("value", {})
+            .get("instanceType", "unknown")
+        )
+        is_gpu = any(
+            g in name for g in ["g4dn", "g6e", "p4d", "p4de", "p5", "g5"]
+        )
+        results.append({
+            "name": name,
+            "replicas": spec_replicas,
+            "ready": ready,
+            "instanceType": instance_type,
+            "isGpu": is_gpu,
+        })
+    return results
+
+
+@app.route("/api/platform/status")
+@login_required
+def platform_status():
+    try:
+        machinesets = _get_machinesets()
+        nodes = k8s_core.list_node()
+        node_summary = []
+        for n in nodes.items:
+            labels = n.metadata.labels or {}
+            roles = [
+                k.split("/")[1]
+                for k in labels
+                if k.startswith("node-role.kubernetes.io/")
+            ]
+            ready = any(
+                c.type == "Ready" and c.status == "True"
+                for c in (n.status.conditions or [])
+            )
+            node_summary.append({
+                "name": n.metadata.name,
+                "roles": roles,
+                "ready": ready,
+            })
+        return jsonify({"machinesets": machinesets, "nodes": node_summary})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/platform/scale", methods=["POST"])
+@login_required
+def platform_scale():
+    body = request.get_json(silent=True) or {}
+    ms_name = body.get("machineset", "")
+    replicas = body.get("replicas")
+    if replicas is None or not ms_name:
+        return jsonify({"error": "machineset and replicas required"}), 400
+    replicas = max(0, min(int(replicas), 10))
+    try:
+        k8s_custom.patch_namespaced_custom_object(
+            "machine.openshift.io", "v1beta1", MACHINE_API_NS,
+            "machinesets", ms_name,
+            {"spec": {"replicas": replicas}},
+        )
+        return jsonify({"status": "scaled", "machineset": ms_name, "replicas": replicas})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/platform/shutdown", methods=["POST"])
+@login_required
+def platform_shutdown():
+    try:
+        machinesets = _get_machinesets()
+        worker_sets = [ms for ms in machinesets if "master" not in ms["name"]]
+        scaled = []
+        for ms in worker_sets:
+            if ms["replicas"] > 0:
+                k8s_custom.patch_namespaced_custom_object(
+                    "machine.openshift.io", "v1beta1", MACHINE_API_NS,
+                    "machinesets", ms["name"],
+                    {"spec": {"replicas": 0}},
+                )
+                scaled.append(ms["name"])
+        return jsonify({"status": "shutdown initiated", "scaled": scaled})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/healthz")

@@ -51,6 +51,55 @@
   loop_control:
     label: "{{ item.instance_type }} (replicas: {{ item.replicas }})"
 
+- name: Gather GPU nodes
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "nvidia.com/gpu.present=true"
+  register: _gpu_nodes
+
+- name: Label existing GPU nodes with gpu role
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          node-role.kubernetes.io/gpu: ""
+  loop: >-
+    {{ _gpu_nodes.resources
+       | map(attribute='metadata.name')
+       | list }}
+  loop_control:
+    label: "{{ item }}"
+  when: _gpu_nodes.resources | length > 0
+
+- name: Create GPU MachineConfigPool
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfigPool
+      metadata:
+        name: gpu
+      spec:
+        machineConfigSelector:
+          matchExpressions:
+            - key: machineconfiguration.openshift.io/role
+              operator: In
+              values:
+                - worker
+                - gpu
+        nodeSelector:
+          matchLabels:
+            node-role.kubernetes.io/gpu: ""
+
 - name: Display GPU MachineSet status
   ansible.builtin.debug:
     msg: >-

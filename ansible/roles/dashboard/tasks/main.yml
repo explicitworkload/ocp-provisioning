@@ -77,6 +77,23 @@
           resources: ["virtualservices", "destinationrules"]
           verbs: ["get", "list", "create", "update", "patch", "delete"]
 
+- name: Create RBAC for dashboard to manage platform resources
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: ops-dashboard-platform
+      rules:
+        - apiGroups: ["machine.openshift.io"]
+          resources: ["machinesets"]
+          verbs: ["get", "list", "patch", "update"]
+        - apiGroups: [""]
+          resources: ["nodes"]
+          verbs: ["get", "list"]
+
 - name: Bind dashboard SA to mesh ClusterRole
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -94,6 +111,39 @@
         - kind: ServiceAccount
           name: default
           namespace: "{{ dashboard_namespace }}"
+
+- name: Bind dashboard SA to platform ClusterRole
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ops-dashboard-platform
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: ops-dashboard-platform
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+
+- name: Create dashboard password Secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ops-dashboard-auth
+        namespace: "{{ dashboard_namespace }}"
+      type: Opaque
+      stringData:
+        password: "{{ dashboard_password }}"
+        secret-key: "{{ dashboard_secret_key }}"
 
 - name: Create dashboard Deployment
   kubernetes.core.k8s:
@@ -127,6 +177,16 @@
                     value: ""
                   - name: GATUS_HOST
                     value: "gatus.{{ ocp_apps_domain }}"
+                  - name: DASHBOARD_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: ops-dashboard-auth
+                        key: password
+                  - name: SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: ops-dashboard-auth
+                        key: secret-key
                 readinessProbe:
                   httpGet:
                     path: /healthz
