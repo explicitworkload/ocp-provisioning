@@ -165,18 +165,32 @@ All variables are in `group_vars/all.yml`:
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
-| `dashboard_password` | (empty) | Dashboard login password (pass at runtime, not in repo) |
+| `dashboard_password` | (random) | Dashboard login password (auto-generated, override at runtime) |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 
 ## Dashboard password
 
-The Operations Dashboard requires a login password. Pass it at runtime — **do not commit it to the repository**:
+The Operations Dashboard password is auto-generated on each Ansible run. To set a specific password at runtime:
 
 ```bash
 ansible-playbook site.yml -e dashboard_password="your-password-here"
 ```
 
-If `dashboard_password` is empty (the default), the dashboard will be accessible without authentication.
+To retrieve the current password from the cluster:
+
+```bash
+oc get secret ops-dashboard-auth -n dashboard -o jsonpath='{.data.password}' | base64 -d
+```
+
+To overwrite the password on a running cluster:
+
+```bash
+oc create secret generic ops-dashboard-auth -n dashboard \
+  --from-literal=password="new-password" \
+  --from-literal=secret-key="$(oc get secret ops-dashboard-auth -n dashboard -o jsonpath='{.data.secret-key}' | base64 -d)" \
+  --dry-run=client -o yaml | oc apply -f -
+oc rollout restart deployment/ops-dashboard -n dashboard
+```
 
 ## Quay without ODF
 
