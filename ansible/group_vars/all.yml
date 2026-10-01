@@ -36,3 +36,4 @@ console_plugins:
   - gitops-plugin
   - kuadrant-console-plugin
   - odf-console
+  - odf-client-console

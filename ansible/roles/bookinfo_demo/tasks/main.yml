@@ -281,6 +281,28 @@
     name: bookinfo
   register: bookinfo_route
 
+- name: Create PodMonitor for Istio sidecars in bookinfo
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: monitoring.coreos.com/v1
+      kind: PodMonitor
+      metadata:
+        name: istio-proxies
+        namespace: "{{ bookinfo_namespace }}"
+      spec:
+        namespaceSelector:
+          any: true
+        selector:
+          matchExpressions:
+            - key: security.istio.io/tlsMode
+              operator: Exists
+        podMetricsEndpoints:
+          - path: /stats/prometheus
+            port: http-envoy-prom
+            interval: 15s
+
 - name: Display bookinfo URL
   ansible.builtin.debug:
     msg: "Bookinfo productpage: https://{{ bookinfo_route.resources[0].spec.host }}/productpage"

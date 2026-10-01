@@ -191,7 +191,7 @@
               operator: Exists
         podMetricsEndpoints:
           - path: /stats/prometheus
-            port: "15090"
+            port: http-envoy-prom
             interval: 15s
 
 - name: Create ServiceMonitor for istiod

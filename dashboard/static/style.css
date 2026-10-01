@@ -173,7 +173,7 @@ main {
 
 .section-title {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 3px;
   color: var(--text-muted);
