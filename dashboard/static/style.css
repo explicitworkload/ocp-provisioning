@@ -521,6 +521,7 @@ input[type="text"].input-text:focus {
   transition: transform 0.25s ease;
 }
 
+.task-panel.collapsed { transform: translateY(100%); pointer-events: none; }
 .task-panel.collapsed .task-panel-body { display: none; }
 .task-panel.collapsed .task-panel-toggle { transform: rotate(180deg); }
 
