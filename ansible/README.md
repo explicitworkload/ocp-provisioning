@@ -167,6 +167,16 @@ All variables are in `group_vars/all.yml`:
 | `dashboard_password` | (empty) | Dashboard login password (pass at runtime, not in repo) |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 
+## Dashboard password
+
+The Operations Dashboard requires a login password. Pass it at runtime — **do not commit it to the repository**:
+
+```bash
+ansible-playbook site.yml -e dashboard_password="your-password-here"
+```
+
+If `dashboard_password` is empty (the default), the dashboard will be accessible without authentication.
+
 ## Quay without ODF
 
 Without ODF, Quay needs external object storage. To deploy a QuayRegistry, provide S3 credentials:
