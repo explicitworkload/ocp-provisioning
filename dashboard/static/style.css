@@ -79,8 +79,8 @@ header {
 }
 
 .insignia {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -89,7 +89,7 @@ header {
   border-radius: var(--radius-sm);
 }
 
-.insignia svg { width: 18px; height: 18px; }
+.insignia svg { width: 34px; height: 34px; }
 
 .header-title {
   display: flex;
