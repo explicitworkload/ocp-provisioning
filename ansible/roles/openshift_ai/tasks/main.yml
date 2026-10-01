@@ -232,7 +232,7 @@
         name: mcp-viewer
         namespace: "{{ mcp_server_namespace }}"
 
-- name: Bind cluster view role to MCP server ServiceAccount
+- name: Bind cluster edit role to MCP server ServiceAccount
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -244,7 +244,7 @@
       roleRef:
         apiGroup: rbac.authorization.k8s.io
         kind: ClusterRole
-        name: view
+        name: edit
       subjects:
         - kind: ServiceAccount
           name: mcp-viewer
@@ -264,8 +264,8 @@
         config.toml: |
           log_level = 5
           port = "8080"
-          read_only = true
-          toolsets = ["core", "config"]
+          read_only = false
+          toolsets = ["core", "config", "kubevirt", "tekton", "openshift", "metrics"]
 
 - name: Wait for MCPServer CRD
   kubernetes.core.k8s_info:
@@ -362,5 +362,5 @@
         OpenShift-MCP-Server: |
           {
             "url": "http://openshift-mcp-server.{{ mcp_server_namespace }}.svc.cluster.local:8080/mcp",
-            "description": "MCP server for Kubernetes and OpenShift cluster operations (read-only)"
+            "description": "MCP server for Kubernetes and OpenShift cluster operations"
           }

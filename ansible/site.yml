@@ -38,6 +38,12 @@
     - role: quay
       tags: [quay]
 
+    - role: service_mesh
+      tags: [service-mesh]
+
+    - role: network_observability
+      tags: [network-observability]
+
     - role: console_plugins
       tags: [console]
 

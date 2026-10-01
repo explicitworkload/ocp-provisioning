@@ -1,0 +1,56 @@
+---
+- name: Wait for Network Observability Operator CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: openshift-operators
+    label_selectors:
+      - "operators.coreos.com/netobserv-operator.openshift-operators="
+  register: netobserv_csvs
+  until: >-
+    netobserv_csvs.resources | length > 0 and
+    netobserv_csvs.resources | selectattr('status.phase', 'defined') |
+    selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: 30
+  delay: 30
+
+- name: Create FlowCollector
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: flows.netobserv.io/v1beta2
+      kind: FlowCollector
+      metadata:
+        name: cluster
+      spec:
+        namespace: "{{ netobserv_namespace }}"
+        deploymentModel: Direct
+        agent:
+          type: eBPF
+          ebpf:
+            sampling: 50
+            privileged: false
+        consolePlugin:
+          register: true
+          portNaming:
+            enable: true
+
+- name: Wait for FlowCollector to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: flows.netobserv.io/v1beta2
+    kind: FlowCollector
+    name: cluster
+  register: flowcollector
+  until: >-
+    flowcollector.resources | length > 0 and
+    flowcollector.resources[0].status is defined and
+    flowcollector.resources[0].status.conditions is defined and
+    flowcollector.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 20
+  delay: 15
+  ignore_errors: true

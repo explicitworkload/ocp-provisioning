@@ -1,0 +1,86 @@
+---
+- name: Wait for Service Mesh Operator CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: openshift-operators
+    label_selectors:
+      - "operators.coreos.com/servicemeshoperator3.openshift-operators="
+  register: ossm_csvs
+  until: >-
+    ossm_csvs.resources | length > 0 and
+    ossm_csvs.resources | selectattr('status.phase', 'defined') |
+    selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: 30
+  delay: 30
+
+- name: Create istio-system namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ service_mesh_namespace }}"
+
+- name: Create IstioCNI
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: sailoperator.io/v1
+      kind: IstioCNI
+      metadata:
+        name: default
+      spec:
+        version: "{{ service_mesh_version }}"
+        namespace: "{{ service_mesh_namespace }}"
+
+- name: Wait for IstioCNI to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: sailoperator.io/v1
+    kind: IstioCNI
+    name: default
+  register: istiocni
+  until: >-
+    istiocni.resources | length > 0 and
+    istiocni.resources[0].status is defined and
+    istiocni.resources[0].status.conditions is defined and
+    istiocni.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 20
+  delay: 15
+
+- name: Create Istio control plane
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: sailoperator.io/v1
+      kind: Istio
+      metadata:
+        name: default
+      spec:
+        version: "{{ service_mesh_version }}"
+        namespace: "{{ service_mesh_namespace }}"
+
+- name: Wait for Istio control plane to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: sailoperator.io/v1
+    kind: Istio
+    name: default
+  register: istio
+  until: >-
+    istio.resources | length > 0 and
+    istio.resources[0].status is defined and
+    istio.resources[0].status.conditions is defined and
+    istio.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 30
+  delay: 15

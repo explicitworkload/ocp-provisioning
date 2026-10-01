@@ -109,6 +109,14 @@
       namespace: openshift-gitops-operator
       channel: latest
       source: redhat-operators
+    - name: netobserv-operator
+      namespace: openshift-operators
+      channel: stable
+      source: redhat-operators
+    - name: servicemeshoperator3
+      namespace: openshift-operators
+      channel: stable
+      source: redhat-operators
   loop_control:
     label: "{{ item.name }}"
 
