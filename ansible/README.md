@@ -87,14 +87,15 @@ Deploys the Istio Bookinfo sample application with sidecar injection, all four m
 ### Operations Dashboard
 
 A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Password-protected via cluster Secret. Features:
-- **Sidebar navigation** — Dashboard, Platform Admin, Gatus, Help, and Logout
+- **Sidebar navigation** — Dashboard, Platform Admin, AI, Gatus, Help, and Logout
 - **Login page** — session-based authentication with password stored in Kubernetes Secret
 - **Traffic generator** — burst mode (fixed request count) or sustained mode (continuous for up to 60 minutes) with configurable concurrency (1–50 threads)
 - **Traffic shifting** — route traffic across Reviews v1/v2/v3 by percentage for canary deployment demos
 - **Fault injection** — inject delays or HTTP errors into the ratings service to test resilience
 - **Circuit breaker** — limit connections to the reviews service to demonstrate cascading failure prevention
 - **Request timeout & retries** — set timeouts and auto-retries on the reviews service
-- **Platform Admin** — view and scale worker/GPU MachineSets, node status, cluster shutdown (separate page)
+- **Platform Admin** — view and scale worker/GPU MachineSets, node status, graceful cluster shutdown including masters (separate page)
+- **AI Assistant** — summarization and chat with models served via LiteLLM, MCP server discovery and tool use for live cluster interaction (separate page)
 - **Floating task log** — pinned bottom-right panel with live progress, toast notifications for all actions
 - **Help page** — built-in guide with demo scenarios for each feature
 - Links to Gatus health monitor

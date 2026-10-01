@@ -2,3 +2,4 @@ flask==3.1.*
 requests==2.32.*
 gunicorn==23.*
 kubernetes==32.*
+mcp>=1.9,<2

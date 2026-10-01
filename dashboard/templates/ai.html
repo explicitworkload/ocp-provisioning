@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Operations Dashboard — AI{% endblock %}
+{% block heading %}AI Assistant{% endblock %}
+{% block subtitle %}OpenShift AI Models{% endblock %}
+
+{% block content %}
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>MODEL &amp; MCP SERVERS</h2>
+      <div class="grid mesh-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9733;</span>
+            Active Model
+          </div>
+          <div class="card-body">
+            <div class="input-row">
+              <label for="ai-model">Model</label>
+              <select id="ai-model" class="ai-select">
+                <option value="">Loading models...</option>
+              </select>
+              <button class="btn btn-reset" onclick="refreshAiModels()">&#8635;</button>
+            </div>
+          </div>
+          <div class="card-footer" id="ai-model-status">LOADING...</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9881;</span>
+            MCP Servers
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Model Context Protocol servers discovered from the cluster. These provide tools and context to AI models.</p>
+            <div id="mcp-server-list" class="mcp-list">
+              <div class="log-empty">Scanning cluster...</div>
+            </div>
+          </div>
+          <div class="card-footer" id="mcp-status">SCANNING...</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>SUMMARIZATION</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9998;</span>
+            Text Summarizer
+          </div>
+          <div class="card-body">
+            <p class="card-desc">Paste text and get a concise summary from the selected model.</p>
+            <textarea id="summarize-input" class="ai-textarea" rows="6" placeholder="Paste text here to summarize..."></textarea>
+            <div class="input-row">
+              <button class="btn btn-primary" id="btn-summarize" onclick="runSummarize()">
+                <span class="btn-icon">&#9654;</span> Summarize
+              </button>
+              <button class="btn btn-reset" onclick="clearSummarize()">Clear</button>
+              <span class="ai-token-count" id="summarize-tokens"></span>
+            </div>
+            <div id="summarize-output" class="ai-output" style="display:none"></div>
+          </div>
+          <div class="card-footer" id="summarize-status">STANDBY</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>CHAT</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-icon">&#9993;</span>
+            Conversation
+          </div>
+          <div class="card-body">
+            <div id="chat-messages" class="chat-messages">
+              <div class="chat-empty">Start a conversation with the model</div>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chat-input" class="ai-textarea chat-textarea" rows="2" placeholder="Type your message..." onkeydown="chatKeydown(event)"></textarea>
+              <button class="btn btn-primary chat-send" id="btn-chat" onclick="sendChat()">
+                <span class="btn-icon">&#9654;</span>
+              </button>
+            </div>
+            <div class="input-row">
+              <button class="btn btn-reset" onclick="clearChat()">Clear History</button>
+              <span class="ai-token-count" id="chat-tokens"></span>
+            </div>
+          </div>
+          <div class="card-footer" id="chat-status">STANDBY</div>
+        </div>
+      </div>
+    </section>
+{% endblock %}

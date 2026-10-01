@@ -1,4 +1,6 @@
+import asyncio
 import functools
+import json
 import os
 import time
 import threading
@@ -9,6 +11,8 @@ from datetime import datetime, timezone
 import requests as http_requests
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from kubernetes import client, config
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32).hex())
@@ -20,6 +24,8 @@ BOOKINFO_URL = os.environ.get(
 GATUS_URL = os.environ.get("GATUS_URL", "")
 GATUS_HOST = os.environ.get("GATUS_HOST", "")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm.litellm.svc.cluster.local:4000")
+LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 BOOKINFO_NS = "bookinfo"
 MACHINE_API_NS = "openshift-machine-api"
 
@@ -248,6 +254,12 @@ def index():
 @login_required
 def platform_page():
     return render_template("platform.html", gatus_host=GATUS_HOST, active_page="platform")
+
+
+@app.route("/ai")
+@login_required
+def ai_page():
+    return render_template("ai.html", gatus_host=GATUS_HOST, active_page="ai")
 
 
 @app.route("/help")
@@ -578,9 +590,8 @@ def platform_scale():
 def platform_shutdown():
     try:
         machinesets = _get_machinesets()
-        worker_sets = [ms for ms in machinesets if "master" not in ms["name"]]
         scaled = []
-        for ms in worker_sets:
+        for ms in machinesets:
             if ms["replicas"] > 0:
                 k8s_custom.patch_namespaced_custom_object(
                     "machine.openshift.io", "v1beta1", MACHINE_API_NS,
@@ -588,7 +599,278 @@ def platform_shutdown():
                     {"spec": {"replicas": 0}},
                 )
                 scaled.append(ms["name"])
-        return jsonify({"status": "shutdown initiated", "scaled": scaled})
+
+        nodes = k8s_core.list_node()
+        for n in nodes.items:
+            try:
+                k8s_core.patch_node(
+                    n.metadata.name,
+                    {"spec": {"unschedulable": True}},
+                )
+            except Exception:
+                pass
+
+        return jsonify({
+            "status": "graceful shutdown initiated",
+            "scaled": scaled,
+            "cordoned": [n.metadata.name for n in nodes.items],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# --- AI ---
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def _mcp_list_tools(server_url):
+    async with sse_client(server_url) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as sess:
+            await sess.initialize()
+            result = await sess.list_tools()
+            return [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "inputSchema": t.inputSchema if hasattr(t, "inputSchema") else {},
+                }
+                for t in result.tools
+            ]
+
+
+async def _mcp_call_tool(server_url, tool_name, arguments):
+    async with sse_client(server_url) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as sess:
+            await sess.initialize()
+            result = await sess.call_tool(tool_name, arguments)
+            parts = []
+            for c in result.content:
+                if hasattr(c, "text"):
+                    parts.append(c.text)
+                else:
+                    parts.append(str(c))
+            return "\n".join(parts)
+
+
+def _llm_headers():
+    headers = {"Content-Type": "application/json"}
+    if LITELLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LITELLM_API_KEY}"
+    return headers
+
+
+def _mcp_tools_to_openai(mcp_tools):
+    result = []
+    for t in mcp_tools:
+        schema = t.get("inputSchema", {})
+        if not schema:
+            schema = {"type": "object", "properties": {}}
+        result.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": schema,
+            },
+        })
+    return result
+
+
+@app.route("/api/ai/mcp-servers")
+@login_required
+def ai_mcp_servers():
+    try:
+        servers = k8s_custom.list_custom_object_for_all_namespaces(
+            "mcp.x-k8s.io", "v1alpha1", "mcpservers"
+        )
+        results = []
+        for s in servers.get("items", []):
+            name = s["metadata"]["name"]
+            ns = s["metadata"]["namespace"]
+            phase = (s.get("status") or {}).get("phase", "Unknown")
+            for cond in (s.get("status") or {}).get("conditions", []):
+                if cond.get("type") == "Ready" and cond.get("status") == "True":
+                    phase = "Ready"
+            url = (s.get("status") or {}).get("connection", {}).get("url", "")
+            results.append({
+                "name": name,
+                "namespace": ns,
+                "phase": phase,
+                "url": url,
+            })
+        return jsonify({"servers": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/mcp-servers/<namespace>/<name>/tools")
+@login_required
+def ai_mcp_tools(namespace, name):
+    try:
+        srv = k8s_custom.get_namespaced_custom_object(
+            "mcp.x-k8s.io", "v1alpha1", namespace, "mcpservers", name
+        )
+        url = (srv.get("status") or {}).get("connection", {}).get("url", "")
+        if not url:
+            return jsonify({"error": "MCP server has no connection URL"}), 400
+        tools = _run_async(_mcp_list_tools(url))
+        return jsonify({"tools": tools, "url": url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/models")
+@login_required
+def ai_models():
+    try:
+        r = http_requests.get(
+            f"{LITELLM_URL}/v1/models", headers=_llm_headers(), timeout=10
+        )
+        r.raise_for_status()
+        models = r.json().get("data", [])
+        return jsonify({"models": [m["id"] for m in models]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/summarize", methods=["POST"])
+@login_required
+def ai_summarize():
+    body = request.get_json(silent=True) or {}
+    text = body.get("text", "").strip()
+    model = body.get("model", "")
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    if not model:
+        return jsonify({"error": "model is required"}), 400
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant. Summarize the following text concisely. Return only the summary, no preamble."},
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 1024,
+    }
+
+    try:
+        r = http_requests.post(
+            f"{LITELLM_URL}/v1/chat/completions",
+            headers=_llm_headers(), json=payload, timeout=60,
+        )
+        r.raise_for_status()
+        data = r.json()
+        summary = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        return jsonify({
+            "summary": summary,
+            "model": data.get("model", model),
+            "usage": {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+            },
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/chat", methods=["POST"])
+@login_required
+def ai_chat():
+    body = request.get_json(silent=True) or {}
+    messages = body.get("messages", [])
+    model = body.get("model", "")
+    mcp_server_urls = body.get("mcpServers", [])
+    if not messages:
+        return jsonify({"error": "messages is required"}), 400
+    if not model:
+        return jsonify({"error": "model is required"}), 400
+
+    all_mcp_tools = []
+    tool_server_map = {}
+    for srv_url in mcp_server_urls:
+        try:
+            tools = _run_async(_mcp_list_tools(srv_url))
+            all_mcp_tools.extend(tools)
+            for t in tools:
+                tool_server_map[t["name"]] = srv_url
+        except Exception:
+            pass
+
+    payload = {
+        "model": model,
+        "messages": list(messages),
+        "temperature": 0.7,
+        "max_tokens": 2048,
+    }
+
+    if all_mcp_tools:
+        payload["tools"] = _mcp_tools_to_openai(all_mcp_tools)
+
+    try:
+        max_rounds = 5
+        for _ in range(max_rounds):
+            r = http_requests.post(
+                f"{LITELLM_URL}/v1/chat/completions",
+                headers=_llm_headers(), json=payload, timeout=120,
+            )
+            r.raise_for_status()
+            data = r.json()
+            choice = data["choices"][0]
+            msg = choice["message"]
+
+            if choice.get("finish_reason") != "tool_calls" and not msg.get("tool_calls"):
+                usage = data.get("usage", {})
+                return jsonify({
+                    "reply": msg.get("content", ""),
+                    "model": data.get("model", model),
+                    "toolCalls": [
+                        m for m in payload["messages"]
+                        if m.get("role") == "tool"
+                    ],
+                    "usage": {
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                    },
+                })
+
+            payload["messages"].append(msg)
+
+            for tc in msg.get("tool_calls", []):
+                fn_name = tc["function"]["name"]
+                fn_args = json.loads(tc["function"]["arguments"] or "{}")
+                srv_url = tool_server_map.get(fn_name, "")
+
+                if srv_url:
+                    try:
+                        result = _run_async(_mcp_call_tool(srv_url, fn_name, fn_args))
+                    except Exception as e:
+                        result = f"Error calling tool: {e}"
+                else:
+                    result = f"Unknown tool: {fn_name}"
+
+                payload["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+
+        usage = data.get("usage", {})
+        return jsonify({
+            "reply": msg.get("content", "") or "(tool call loop reached max rounds)",
+            "model": data.get("model", model),
+            "usage": {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+            },
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

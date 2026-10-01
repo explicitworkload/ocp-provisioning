@@ -516,8 +516,8 @@ async function scaleMachineSet(name) {
 }
 
 async function shutdownCluster() {
-  if (!confirm("This will scale ALL worker and GPU MachineSets to 0 replicas. Continue?")) return;
-  setStatusBar("platform-status", "SHUTTING DOWN...", "error");
+  if (!confirm("This will gracefully shut down the entire cluster — all MachineSets scaled to 0 and all nodes (including masters) cordoned. Continue?")) return;
+  setStatusBar("platform-status", "INITIATING GRACEFUL SHUTDOWN...", "error");
   try {
     var res = await fetch("/api/platform/shutdown", {
       method: "POST",
@@ -525,9 +525,10 @@ async function shutdownCluster() {
     });
     var data = await res.json();
     if (res.ok) {
-      setStatusBar("platform-status", "SHUTDOWN INITIATED — " + data.scaled.length + " MACHINESETS SCALED TO 0", "error");
-      showToast("Shutdown initiated — " + data.scaled.length + " MachineSets scaling to 0", "error");
-      addPlatformTask("shutdown", "Shutdown — " + data.scaled.length + " MachineSets → 0");
+      var msg = data.scaled.length + " MachineSets → 0, " + data.cordoned.length + " nodes cordoned";
+      setStatusBar("platform-status", "GRACEFUL SHUTDOWN — " + msg, "error");
+      showToast("Graceful shutdown initiated — " + msg, "error");
+      addPlatformTask("shutdown", "Graceful shutdown — " + msg);
       setTimeout(refreshPlatform, 5000);
     } else {
       setStatusBar("platform-status", "ERROR: " + data.error, "error");
@@ -563,5 +564,282 @@ function addPlatformTask(type, detail) {
   }
 }
 
+// === AI ===
+var chatHistory = [];
+var enabledMcpServers = {};
+
+async function refreshAiModels() {
+  var select = document.getElementById("ai-model");
+  if (!select) return;
+  setStatusBar("ai-model-status", "LOADING...", "active");
+  try {
+    var res = await fetch("/api/ai/models");
+    var data = await res.json();
+    if (!res.ok) {
+      setStatusBar("ai-model-status", "ERROR: " + (data.error || "unknown"), "error");
+      return;
+    }
+    select.innerHTML = "";
+    if (!data.models.length) {
+      select.innerHTML = '<option value="">No models available</option>';
+      setStatusBar("ai-model-status", "NO MODELS", "error");
+      return;
+    }
+    data.models.forEach(function (m) {
+      var opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      select.appendChild(opt);
+    });
+    setStatusBar("ai-model-status", data.models.length + " MODEL(S) AVAILABLE", "active");
+  } catch (e) {
+    setStatusBar("ai-model-status", "ERROR: " + e.message, "error");
+  }
+}
+
+async function refreshMcpServers() {
+  var container = document.getElementById("mcp-server-list");
+  if (!container) return;
+  setStatusBar("mcp-status", "SCANNING...", "active");
+  try {
+    var res = await fetch("/api/ai/mcp-servers");
+    var data = await res.json();
+    if (!res.ok) {
+      container.innerHTML = '<div class="log-empty">Error: ' + (data.error || "unknown") + "</div>";
+      setStatusBar("mcp-status", "ERROR", "error");
+      return;
+    }
+    if (!data.servers.length) {
+      container.innerHTML = '<div class="log-empty">No MCP servers found</div>';
+      setStatusBar("mcp-status", "NO SERVERS", "");
+      return;
+    }
+    container.innerHTML = data.servers
+      .map(function (s) {
+        var statusClass = s.phase === "Ready" ? "ready" : s.phase === "Unknown" ? "pending" : "error";
+        var key = s.namespace + "/" + s.name;
+        var isActive = !!enabledMcpServers[key];
+        var toggleClass = isActive ? "mcp-toggle active" : "mcp-toggle";
+        return (
+          '<div class="mcp-row">' +
+          '<div class="mcp-status ' + statusClass + '"></div>' +
+          '<span class="mcp-name">' + s.name + "</span>" +
+          '<span class="mcp-ns">' + s.namespace + "</span>" +
+          '<span class="mcp-tools-count" id="mcp-tools-' + key.replace("/", "-") + '"></span>' +
+          '<div class="' + toggleClass + '" onclick="toggleMcpServer(\'' + key + '\', \'' + s.namespace + '\', \'' + s.name + '\')" id="mcp-toggle-' + key.replace("/", "-") + '"></div>' +
+          "</div>"
+        );
+      })
+      .join("");
+    var readyCount = data.servers.filter(function (s) { return s.phase === "Ready"; }).length;
+    setStatusBar("mcp-status", readyCount + "/" + data.servers.length + " READY", readyCount > 0 ? "active" : "");
+  } catch (e) {
+    setStatusBar("mcp-status", "ERROR: " + e.message, "error");
+  }
+}
+
+async function toggleMcpServer(key, namespace, name) {
+  var toggleEl = document.getElementById("mcp-toggle-" + key.replace("/", "-"));
+  var toolsEl = document.getElementById("mcp-tools-" + key.replace("/", "-"));
+
+  if (enabledMcpServers[key]) {
+    delete enabledMcpServers[key];
+    if (toggleEl) toggleEl.classList.remove("active");
+    if (toolsEl) toolsEl.textContent = "";
+    showToast("MCP server " + name + " disabled", "info");
+    return;
+  }
+
+  if (toolsEl) toolsEl.textContent = "loading...";
+
+  try {
+    var res = await fetch("/api/ai/mcp-servers/" + namespace + "/" + name + "/tools");
+    var data = await res.json();
+    if (!res.ok) {
+      showToast("Failed to connect: " + (data.error || "unknown"), "error");
+      if (toolsEl) toolsEl.textContent = "error";
+      return;
+    }
+    enabledMcpServers[key] = {
+      url: data.url,
+      tools: data.tools,
+    };
+    if (toggleEl) toggleEl.classList.add("active");
+    if (toolsEl) toolsEl.textContent = data.tools.length + " tools";
+    showToast("MCP server " + name + " enabled — " + data.tools.length + " tools", "success");
+  } catch (e) {
+    showToast("Error: " + e.message, "error");
+    if (toolsEl) toolsEl.textContent = "error";
+  }
+}
+
+function getSelectedModel() {
+  var el = document.getElementById("ai-model");
+  return el ? el.value : "";
+}
+
+function getEnabledMcpUrls() {
+  var urls = [];
+  for (var key in enabledMcpServers) {
+    if (enabledMcpServers[key].url) {
+      urls.push(enabledMcpServers[key].url);
+    }
+  }
+  return urls;
+}
+
+async function runSummarize() {
+  var input = document.getElementById("summarize-input");
+  var output = document.getElementById("summarize-output");
+  var btn = document.getElementById("btn-summarize");
+  var tokens = document.getElementById("summarize-tokens");
+  var model = getSelectedModel();
+  if (!model) { showToast("Select a model first", "error"); return; }
+  if (!input.value.trim()) { showToast("Enter text to summarize", "error"); return; }
+
+  btn.disabled = true;
+  output.style.display = "none";
+  setStatusBar("summarize-status", "PROCESSING...", "active");
+
+  try {
+    var res = await fetch("/api/ai/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: input.value, model: model }),
+    });
+    var data = await res.json();
+    if (!res.ok) {
+      setStatusBar("summarize-status", "ERROR: " + (data.error || "unknown"), "error");
+      showToast("Summarize error: " + (data.error || "unknown"), "error");
+      btn.disabled = false;
+      return;
+    }
+    output.textContent = data.summary;
+    output.style.display = "block";
+    if (tokens) {
+      tokens.textContent = data.usage.prompt_tokens + " in / " + data.usage.completion_tokens + " out tokens";
+    }
+    setStatusBar("summarize-status", "COMPLETE — " + data.model, "active");
+    showToast("Summary generated", "success");
+  } catch (e) {
+    setStatusBar("summarize-status", "ERROR: " + e.message, "error");
+    showToast("Summarize error: " + e.message, "error");
+  }
+  btn.disabled = false;
+}
+
+function clearSummarize() {
+  var input = document.getElementById("summarize-input");
+  var output = document.getElementById("summarize-output");
+  var tokens = document.getElementById("summarize-tokens");
+  if (input) input.value = "";
+  if (output) { output.textContent = ""; output.style.display = "none"; }
+  if (tokens) tokens.textContent = "";
+  setStatusBar("summarize-status", "STANDBY", "");
+}
+
+function renderChatMessages() {
+  var container = document.getElementById("chat-messages");
+  if (!container) return;
+  if (!chatHistory.length) {
+    container.innerHTML = '<div class="chat-empty">Start a conversation with the model</div>';
+    return;
+  }
+  container.innerHTML = chatHistory
+    .filter(function (m) { return m.role !== "system"; })
+    .map(function (m) {
+      var cls = m.role === "user" ? "user" : m.role === "tool" ? "tool-result" : "assistant";
+      var roleLabel = m.role === "tool" ? "TOOL RESULT" : m.role.toUpperCase();
+      return (
+        '<div class="chat-msg ' + cls + '">' +
+        '<div class="chat-msg-role">' + roleLabel + "</div>" +
+        '<div>' + escapeHtml(m.content || "") + "</div>" +
+        "</div>"
+      );
+    })
+    .join("");
+  container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(text) {
+  var div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function sendChat() {
+  var input = document.getElementById("chat-input");
+  var btn = document.getElementById("btn-chat");
+  var tokens = document.getElementById("chat-tokens");
+  var model = getSelectedModel();
+  if (!model) { showToast("Select a model first", "error"); return; }
+  var text = input.value.trim();
+  if (!text) return;
+
+  chatHistory.push({ role: "user", content: text });
+  input.value = "";
+  renderChatMessages();
+  btn.disabled = true;
+  setStatusBar("chat-status", "THINKING...", "active");
+
+  var mcpUrls = getEnabledMcpUrls();
+
+  try {
+    var res = await fetch("/api/ai/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: chatHistory,
+        model: model,
+        mcpServers: mcpUrls,
+      }),
+    });
+    var data = await res.json();
+    if (!res.ok) {
+      setStatusBar("chat-status", "ERROR: " + (data.error || "unknown"), "error");
+      showToast("Chat error: " + (data.error || "unknown"), "error");
+      btn.disabled = false;
+      return;
+    }
+
+    if (data.toolCalls && data.toolCalls.length > 0) {
+      data.toolCalls.forEach(function (tc) {
+        chatHistory.push({ role: "tool", content: tc.content || "(tool call)" });
+      });
+    }
+
+    chatHistory.push({ role: "assistant", content: data.reply });
+    renderChatMessages();
+    if (tokens) {
+      tokens.textContent = data.usage.prompt_tokens + " in / " + data.usage.completion_tokens + " out tokens";
+    }
+    setStatusBar("chat-status", data.model, "active");
+  } catch (e) {
+    setStatusBar("chat-status", "ERROR: " + e.message, "error");
+    showToast("Chat error: " + e.message, "error");
+  }
+  btn.disabled = false;
+}
+
+function chatKeydown(e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
+}
+
+function clearChat() {
+  chatHistory = [];
+  renderChatMessages();
+  var tokens = document.getElementById("chat-tokens");
+  if (tokens) tokens.textContent = "";
+  setStatusBar("chat-status", "STANDBY", "");
+}
+
 // === Init ===
 startPolling();
+
+if (document.getElementById("ai-model")) {
+  refreshAiModels();
+  refreshMcpServers();
+}

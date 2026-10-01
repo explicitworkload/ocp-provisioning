@@ -92,6 +92,20 @@
           verbs: ["get", "list", "patch", "update"]
         - apiGroups: [""]
           resources: ["nodes"]
+          verbs: ["get", "list", "patch", "update"]
+
+- name: Create RBAC for dashboard to discover MCP servers
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: ops-dashboard-mcp
+      rules:
+        - apiGroups: ["mcp.x-k8s.io"]
+          resources: ["mcpservers"]
           verbs: ["get", "list"]
 
 - name: Bind dashboard SA to mesh ClusterRole
@@ -129,6 +143,49 @@
         - kind: ServiceAccount
           name: default
           namespace: "{{ dashboard_namespace }}"
+
+- name: Bind dashboard SA to MCP ClusterRole
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ops-dashboard-mcp
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: ops-dashboard-mcp
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+
+- name: Fetch LiteLLM API key from litellm namespace
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: litellm
+    name: litellm-proxy-credentials
+  register: litellm_creds
+  failed_when: false
+
+- name: Create dashboard AI Secret with LiteLLM key
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ops-dashboard-ai
+        namespace: "{{ dashboard_namespace }}"
+      type: Opaque
+      stringData:
+        litellm-api-key: "{{ litellm_creds.resources[0].data.LITELLM_MASTER_KEY | b64decode }}"
+  when: litellm_creds.resources | length > 0
 
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
@@ -187,6 +244,14 @@
                       secretKeyRef:
                         name: ops-dashboard-auth
                         key: secret-key
+                  - name: LITELLM_URL
+                    value: "http://litellm.litellm.svc.cluster.local:4000"
+                  - name: LITELLM_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: ops-dashboard-ai
+                        key: litellm-api-key
+                        optional: true
                 readinessProbe:
                   httpGet:
                     path: /healthz
