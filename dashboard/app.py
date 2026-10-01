@@ -13,6 +13,7 @@ from flask import Flask, render_template, jsonify, request, session, redirect, u
 from kubernetes import client, config
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32).hex())
@@ -614,33 +615,49 @@ def _run_async(coro):
         loop.close()
 
 
+def _is_streamable_http(url):
+    return url.rstrip("/").endswith("/mcp")
+
+
 async def _mcp_list_tools(server_url):
-    async with sse_client(server_url) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as sess:
-            await sess.initialize()
-            result = await sess.list_tools()
-            return [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "inputSchema": t.inputSchema if hasattr(t, "inputSchema") else {},
-                }
-                for t in result.tools
-            ]
+    if _is_streamable_http(server_url):
+        async with streamablehttp_client(server_url) as (read_stream, write_stream, _):
+            async with ClientSession(read_stream, write_stream) as sess:
+                await sess.initialize()
+                result = await sess.list_tools()
+                return [
+                    {"name": t.name, "description": t.description or "",
+                     "inputSchema": t.inputSchema if hasattr(t, "inputSchema") else {}}
+                    for t in result.tools
+                ]
+    else:
+        async with sse_client(server_url) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as sess:
+                await sess.initialize()
+                result = await sess.list_tools()
+                return [
+                    {"name": t.name, "description": t.description or "",
+                     "inputSchema": t.inputSchema if hasattr(t, "inputSchema") else {}}
+                    for t in result.tools
+                ]
 
 
 async def _mcp_call_tool(server_url, tool_name, arguments):
-    async with sse_client(server_url) as (read_stream, write_stream):
+    async def _call(read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as sess:
             await sess.initialize()
             result = await sess.call_tool(tool_name, arguments)
             parts = []
             for c in result.content:
-                if hasattr(c, "text"):
-                    parts.append(c.text)
-                else:
-                    parts.append(str(c))
+                parts.append(c.text if hasattr(c, "text") else str(c))
             return "\n".join(parts)
+
+    if _is_streamable_http(server_url):
+        async with streamablehttp_client(server_url) as (r, w, _):
+            return await _call(r, w)
+    else:
+        async with sse_client(server_url) as (r, w):
+            return await _call(r, w)
 
 
 def _llm_headers():
@@ -682,7 +699,8 @@ def ai_mcp_servers():
             for cond in (s.get("status") or {}).get("conditions", []):
                 if cond.get("type") == "Ready" and cond.get("status") == "True":
                     phase = "Ready"
-            url = (s.get("status") or {}).get("connection", {}).get("url", "")
+            status = s.get("status") or {}
+            url = status.get("address", {}).get("url", "") or status.get("connection", {}).get("url", "")
             results.append({
                 "name": name,
                 "namespace": ns,
@@ -701,7 +719,8 @@ def ai_mcp_tools(namespace, name):
         srv = k8s_custom.get_namespaced_custom_object(
             "mcp.x-k8s.io", "v1alpha1", namespace, "mcpservers", name
         )
-        url = (srv.get("status") or {}).get("connection", {}).get("url", "")
+        status = srv.get("status") or {}
+        url = status.get("address", {}).get("url", "") or status.get("connection", {}).get("url", "")
         if not url:
             return jsonify({"error": "MCP server has no connection URL"}), 400
         tools = _run_async(_mcp_list_tools(url))
