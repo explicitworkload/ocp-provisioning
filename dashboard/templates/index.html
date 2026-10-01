@@ -39,12 +39,30 @@
           <div class="card-body">
             <p class="card-desc">Generate synthetic load against the Bookinfo service mesh demo. Requests are distributed across reviews v1, v2, and v3 to populate Kiali traffic graphs.</p>
             <div class="input-row">
+              <div class="mode-toggle" id="mode-toggle">
+                <button class="mode-btn active" data-mode="burst" onclick="setMode('burst')">Burst</button>
+                <button class="mode-btn" data-mode="sustained" onclick="setMode('sustained')">Sustained</button>
+              </div>
+            </div>
+            <div class="input-row" id="burst-inputs">
               <label for="traffic-count">Requests</label>
               <input type="number" id="traffic-count" value="100" min="1" max="10000" step="10">
               <label for="traffic-concurrency">Concurrency</label>
               <input type="number" id="traffic-concurrency" value="10" min="1" max="50" step="1">
               <button class="btn btn-primary" id="btn-traffic" onclick="launchTraffic()">
                 <span class="btn-icon">&#9654;</span> Execute
+              </button>
+            </div>
+            <div class="input-row" id="sustained-inputs" style="display:none">
+              <label for="traffic-duration">Duration (min)</label>
+              <input type="number" id="traffic-duration" value="15" min="1" max="60" step="1">
+              <label for="sustained-concurrency">Concurrency</label>
+              <input type="number" id="sustained-concurrency" value="10" min="1" max="50" step="1">
+              <button class="btn btn-primary" id="btn-sustained" onclick="launchSustained()">
+                <span class="btn-icon">&#9654;</span> Start
+              </button>
+              <button class="btn btn-stop" id="btn-stop" onclick="stopTraffic()" style="display:none">
+                &#9632; Stop
               </button>
             </div>
           </div>

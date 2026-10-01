@@ -340,6 +340,50 @@ input[type="number"]:focus {
 
 .btn-icon { font-size: 11px; }
 
+.btn-stop {
+  background: var(--red-500);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.btn-stop:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+}
+
+/* === MODE TOGGLE === */
+.mode-toggle {
+  display: flex;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mode-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 6px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.15s ease;
+}
+
+.mode-btn.active {
+  background: var(--green-500);
+  color: #fff;
+}
+
+.mode-btn:not(.active):hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 /* === TASK LOG === */
 .task-log {
   background: var(--bg-surface);
