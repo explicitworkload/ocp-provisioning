@@ -16,6 +16,7 @@ BOOKINFO_URL = os.environ.get(
     "http://productpage.bookinfo.svc.cluster.local:9080/productpage",
 )
 GATUS_URL = os.environ.get("GATUS_URL", "")
+GATUS_HOST = os.environ.get("GATUS_HOST", "")
 BOOKINFO_NS = "bookinfo"
 
 try:
@@ -199,7 +200,7 @@ def _get_ratings_virtualservice(fault=None):
 
 @app.route("/")
 def index():
-    return render_template("index.html", gatus_url=GATUS_URL)
+    return render_template("index.html", gatus_url=GATUS_URL, gatus_host=GATUS_HOST)
 
 
 @app.route("/help")

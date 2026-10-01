@@ -125,6 +125,8 @@
                     value: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
                   - name: GATUS_URL
                     value: ""
+                  - name: GATUS_HOST
+                    value: "gatus.{{ ocp_apps_domain }}"
                 readinessProbe:
                   httpGet:
                     path: /healthz
