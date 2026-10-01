@@ -88,7 +88,7 @@
         name: "{{ item }}"
         labels:
           cluster.ocs.openshift.io/openshift-storage: ""
-  loop: "{{ odf_nodes[:3] }}"
+  loop: "{{ odf_nodes }}"
   loop_control:
     label: "{{ item }}"
 
@@ -116,7 +116,7 @@
       spec:
         storageDeviceSets:
           - name: ocs-deviceset
-            count: "{{ odf_device_set_count }}"
+            count: "{{ odf_nodes | length }}"
             replica: "{{ odf_device_set_replica }}"
             dataPVCTemplate:
               spec:

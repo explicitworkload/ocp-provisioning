@@ -32,6 +32,8 @@
           ebpf:
             sampling: 50
             privileged: false
+        loki:
+          enable: false
         consolePlugin:
           register: true
           portNaming:
