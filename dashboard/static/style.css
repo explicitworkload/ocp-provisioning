@@ -79,17 +79,12 @@ header {
 }
 
 .insignia {
-  width: 38px;
-  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--sg-red-dim);
-  border: 1px solid rgba(238, 37, 54, 0.25);
-  border-radius: var(--radius-sm);
 }
 
-.insignia svg { width: 34px; height: 34px; }
+.insignia svg { width: 40px; height: auto; }
 
 .header-title {
   display: flex;
