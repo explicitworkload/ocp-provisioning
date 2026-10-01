@@ -52,3 +52,6 @@
 
     - role: litellm
       tags: [litellm]
+
+    - role: bookinfo_demo
+      tags: [bookinfo, service-mesh-demo]
