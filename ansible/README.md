@@ -94,7 +94,7 @@ A self-service operations dashboard built with Flask and deployed via OpenShift 
 - **Fault injection** — inject delays or HTTP errors into the ratings service to test resilience
 - **Circuit breaker** — limit connections to the reviews service to demonstrate cascading failure prevention
 - **Request timeout & retries** — set timeouts and auto-retries on the reviews service
-- **Platform Admin** — view and scale worker/GPU MachineSets, node status, graceful cluster shutdown including masters (separate page)
+- **Platform Admin** — view and scale worker/GPU MachineSets, node status, cluster shutdown (separate page)
 - **AI Assistant** — summarization and chat with models served via LiteLLM, MCP server discovery and tool use for live cluster interaction (separate page)
 - **Floating task log** — pinned bottom-right panel with live progress, toast notifications for all actions
 - **Help page** — built-in guide with demo scenarios for each feature

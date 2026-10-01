@@ -599,22 +599,7 @@ def platform_shutdown():
                     {"spec": {"replicas": 0}},
                 )
                 scaled.append(ms["name"])
-
-        nodes = k8s_core.list_node()
-        for n in nodes.items:
-            try:
-                k8s_core.patch_node(
-                    n.metadata.name,
-                    {"spec": {"unschedulable": True}},
-                )
-            except Exception:
-                pass
-
-        return jsonify({
-            "status": "graceful shutdown initiated",
-            "scaled": scaled,
-            "cordoned": [n.metadata.name for n in nodes.items],
-        })
+        return jsonify({"status": "shutdown initiated", "scaled": scaled})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

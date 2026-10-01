@@ -119,11 +119,11 @@
     <section class="panel-group">
       <h2 class="section-title"><span class="marker"></span>PLATFORM ADMIN</h2>
       <div class="help-content">
-        <p>The <strong>Platform</strong> page lets you scale worker and GPU MachineSets up or down, and view the current node status. Use the <strong>Graceful Cluster Shutdown</strong> button to scale all MachineSets to 0 and cordon all nodes (including masters).</p>
+        <p>The <strong>Platform</strong> page lets you scale worker and GPU MachineSets up or down, and view the current node status. Use the <strong>Shutdown All Workers</strong> button to scale all worker and GPU MachineSets to 0 replicas. Masters and control plane stay running.</p>
         <div class="help-params">
           <div class="help-param"><span class="param-name">Scale</span> Set the desired replica count for each MachineSet (0 &ndash; 10)</div>
           <div class="help-param"><span class="param-name">Refresh</span> Reload current node and MachineSet status</div>
-          <div class="help-param"><span class="param-name">Shutdown</span> Gracefully shuts down the entire cluster &mdash; scales all MachineSets to 0 and cordons all nodes (requires confirmation)</div>
+          <div class="help-param"><span class="param-name">Shutdown</span> Scales all worker and GPU MachineSets to 0 (requires confirmation). Masters stay up so you can scale back from the dashboard</div>
         </div>
         <div class="help-tip">
           <strong>Demo tip:</strong> Use the Platform page to scale GPU MachineSets from 0 to 1 during a live demo to show on-demand GPU provisioning. New nodes take 5&ndash;10 minutes to become Ready.

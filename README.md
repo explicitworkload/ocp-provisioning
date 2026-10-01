@@ -46,7 +46,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying Qwen3-4B and Azure GPT-4 via reusable credentials
 - Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring
-- Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, graceful cluster shutdown), AI Assistant (summarization, chat with MCP server tool use), floating task log with toast notifications, and sustained traffic generator
+- Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), AI Assistant (summarization, chat with MCP server tool use), floating task log with toast notifications, and sustained traffic generator
 
 ### Quick Start
 

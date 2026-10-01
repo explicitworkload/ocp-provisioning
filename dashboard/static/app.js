@@ -516,8 +516,8 @@ async function scaleMachineSet(name) {
 }
 
 async function shutdownCluster() {
-  if (!confirm("This will gracefully shut down the entire cluster — all MachineSets scaled to 0 and all nodes (including masters) cordoned. Continue?")) return;
-  setStatusBar("platform-status", "INITIATING GRACEFUL SHUTDOWN...", "error");
+  if (!confirm("This will scale ALL worker and GPU MachineSets to 0 replicas. Masters and control plane stay running. Continue?")) return;
+  setStatusBar("platform-status", "SHUTTING DOWN...", "error");
   try {
     var res = await fetch("/api/platform/shutdown", {
       method: "POST",
@@ -525,10 +525,9 @@ async function shutdownCluster() {
     });
     var data = await res.json();
     if (res.ok) {
-      var msg = data.scaled.length + " MachineSets → 0, " + data.cordoned.length + " nodes cordoned";
-      setStatusBar("platform-status", "GRACEFUL SHUTDOWN — " + msg, "error");
-      showToast("Graceful shutdown initiated — " + msg, "error");
-      addPlatformTask("shutdown", "Graceful shutdown — " + msg);
+      setStatusBar("platform-status", "SHUTDOWN INITIATED — " + data.scaled.length + " MACHINESETS SCALED TO 0", "error");
+      showToast("Shutdown initiated — " + data.scaled.length + " MachineSets scaling to 0", "error");
+      addPlatformTask("shutdown", "Shutdown — " + data.scaled.length + " MachineSets → 0");
       setTimeout(refreshPlatform, 5000);
     } else {
       setStatusBar("platform-status", "ERROR: " + data.error, "error");
