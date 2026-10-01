@@ -33,15 +33,15 @@ Deploys the full Istio service mesh stack:
 
 ### Network Observability
 
-Deploys FlowCollector with eBPF agent for network traffic visibility directly in the OpenShift console.
+Deploys FlowCollector with eBPF agent for network traffic visibility directly in the OpenShift console. Loki is disabled (no flow log storage) — metrics-only mode via Prometheus.
 
 ### GPU Worker
 
-Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets. Supports multiple instance types with configurable replica counts (use `replicas: 0` for scale-up-ready MachineSets).
+Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets. Supports multiple instance types with configurable replica counts (use `replicas: 0` for scale-up-ready MachineSets). Creates a dedicated `gpu` MachineConfigPool so GPU nodes get their own update rollout cycle, separate from regular workers.
 
 ### ODF (OpenShift Data Foundation)
 
-Deploys ODF with Ceph storage on existing worker nodes using dynamically provisioned gp3 EBS volumes (1Ti per OSD). Configures NooBaa with PV-pool backing store for object storage. Provides `ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, and NooBaa storage classes.
+Deploys ODF with Ceph storage on all non-GPU worker nodes using dynamically provisioned gp3 EBS volumes (1Ti per OSD). Automatically excludes GPU nodes via label filtering. Device set count scales with the number of eligible workers. Configures NooBaa with PV-pool backing store for object storage. Provides `ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, and NooBaa storage classes.
 
 ### OpenShift AI 3.5
 
@@ -86,14 +86,18 @@ Deploys the Istio Bookinfo sample application with sidecar injection, all four m
 
 ### Operations Dashboard
 
-A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Features:
+A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Password-protected via cluster Secret. Features:
+- **Sidebar navigation** — Dashboard, Platform Admin, Gatus, Help, and Logout
+- **Login page** — session-based authentication with password stored in Kubernetes Secret
 - **Traffic generator** — burst mode (fixed request count) or sustained mode (continuous for up to 60 minutes) with configurable concurrency (1–50 threads)
 - **Traffic shifting** — route traffic across Reviews v1/v2/v3 by percentage for canary deployment demos
 - **Fault injection** — inject delays or HTTP errors into the ratings service to test resilience
 - **Circuit breaker** — limit connections to the reviews service to demonstrate cascading failure prevention
 - **Request timeout & retries** — set timeouts and auto-retries on the reviews service
+- **Platform Admin** — view and scale worker/GPU MachineSets, node status, cluster shutdown (separate page)
+- **Floating task log** — pinned bottom-right panel with live progress, toast notifications for all actions
 - **Help page** — built-in guide with demo scenarios for each feature
-- Links to Gatus health monitor, task log with live progress bars
+- Links to Gatus health monitor
 
 ### Gatus
 
@@ -160,6 +164,7 @@ All variables are in `group_vars/all.yml`:
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
+| `dashboard_password` | (empty) | Dashboard login password (pass at runtime, not in repo) |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 
 ## Quay without ODF
