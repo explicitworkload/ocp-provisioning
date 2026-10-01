@@ -584,13 +584,26 @@ async function refreshAiModels() {
       setStatusBar("ai-model-status", "NO MODELS", "error");
       return;
     }
+    var healthyCount = 0;
     data.models.forEach(function (m) {
       var opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = m;
+      opt.value = m.id;
+      opt.textContent = m.id + (m.healthy ? "" : " (unavailable)");
+      if (!m.healthy) {
+        opt.style.color = "#f87171";
+        opt.disabled = true;
+      } else {
+        healthyCount++;
+      }
       select.appendChild(opt);
     });
-    setStatusBar("ai-model-status", data.models.length + " MODEL(S) AVAILABLE", "active");
+    if (healthyCount === 0) {
+      setStatusBar("ai-model-status", data.models.length + " MODEL(S) — ALL UNAVAILABLE", "error");
+    } else {
+      var firstHealthy = data.models.find(function (m) { return m.healthy; });
+      if (firstHealthy) select.value = firstHealthy.id;
+      setStatusBar("ai-model-status", healthyCount + "/" + data.models.length + " MODEL(S) AVAILABLE", "active");
+    }
   } catch (e) {
     setStatusBar("ai-model-status", "ERROR: " + e.message, "error");
   }

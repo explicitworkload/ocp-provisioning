@@ -738,7 +738,23 @@ def ai_models():
         )
         r.raise_for_status()
         models = r.json().get("data", [])
-        return jsonify({"models": [m["id"] for m in models]})
+        results = []
+        for m in models:
+            model_id = m["id"]
+            healthy = True
+            try:
+                probe = http_requests.post(
+                    f"{LITELLM_URL}/v1/chat/completions",
+                    headers=_llm_headers(),
+                    json={"model": model_id, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                    timeout=10,
+                )
+                if probe.status_code >= 500:
+                    healthy = False
+            except Exception:
+                healthy = False
+            results.append({"id": model_id, "healthy": healthy})
+        return jsonify({"models": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
