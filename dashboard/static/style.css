@@ -152,6 +152,29 @@ h1 {
 
 .status-pill.online::before { background: var(--green-500); }
 
+.help-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.help-btn:hover {
+  border-color: var(--green-500);
+  color: var(--green-400);
+  background: var(--green-900);
+}
+
 /* === MAIN === */
 main {
   position: relative;
@@ -534,6 +557,86 @@ footer a {
 }
 
 footer a:hover { color: var(--text-primary); }
+
+/* === HELP PAGE === */
+.help-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-card);
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+
+.help-content p { margin-bottom: 12px; }
+.help-content p:last-child { margin-bottom: 0; }
+
+.help-content strong { color: var(--text-primary); font-weight: 600; }
+
+.help-content h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 20px 0 8px;
+  letter-spacing: 0.3px;
+}
+
+.help-content h3:first-child { margin-top: 0; }
+
+.help-content ul {
+  padding-left: 20px;
+  margin-bottom: 12px;
+}
+
+.help-content li { margin-bottom: 6px; }
+
+.help-content code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-base);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  color: var(--green-400);
+}
+
+.help-params {
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.help-param {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding-left: 12px;
+  border-left: 2px solid var(--border-default);
+}
+
+.param-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-right: 8px;
+  letter-spacing: 0.5px;
+}
+
+.help-tip {
+  margin-top: 16px;
+  padding: 14px 18px;
+  background: var(--green-900);
+  border: 1px solid var(--green-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.help-tip strong { color: var(--green-400); }
 
 /* === SCROLLBAR === */
 ::-webkit-scrollbar { width: 5px; }

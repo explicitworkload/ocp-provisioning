@@ -202,6 +202,11 @@ def index():
     return render_template("index.html", gatus_url=GATUS_URL)
 
 
+@app.route("/help")
+def help_page():
+    return render_template("help.html")
+
+
 @app.route("/api/traffic/bookinfo", methods=["POST"])
 def generate_bookinfo_traffic():
     body = request.get_json(silent=True) or {}

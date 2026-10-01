@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPS DASHBOARD — Help</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="insignia">
+        <svg viewBox="0 0 192 145" xmlns="http://www.w3.org/2000/svg">
+          <path d="M157.77,62.61a14,14,0,0,1,.31,3.42c0,14.88-18.1,17.46-30.61,17.46C78.83,83.49,42.53,53.26,42.53,44a6.43,6.43,0,0,1,.22-1.94l-3.66,9.06a18.45,18.45,0,0,0-1.51,7.33c0,18.11,41,45.48,87.74,45.48,20.69,0,36.43-7.76,36.43-21.77,0-1.08,0-1.94-1.73-10.13Z" fill="#a30000"/>
+          <path d="M127.47,83.49c12.51,0,30.61-2.58,30.61-17.46a14,14,0,0,0-.31-3.42l-7.45-32.36c-1.72-7.12-3.23-10.35-15.73-16.6C124.89,8.69,103.76.5,97.51.5,91.69.5,90,8,83.06,8c-6.68,0-11.64-5.6-17.89-5.6-6,0-9.91,4.09-12.93,12.5,0,0-8.41,23.72-9.49,27.16A6.43,6.43,0,0,0,42.53,44c0,9.22,36.3,39.45,84.94,39.45M160,72.07c1.73,8.19,1.73,9.05,1.73,10.13,0,14-15.74,21.77-36.43,21.77C78.54,104,37.58,76.6,37.58,58.49a18.45,18.45,0,0,1,1.51-7.33C22.27,52,.5,55,.5,74.22c0,31.48,74.59,70.28,133.65,70.28,45.28,0,56.7-20.48,56.7-36.65,0-12.72-11-27.16-30.83-35.78" fill="#e00"/>
+        </svg>
+      </div>
+      <div class="header-title">
+        <h1>Operations Dashboard</h1>
+        <span class="subtitle">Help Guide</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <a href="/" class="help-btn" title="Back to Dashboard">&larr;</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>OVERVIEW</h2>
+      <div class="help-content">
+        <p>This dashboard provides self-service controls for demonstrating <strong>OpenShift Service Mesh 3</strong> capabilities using the <strong>Bookinfo</strong> sample application. The Bookinfo app consists of four microservices:</p>
+        <ul>
+          <li><strong>productpage</strong> — the frontend, calls details and reviews</li>
+          <li><strong>details</strong> — book details</li>
+          <li><strong>reviews</strong> — book reviews (3 versions: v1 = no stars, v2 = black stars, v3 = red stars)</li>
+          <li><strong>ratings</strong> — star ratings, called by reviews v2 and v3</li>
+        </ul>
+        <p>All services run with Istio sidecar proxies that intercept traffic. The controls below let you manipulate how traffic flows through the mesh without modifying any application code.</p>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>TRAFFIC GENERATOR</h2>
+      <div class="help-content">
+        <h3>Burst Mode</h3>
+        <p>Sends a fixed number of HTTP requests to the Bookinfo productpage. Use this to quickly populate the Kiali traffic graph.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Requests</span> Number of requests to send (1 &ndash; 10,000)</div>
+          <div class="help-param"><span class="param-name">Concurrency</span> Parallel threads (1 &ndash; 50). Higher = faster completion</div>
+        </div>
+
+        <h3>Sustained Mode</h3>
+        <p>Sends continuous traffic for a set duration. Ideal for keeping the Kiali graph active during a live demo, or for observing the effect of mesh policies over time.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Duration</span> How long to run, in minutes (1 &ndash; 60)</div>
+          <div class="help-param"><span class="param-name">Concurrency</span> Parallel threads. Controls request rate</div>
+          <div class="help-param"><span class="param-name">Stop</span> Ends sustained traffic early</div>
+        </div>
+
+        <div class="help-tip">
+          <strong>Demo tip:</strong> Start 15 min sustained traffic at concurrency 10, then switch to the Kiali Traffic Graph to show a live service map with request rates, latency, and success rates on each edge.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>TRAFFIC SHIFTING</h2>
+      <div class="help-content">
+        <p>Controls what percentage of traffic goes to each version of the <strong>reviews</strong> service. This is how you do canary deployments or A/B testing with a service mesh &mdash; no redeployment needed.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">v1 / v2 / v3</span> Weight percentages. Must sum to 100%</div>
+        </div>
+        <p>Under the hood, this creates an Istio <code>VirtualService</code> with weighted routes and a <code>DestinationRule</code> with subsets for each version.</p>
+
+        <div class="help-tip">
+          <strong>Demo scenario:</strong> Start with v1=100 (no stars shown). Then shift to v1=50, v3=50. Refresh the Bookinfo page multiple times &mdash; you'll see it alternate between no stars and red stars. Kiali graph will show the split visually.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>FAULT INJECTION</h2>
+      <div class="help-content">
+        <p>Injects failures into the <strong>ratings</strong> service to test how the application handles errors &mdash; without modifying any code or crashing any pods.</p>
+
+        <h3>Delay Mode</h3>
+        <p>Adds artificial latency to responses from ratings. Reviews v2 and v3 call ratings, so they'll slow down. Reviews v1 doesn't call ratings, so it's unaffected.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Delay (ms)</span> Latency to add (e.g., 5000 = 5 seconds)</div>
+          <div class="help-param"><span class="param-name">%</span> Percentage of requests affected (100% = all requests)</div>
+        </div>
+
+        <h3>Abort Mode</h3>
+        <p>Returns an HTTP error code instead of a real response. Simulates a service outage.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">HTTP Status</span> Error code to return (e.g., 500, 503)</div>
+          <div class="help-param"><span class="param-name">%</span> Percentage of requests affected</div>
+        </div>
+
+        <div class="help-tip">
+          <strong>Demo scenario:</strong> Inject a 5s delay at 100%. Open Bookinfo &mdash; the page loads slowly because reviews is waiting on ratings. Then show Kiali &mdash; the edge from reviews to ratings will show high latency (red). Reset and inject an HTTP 503 abort &mdash; now reviews shows "Ratings service is currently unavailable" in the UI, and Kiali shows 5xx errors on the ratings edge.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>CIRCUIT BREAKER</h2>
+      <div class="help-content">
+        <p>Limits the number of connections and requests to the <strong>reviews</strong> service. When limits are exceeded, the mesh rejects additional requests immediately (HTTP 503) instead of queuing them &mdash; preventing cascading failures.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Max Conn</span> Maximum TCP connections allowed</div>
+          <div class="help-param"><span class="param-name">Pending</span> Maximum queued requests waiting for a connection</div>
+          <div class="help-param"><span class="param-name">Requests</span> Maximum concurrent HTTP requests</div>
+        </div>
+        <p>Also enables outlier detection: if a reviews pod returns consecutive 5xx errors, it's temporarily ejected from the load-balancing pool.</p>
+
+        <div class="help-tip">
+          <strong>Demo scenario:</strong> Set all limits to 1, then launch burst traffic with concurrency 20. Many requests will fail with 503 because the circuit breaker trips. Show the increased error rate in Kiali. Then increase limits to 50 and re-run &mdash; all requests succeed.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>REQUEST TIMEOUT &amp; RETRIES</h2>
+      <div class="help-content">
+        <p>Sets a maximum wait time and automatic retries for requests to the <strong>reviews</strong> service.</p>
+        <div class="help-params">
+          <div class="help-param"><span class="param-name">Timeout</span> Max time to wait for a response (e.g., "3s", "500ms")</div>
+          <div class="help-param"><span class="param-name">Retries</span> Number of automatic retry attempts on failure</div>
+          <div class="help-param"><span class="param-name">Per Try</span> Timeout for each individual retry attempt</div>
+        </div>
+
+        <div class="help-tip">
+          <strong>Demo scenario:</strong> First, inject a 5s delay on ratings. Then set a 1s timeout on reviews with 2 retries. Now Bookinfo loads fast (doesn't hang for 5s) because the timeout kicks in and reviews returns without waiting for ratings. Kiali will show the timeout errors and retry attempts on the graph edges.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>RESET ALL</h2>
+      <div class="help-content">
+        <p>The <strong>Reset All Mesh Policies</strong> button at the bottom of the Service Mesh Controls section removes all VirtualServices and DestinationRules created by this dashboard, returning the mesh to its default round-robin behaviour. Each card also has its own individual Reset button.</p>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>COMPANION TOOLS</h2>
+      <div class="help-content">
+        <ul>
+          <li><strong>Kiali</strong> &mdash; Service mesh observability. Use the Traffic Graph tab to visualise traffic flow, latency, and error rates in real time.</li>
+          <li><strong>Bookinfo</strong> &mdash; The sample application. Open it in a browser and refresh to see the effects of traffic shifting and fault injection.</li>
+          <li><strong>Gatus</strong> &mdash; Health monitoring dashboard showing the status of all cluster services.</li>
+          <li><strong>OpenShift Console</strong> &mdash; Cluster management UI with Network Observability and ODF storage views.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>OPS DASHBOARD v1.0</span>
+    <span>Built by <a href="mailto:jgoh@redhat.com">jgoh@redhat.com</a> | <a href="https://github.com/explicitworkload" target="_blank">github.com/explicitworkload</a></span>
+  </footer>
+</body>
+</html>
