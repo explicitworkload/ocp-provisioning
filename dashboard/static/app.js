@@ -687,56 +687,6 @@ function getEnabledMcpUrls() {
   return urls;
 }
 
-async function runSummarize() {
-  var input = document.getElementById("summarize-input");
-  var output = document.getElementById("summarize-output");
-  var btn = document.getElementById("btn-summarize");
-  var tokens = document.getElementById("summarize-tokens");
-  var model = getSelectedModel();
-  if (!model) { showToast("Select a model first", "error"); return; }
-  if (!input.value.trim()) { showToast("Enter text to summarize", "error"); return; }
-
-  btn.disabled = true;
-  output.style.display = "none";
-  setStatusBar("summarize-status", "PROCESSING...", "active");
-
-  try {
-    var res = await fetch("/api/ai/summarize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: input.value, model: model }),
-    });
-    var data = await res.json();
-    if (!res.ok) {
-      setStatusBar("summarize-status", "ERROR: " + (data.error || "unknown"), "error");
-      showToast("Summarize error: " + (data.error || "unknown"), "error");
-      btn.disabled = false;
-      return;
-    }
-    output.textContent = data.summary;
-    output.style.display = "block";
-    if (tokens) {
-      tokens.textContent = data.usage.prompt_tokens + " in / " + data.usage.completion_tokens + " out tokens";
-    }
-    setStatusBar("summarize-status", "COMPLETE — " + data.model, "active");
-    showToast("Summary generated", "success");
-  } catch (e) {
-    setStatusBar("summarize-status", "ERROR: " + e.message, "error");
-    showToast("Summarize error: " + e.message, "error");
-  }
-  btn.disabled = false;
-}
-
-function clearSummarize() {
-  var input = document.getElementById("summarize-input");
-  var output = document.getElementById("summarize-output");
-  var tokens = document.getElementById("summarize-tokens");
-  if (input) input.value = "";
-  if (output) { output.textContent = ""; output.style.display = "none"; }
-  if (tokens) tokens.textContent = "";
-  setStatusBar("summarize-status", "STANDBY", "");
-}
-
 function renderChatMessages() {
   var container = document.getElementById("chat-messages");
   if (!container) return;
@@ -773,9 +723,15 @@ async function sendChat() {
   var model = getSelectedModel();
   if (!model) { showToast("Select a model first", "error"); return; }
   var text = input.value.trim();
-  if (!text) return;
+  if (!text && !pendingAttachment) return;
 
-  chatHistory.push({ role: "user", content: text });
+  var content = text;
+  if (pendingAttachment) {
+    content = (text ? text + "\n\n" : "") + "--- Attached file: " + pendingAttachment.name + " ---\n" + pendingAttachment.content;
+    removeAttachment();
+  }
+
+  chatHistory.push({ role: "user", content: content });
   input.value = "";
   renderChatMessages();
   btn.disabled = true;
@@ -818,6 +774,35 @@ async function sendChat() {
     showToast("Chat error: " + e.message, "error");
   }
   btn.disabled = false;
+}
+
+var pendingAttachment = null;
+
+function handleFileAttach(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var maxSize = 512 * 1024;
+  if (file.size > maxSize) {
+    showToast("File too large (max 512 KB)", "error");
+    input.value = "";
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function (e) {
+    pendingAttachment = { name: file.name, content: e.target.result };
+    var el = document.getElementById("chat-attachment");
+    var nameEl = document.getElementById("chat-attachment-name");
+    if (el) el.style.display = "flex";
+    if (nameEl) nameEl.textContent = file.name;
+  };
+  reader.readAsText(file);
+  input.value = "";
+}
+
+function removeAttachment() {
+  pendingAttachment = null;
+  var el = document.getElementById("chat-attachment");
+  if (el) el.style.display = "none";
 }
 
 function chatKeydown(e) {

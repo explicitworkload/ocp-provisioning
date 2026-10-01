@@ -42,31 +42,6 @@
     </section>
 
     <section class="panel-group">
-      <h2 class="section-title"><span class="marker"></span>SUMMARIZATION</h2>
-      <div class="grid">
-        <div class="card">
-          <div class="card-header">
-            <span class="card-icon">&#9998;</span>
-            Text Summarizer
-          </div>
-          <div class="card-body">
-            <p class="card-desc">Paste text and get a concise summary from the selected model.</p>
-            <textarea id="summarize-input" class="ai-textarea" rows="6" placeholder="Paste text here to summarize..."></textarea>
-            <div class="input-row">
-              <button class="btn btn-primary" id="btn-summarize" onclick="runSummarize()">
-                <span class="btn-icon">&#9654;</span> Summarize
-              </button>
-              <button class="btn btn-reset" onclick="clearSummarize()">Clear</button>
-              <span class="ai-token-count" id="summarize-tokens"></span>
-            </div>
-            <div id="summarize-output" class="ai-output" style="display:none"></div>
-          </div>
-          <div class="card-footer" id="summarize-status">STANDBY</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel-group">
       <h2 class="section-title"><span class="marker"></span>CHAT</h2>
       <div class="grid">
         <div class="card">
@@ -78,7 +53,15 @@
             <div id="chat-messages" class="chat-messages">
               <div class="chat-empty">Start a conversation with the model</div>
             </div>
+            <div id="chat-attachment" class="chat-attachment" style="display:none">
+              <span class="chat-attachment-name" id="chat-attachment-name"></span>
+              <button class="chat-attachment-remove" onclick="removeAttachment()">&times;</button>
+            </div>
             <div class="chat-input-row">
+              <label class="btn-attach" title="Attach file">
+                <input type="file" id="chat-file" style="display:none" onchange="handleFileAttach(this)" accept=".txt,.md,.log,.json,.yaml,.yml,.xml,.csv,.pdf,.py,.js,.html,.css,.sh,.go,.java,.rs">
+                &#128206;
+              </label>
               <textarea id="chat-input" class="ai-textarea chat-textarea" rows="2" placeholder="Type your message..." onkeydown="chatKeydown(event)"></textarea>
               <button class="btn btn-primary chat-send" id="btn-chat" onclick="sendChat()">
                 <span class="btn-icon">&#9654;</span>

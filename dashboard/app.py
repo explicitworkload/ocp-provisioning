@@ -743,48 +743,6 @@ def ai_models():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/ai/summarize", methods=["POST"])
-@login_required
-def ai_summarize():
-    body = request.get_json(silent=True) or {}
-    text = body.get("text", "").strip()
-    model = body.get("model", "")
-    if not text:
-        return jsonify({"error": "text is required"}), 400
-    if not model:
-        return jsonify({"error": "model is required"}), 400
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant. Summarize the following text concisely. Return only the summary, no preamble."},
-            {"role": "user", "content": text},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 1024,
-    }
-
-    try:
-        r = http_requests.post(
-            f"{LITELLM_URL}/v1/chat/completions",
-            headers=_llm_headers(), json=payload, timeout=60,
-        )
-        r.raise_for_status()
-        data = r.json()
-        summary = data["choices"][0]["message"]["content"]
-        usage = data.get("usage", {})
-        return jsonify({
-            "summary": summary,
-            "model": data.get("model", model),
-            "usage": {
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-            },
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/ai/chat", methods=["POST"])
 @login_required
 def ai_chat():

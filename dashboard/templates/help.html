@@ -137,16 +137,13 @@
         <p>The <strong>AI</strong> page provides access to models served by OpenShift AI via LiteLLM, and MCP (Model Context Protocol) servers discovered from the cluster.</p>
 
         <h3>Model Selection</h3>
-        <p>Choose from available models served through LiteLLM (e.g., Qwen3-4B on-cluster, Azure GPT-4). The selected model is used for both summarization and chat.</p>
+        <p>Choose from available models served through LiteLLM (e.g., Qwen3-4B on-cluster, Azure GPT-4). The selected model is used for chat.</p>
 
         <h3>MCP Servers</h3>
         <p>Toggle MCP servers on or off. When enabled, their tools are injected into chat requests &mdash; the model can call them to retrieve live cluster data (e.g., listing pods, checking resource status). Tools are discovered automatically from the MCPServer CRDs in the cluster.</p>
 
-        <h3>Summarization</h3>
-        <p>Paste text and get a concise summary from the selected model. Useful for summarizing logs, documentation, or long outputs.</p>
-
         <h3>Chat</h3>
-        <p>Interactive conversation with the model. When MCP servers are enabled, the model can call cluster tools mid-conversation and incorporate live data into its responses. Supports multi-turn conversations with full history.</p>
+        <p>Interactive conversation with the model. Supports file uploads (documents, audio, video) for context. When MCP servers are enabled, the model can call cluster tools mid-conversation and incorporate live data into its responses. Supports multi-turn conversations with full history.</p>
 
         <div class="help-tip">
           <strong>Demo tip:</strong> Enable the OpenShift MCP server, then ask the model "What pods are running in the bookinfo namespace?" &mdash; it will call the MCP server tools to fetch live cluster data and respond with the actual state.
