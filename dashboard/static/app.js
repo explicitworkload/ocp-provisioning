@@ -12,6 +12,7 @@ let pollInterval = null;
 async function launchTraffic() {
   const btn = document.getElementById("btn-traffic");
   const count = parseInt(document.getElementById("traffic-count").value) || 100;
+  const concurrency = parseInt(document.getElementById("traffic-concurrency").value) || 10;
   const footer = document.getElementById("traffic-status");
 
   btn.disabled = true;
@@ -22,7 +23,7 @@ async function launchTraffic() {
     const res = await fetch("/api/traffic/bookinfo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count }),
+      body: JSON.stringify({ count, concurrency }),
     });
     const task = await res.json();
     footer.textContent = "TASK " + task.id.toUpperCase() + " DISPATCHED";
