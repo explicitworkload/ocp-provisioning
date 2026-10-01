@@ -640,6 +640,27 @@ input[type="text"].input-text:focus {
 .log-bar.running { background: var(--amber-500); }
 .log-bar.queued { background: var(--text-muted); }
 
+.btn-log-stop {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: transparent;
+  color: var(--red-400);
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.btn-log-stop:hover {
+  background: var(--red-900);
+  border-color: var(--red-500);
+}
+
 /* === TOAST NOTIFICATIONS === */
 .toast-container {
   position: fixed;

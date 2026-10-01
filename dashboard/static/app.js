@@ -111,9 +111,14 @@ async function launchSustained() {
 
 async function stopTraffic() {
   if (!activeTaskId) return;
+  await stopTaskById(activeTaskId);
+}
+
+async function stopTaskById(taskId) {
   try {
-    await fetch("/api/traffic/stop/" + activeTaskId, { method: "POST" });
-    document.getElementById("traffic-status").textContent = "STOPPING...";
+    await fetch("/api/traffic/stop/" + taskId, { method: "POST" });
+    var footer = document.getElementById("traffic-status");
+    if (footer) footer.textContent = "STOPPING...";
     showToast("Stopping sustained traffic...", "info");
   } catch (e) { /* ignore */ }
 }
@@ -146,8 +151,12 @@ async function refreshTasks() {
     }
     previousTaskCount = tasks.filter(function (t) { return t.status === "complete"; }).length;
 
-    // Update badge
+    // Track active sustained task from server state
     var running = tasks.filter(function (t) { return t.status === "running"; });
+    var activeSustained = running.find(function (t) { return t.duration; });
+    if (activeSustained) activeTaskId = activeSustained.id;
+
+    // Update badge
     var badge = document.getElementById("task-badge");
     if (badge) {
       if (running.length > 0) {
@@ -226,11 +235,16 @@ function renderTaskLog(tasks) {
       }
 
       var statusClass = t.status;
+      var stopBtn = "";
+      if (t.status === "running" && t.duration) {
+        stopBtn = '<button class="btn-log-stop" onclick="stopTaskById(\'' + t.id + '\')">&#9632;</button>';
+      }
       return (
         '<div class="log-entry">' +
         '<div class="log-status ' + statusClass + '"></div>' +
         '<span class="log-type">' + (t.type || "task").toUpperCase() + "</span>" +
         '<span class="log-detail">' + detail + "</span>" +
+        stopBtn +
         '<div class="log-bar-wrap"><div class="log-bar ' + statusClass + '" style="width:' + pct + '%"></div></div>' +
         '<span class="log-time">' + time + "</span>" +
         "</div>"
