@@ -3,6 +3,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Namespace
@@ -15,6 +16,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: operators.coreos.com/v1
       kind: OperatorGroup
@@ -29,6 +31,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: operators.coreos.com/v1alpha1
       kind: Subscription
@@ -99,6 +102,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Node
@@ -125,6 +129,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: ocs.openshift.io/v1
       kind: StorageCluster
@@ -400,6 +405,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: noobaa.io/v1alpha1
       kind: BackingStore
@@ -447,6 +453,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: noobaa.io/v1alpha1
       kind: BucketClass

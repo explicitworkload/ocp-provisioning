@@ -3,6 +3,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Namespace
@@ -13,6 +14,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: ServiceAccount
@@ -24,6 +26,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
@@ -44,6 +47,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -90,6 +94,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Secret
@@ -109,6 +114,7 @@
       kubernetes.core.k8s:
         context: "{{ ocp_context }}"
         state: present
+        apply: true
         definition:
           apiVersion: apps/v1
           kind: Deployment

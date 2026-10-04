@@ -3,6 +3,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Namespace
@@ -15,6 +16,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: ServiceAccount
@@ -31,6 +33,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Service
@@ -55,6 +58,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -87,6 +91,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -119,6 +124,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -155,6 +161,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -187,6 +194,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: route.openshift.io/v1
       kind: Route
@@ -231,6 +239,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: monitoring.coreos.com/v1
       kind: PodMonitor
@@ -258,6 +267,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: networking.istio.io/v1
       kind: DestinationRule
@@ -278,6 +288,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: networking.istio.io/v1
       kind: VirtualService

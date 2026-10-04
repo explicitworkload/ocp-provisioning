@@ -30,6 +30,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: nvidia.com/v1
       kind: ClusterPolicy

@@ -3,6 +3,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Namespace
@@ -13,6 +14,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: image.openshift.io/v1
       kind: ImageStream
@@ -24,6 +26,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: build.openshift.io/v1
       kind: BuildConfig
@@ -67,6 +70,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
@@ -81,6 +85,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
@@ -107,6 +112,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
@@ -121,6 +127,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -139,6 +146,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -160,6 +168,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -178,6 +187,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -206,6 +216,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Secret
@@ -227,6 +238,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Secret
@@ -268,6 +280,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Secret
@@ -283,6 +296,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: apps/v1
       kind: Deployment
@@ -360,6 +374,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Service
@@ -378,6 +393,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: route.openshift.io/v1
       kind: Route
@@ -398,6 +414,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: route.openshift.io/v1
       kind: Route

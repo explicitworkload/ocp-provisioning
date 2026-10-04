@@ -49,6 +49,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Secret
@@ -81,6 +82,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: quay.redhat.com/v1
       kind: QuayRegistry
@@ -130,6 +132,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: quay.redhat.com/v1
       kind: QuayRegistry

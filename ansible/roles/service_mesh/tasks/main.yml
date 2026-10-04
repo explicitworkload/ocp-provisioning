@@ -19,6 +19,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Namespace
@@ -29,6 +30,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: sailoperator.io/v1
       kind: IstioCNI
@@ -59,6 +61,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: sailoperator.io/v1
       kind: Istio
@@ -105,6 +108,10 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    # Without apply, this is a merge patch: fields removed from the manifest
+    # survive on the live object. Dropping a bad networking override here
+    # would silently no-op, so make the role authoritative over the spec.
+    apply: true
     definition:
       apiVersion: kiali.io/v1alpha1
       kind: Kiali
@@ -118,17 +125,20 @@
           namespace: "{{ service_mesh_namespace }}"
           accessible_namespaces:
             - "**"
-          # Pin the Route host. Without this the operator names it
-          # kiali-<namespace>.<domain>, which would not match the web_fqdn
-          # below — Kiali builds its OAuth redirect from web_fqdn, so the
-          # login flow would bounce to a hostname no Route serves.
-          ingress:
-            enabled: true
-            override_yaml:
-              spec:
-                host: "kiali.{{ ocp_apps_domain }}"
+        # Do not set deployment.ingress or server.web_fqdn here.
+        #
+        # Setting deployment.ingress switches the operator to its Kubernetes
+        # Ingress path (class_name defaults to nginx) and it then creates no
+        # OpenShift Route at all. With no Route there is no OAuth redirect
+        # URI, so the operator never creates the kiali-<namespace>
+        # OAuthClient and Kiali crash-loops on "oauthclients ... not found".
+        #
+        # Setting web_fqdn alone is equally wrong: it only tells Kiali its
+        # public name, so the OAuth redirect points at a host the router does
+        # not serve. Letting the operator own both keeps the Route, the
+        # OAuthClient and the redirect consistent. Kiali is served at
+        # kiali-<namespace>.<apps-domain>.
         server:
-          web_fqdn: "kiali.{{ ocp_apps_domain }}"
           web_port: ""
           web_root: /
           web_schema: https
@@ -152,6 +162,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: kiali.io/v1alpha1
       kind: OSSMConsole
@@ -167,6 +178,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -185,6 +197,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: monitoring.coreos.com/v1
       kind: PodMonitor
@@ -207,6 +220,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: monitoring.coreos.com/v1
       kind: ServiceMonitor

@@ -15,6 +15,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     kind: Console
     api_version: operator.openshift.io/v1
     name: cluster

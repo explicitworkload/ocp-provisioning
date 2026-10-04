@@ -29,6 +29,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
   loop: "{{ gpu_machinesets }}"
   loop_control:
@@ -64,6 +65,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: v1
       kind: Node
@@ -83,6 +85,7 @@
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
+    apply: true
     definition:
       apiVersion: machineconfiguration.openshift.io/v1
       kind: MachineConfigPool
