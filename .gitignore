@@ -61,3 +61,10 @@ ansible/collections/
 ansible/vault-password*
 ansible/**/secrets.yml
 ansible/**/vault.yml
+
+# Python virtualenvs. Note: running `python3 -m venv .` in a project root
+# overwrites that root's .gitignore with venv's own (a single `*`), silently
+# disabling every rule above — always create it in a subdirectory.
+.venv/
+venv/
+pyvenv.cfg

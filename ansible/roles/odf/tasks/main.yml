@@ -188,6 +188,37 @@
   delay: 15
   until: noobaa_patch is succeeded
 
+- name: Wait for BackingStore CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: backingstores.noobaa.io
+  register: bs_crd
+  until: bs_crd.resources | length > 0
+  retries: 30
+  delay: 15
+
+- name: Create PV pool backing store for NooBaa
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: noobaa.io/v1alpha1
+      kind: BackingStore
+      metadata:
+        name: noobaa-pv-backing-store
+        namespace: "{{ odf_namespace }}"
+      spec:
+        type: pv-pool
+        pvPool:
+          numVolumes: 1
+          storageClass: "{{ odf_storage_class }}"
+          resources:
+            requests:
+              storage: 50Gi
+
 # ---------------------------------------------------------------------------
 # Workaround for an MCG bug observed on ODF 4.22.5-rhodf.
 #
@@ -205,7 +236,55 @@
 # Guarded by an explicit state check, so it is inert once the operator is
 # fixed. Set odf_fix_noobaa_cnpg=false to skip it entirely.
 # ---------------------------------------------------------------------------
-- name: Wait for NooBaa to settle (ready, or stranded by the CNPG bug)
+# Placement matters. NooBaa reaches Ready against the StatefulSet DB *before*
+# CNPG is created and core is repointed, so a transient Ready proves nothing —
+# an earlier version of this check gated on it and skipped the repair every
+# time.
+#
+# If the failure signature is already present there is nothing to wait for, so
+# check first and go straight to the repair. Otherwise gate on the PV-pool
+# backing store, which can only connect once NooBaa genuinely works. A timeout
+# there is a signal, not an error.
+- name: Check whether NooBaa is already stranded
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: "{{ odf_namespace }}"
+    name: noobaa
+  register: nb_pre
+  when: odf_fix_noobaa_cnpg | bool
+
+- name: Record the early stranded signal
+  ansible.builtin.set_fact:
+    noobaa_stranded_early: >-
+      {{ odf_fix_noobaa_cnpg | bool
+         and nb_pre.resources | default([]) | length > 0
+         and 'account not found' in (
+               nb_pre.resources[0].status.conditions | default([])
+               | selectattr('type', 'equalto', 'Available')
+               | map(attribute='message') | join(' ')
+             ) }}
+
+- name: Wait for the backing store to settle
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    namespace: "{{ odf_namespace }}"
+    name: noobaa-pv-backing-store
+  register: bs_settle
+  until: >-
+    bs_settle.resources | length > 0 and
+    bs_settle.resources[0].status.phase | default('') == 'Ready'
+  retries: 24
+  delay: 15
+  failed_when: false
+  when:
+    - odf_fix_noobaa_cnpg | bool
+    - not noobaa_stranded_early | bool
+
+- name: Read NooBaa after settling
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
     api_version: noobaa.io/v1alpha1
@@ -213,30 +292,20 @@
     namespace: "{{ odf_namespace }}"
     name: noobaa
   register: nb_cr
-  until: >-
-    nb_cr.resources | length > 0 and (
-      nb_cr.resources[0].status.phase | default('') == 'Ready'
-      or 'account not found' in (
-        nb_cr.resources[0].status.conditions | default([])
-        | selectattr('type', 'equalto', 'Available') | map(attribute='message')
-        | join(' ')
-      )
-    )
-  retries: 40
-  delay: 15
   when: odf_fix_noobaa_cnpg | bool
 
 - name: Record whether NooBaa is stranded
   ansible.builtin.set_fact:
     noobaa_stranded: >-
-      {{ odf_fix_noobaa_cnpg | bool
+      {{ noobaa_stranded_early | bool or (
+         odf_fix_noobaa_cnpg | bool
          and nb_cr.resources | default([]) | length > 0
          and nb_cr.resources[0].status.phase | default('') != 'Ready'
          and 'account not found' in (
                nb_cr.resources[0].status.conditions | default([])
                | selectattr('type', 'equalto', 'Available')
                | map(attribute='message') | join(' ')
-             ) }}
+             )) }}
 
 - name: Repair the stranded NooBaa system
   when: noobaa_stranded | bool
@@ -257,26 +326,27 @@
         msg: "NooBaa is stranded but no CNPG primary pod was found — repair manually."
       when: cnpg_primary.resources | length == 0
 
+    # Literal block (|) with one command per line. A folded scalar (>-) keeps
+    # newlines on more-indented continuation lines, which silently split
+    # "oc exec ... --" from its command and ran psql on the control node.
     - name: Confirm the data really is stranded before touching anything
       ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail;
-          old=$(oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }} noobaa-db-pg-0 --
-            psql -U postgres -d nbcore -t -A -c "select count(*) from systems");
-          new=$(oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }}
-            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
-            psql -U postgres -d nbcore -t -A -c "select count(*) from systems");
-          echo "$old $new"
         executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          old=$($OC exec noobaa-db-pg-0 -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null)
+          new=$($OC exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null)
+          echo "$old $new"
       register: nb_counts
       changed_when: false
 
     - name: Abort repair unless the old DB has a system and CNPG has none
       ansible.builtin.fail:
         msg: >-
-          Unexpected database state ({{ nb_counts.stdout }} = old/new system
-          count). Expected the old StatefulSet DB to hold the system and CNPG
-          to be empty. Repair manually.
+          Unexpected database state ({{ nb_counts.stdout | trim }} = old/new
+          system count). Expected the old StatefulSet DB to hold the system and
+          CNPG to be empty. Repair manually.
       when: nb_counts.stdout.split() | map('int') | list != [1, 0]
 
     - name: Scale down the NooBaa writers
@@ -316,37 +386,28 @@
 
     - name: Dump the stranded system from the StatefulSet database
       ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail;
-          oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }} noobaa-db-pg-0 --
-          pg_dump -U postgres -d nbcore --data-only --disable-triggers
-          {{ odf_noobaa_tables | map('regex_replace', '^', '-t public.') | join(' ') }}
-          > {{ nb_dump.path | quote }}
         executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec noobaa-db-pg-0 -- pg_dump -U postgres -d nbcore --data-only --disable-triggers {{ odf_noobaa_tables | map('regex_replace', '^', '-t public.') | join(' ') }} </dev/null > {{ nb_dump.path | quote }}
       changed_when: true
 
     - name: Load it into the CNPG primary
       ansible.builtin.shell:
-        cmd: >-
-          set -o pipefail;
-          oc --context {{ ocp_context | quote }} exec -i -n {{ odf_namespace }}
-            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
-            psql -U postgres -d nbcore
-            -c "TRUNCATE {{ odf_noobaa_tables | join(',') }} CASCADE" &&
-          oc --context {{ ocp_context | quote }} exec -i -n {{ odf_namespace }}
-            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
-            psql -U postgres -d nbcore -v ON_ERROR_STOP=1
-            < {{ nb_dump.path | quote }}
         executable: /bin/bash
+        cmd: |
+          set -eo pipefail
+          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          PRIMARY={{ cnpg_primary.resources[0].metadata.name }}
+          $OC exec $PRIMARY -c postgres -- psql -U postgres -d nbcore -c "TRUNCATE {{ odf_noobaa_tables | join(',') }} CASCADE" </dev/null
+          $OC exec -i $PRIMARY -c postgres -- psql -U postgres -d nbcore -v ON_ERROR_STOP=1 < {{ nb_dump.path | quote }}
       changed_when: true
 
     - name: Verify the system landed in CNPG
       ansible.builtin.shell:
-        cmd: >-
-          oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }}
-          {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
-          psql -U postgres -d nbcore -t -A -c "select count(*) from systems"
         executable: /bin/bash
+        cmd: |
+          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null
       register: nb_verify
       changed_when: false
       failed_when: nb_verify.stdout | trim != '1'
@@ -389,37 +450,6 @@
   retries: 40
   delay: 15
   when: noobaa_stranded | bool
-
-- name: Wait for BackingStore CRD
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
-    api_version: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    name: backingstores.noobaa.io
-  register: bs_crd
-  until: bs_crd.resources | length > 0
-  retries: 30
-  delay: 15
-
-- name: Create PV pool backing store for NooBaa
-  kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
-    state: present
-    apply: true
-    definition:
-      apiVersion: noobaa.io/v1alpha1
-      kind: BackingStore
-      metadata:
-        name: noobaa-pv-backing-store
-        namespace: "{{ odf_namespace }}"
-      spec:
-        type: pv-pool
-        pvPool:
-          numVolumes: 1
-          storageClass: "{{ odf_storage_class }}"
-          resources:
-            requests:
-              storage: 50Gi
 
 - name: Wait for PV backing store to be ready
   kubernetes.core.k8s_info:
