@@ -1,5 +1,6 @@
 {
   "recommendations": [
+    "Continue.continue",
     "ms-kubernetes-tools.vscode-kubernetes-tools",
     "redhat.vscode-yaml",
     "redhat.ansible"

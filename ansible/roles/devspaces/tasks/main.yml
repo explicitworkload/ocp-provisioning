@@ -171,6 +171,60 @@
   delay: 10
   when: devspaces_sample.changed
 
+# Give every workspace the LiteLLM endpoint and key so the Continue extension
+# can talk to the OpenShift AI models.
+#
+# Two label sets are doing separate jobs here:
+#   * the che.eclipse.org / workspaces-config pair makes Che copy this Secret
+#     into each user namespace (verified: propagation takes ~20s)
+#   * the controller.devfile.io pair makes the DevWorkspace Operator mount it
+#     into the workspace, as environment variables
+# Workspaces reach LiteLLM on its cluster-internal Service, so no Route or
+# external credential is involved.
+- name: Fetch the LiteLLM key for workspace AI tooling
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: litellm
+    name: litellm-proxy-credentials
+  register: devspaces_litellm_creds
+  failed_when: false
+  no_log: true
+
+- name: Publish LiteLLM credentials to Dev Spaces workspaces
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: litellm-workspace-credentials
+        namespace: "{{ devspaces_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: che.eclipse.org
+          app.kubernetes.io/component: workspaces-config
+          controller.devfile.io/mount-to-devworkspace: "true"
+          controller.devfile.io/watch-secret: "true"
+        annotations:
+          controller.devfile.io/mount-as: env
+      type: Opaque
+      stringData:
+        LITELLM_API_KEY: "{{ devspaces_litellm_creds.resources[0].data.LITELLM_MASTER_KEY | b64decode }}"
+        LITELLM_BASE_URL: "http://litellm.litellm.svc.cluster.local:4000/v1"
+  no_log: true
+  when: devspaces_litellm_creds.resources | default([]) | length > 0
+
+- name: Note when workspace AI credentials are unavailable
+  ansible.builtin.debug:
+    msg: >-
+      LiteLLM credentials not found, so workspaces will not get
+      LITELLM_API_KEY and the Continue extension will be unconfigured.
+      Re-run this role after the litellm role has completed.
+  when: devspaces_litellm_creds.resources | default([]) | length == 0
+
 - name: Create Dev Spaces Route on the custom domain
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"

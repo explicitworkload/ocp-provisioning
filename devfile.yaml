@@ -34,6 +34,41 @@ commands:
         claude --version
       label: Install Claude Code CLI
 
+  - id: configure-continue
+    exec:
+      component: tooling
+      label: Point the Continue extension at OpenShift AI
+      # LITELLM_API_KEY / LITELLM_BASE_URL arrive as environment variables from
+      # the litellm-workspace-credentials Secret, which Che copies into the
+      # user namespace and the DevWorkspace Operator mounts here. The key is
+      # written at runtime inside the workspace, never committed.
+      commandLine: |
+        if [ -z "$LITELLM_API_KEY" ]; then
+          echo "LITELLM_API_KEY not set - skipping Continue config."
+          exit 0
+        fi
+        mkdir -p "$HOME/.continue"
+        cat > "$HOME/.continue/config.yaml" <<EOF
+        name: OpenShift AI
+        version: 0.0.1
+        schema: v1
+        models:
+          - name: Qwen3-4B
+            provider: openai
+            model: qwen3-4b
+            apiBase: ${LITELLM_BASE_URL}
+            apiKey: ${LITELLM_API_KEY}
+            roles: [chat, edit, apply]
+          - name: Mistral-Small-4-119B
+            provider: openai
+            model: Mistral-Small-4-119B-2603
+            apiBase: ${LITELLM_BASE_URL}
+            apiKey: ${LITELLM_API_KEY}
+            roles: [chat, edit, apply]
+        EOF
+        chmod 600 "$HOME/.continue/config.yaml"
+        echo "Continue configured against $LITELLM_BASE_URL"
+
   - id: install-python-deps
     exec:
       component: tooling
@@ -52,3 +87,4 @@ events:
   postStart:
     - install-claude-cli
     - install-python-deps
+    - configure-continue

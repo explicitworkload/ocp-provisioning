@@ -100,9 +100,6 @@
     - role: console_plugins
       tags: [console]
 
-    - role: devspaces
-      tags: [devspaces]
-
     - role: bookinfo_demo
       tags: [bookinfo, service-mesh-demo]
 
@@ -117,6 +114,11 @@
 
     - role: litellm
       tags: [litellm]
+
+    # After litellm too: workspaces get the LiteLLM key for the Continue
+    # extension, so running this earlier leaves that unconfigured.
+    - role: devspaces
+      tags: [devspaces]
 
     # After litellm: the dashboard copies LiteLLM's master key into its own
     # Secret, so running it earlier leaves the AI page unauthenticated.
