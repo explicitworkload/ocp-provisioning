@@ -58,31 +58,53 @@
           name: external-dns
           namespace: "{{ external_dns_namespace }}"
 
-- name: Warn when no Cloudflare API token was supplied
+# The token can arrive two ways: passed as a variable, or created out of band
+# with `oc create secret`. Either is enough to deploy.
+- name: Check for an existing Cloudflare credentials Secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ external_dns_namespace }}"
+    name: cloudflare-credentials
+  register: cf_secret
+  no_log: true
+
+- name: Record whether Cloudflare credentials are available
+  ansible.builtin.set_fact:
+    cloudflare_secret_present: >-
+      {{ (cf_secret.resources | default([]) | length) > 0 }}
+
+- name: Warn when no Cloudflare credentials are available
   ansible.builtin.debug:
     msg: >-
-      cloudflare_api_token is empty — RBAC is in place but the ExternalDNS
-      deployment is skipped. Re-run with -e cloudflare_api_token="<token>".
-  when: cloudflare_api_token | length == 0
+      No Cloudflare credentials found — RBAC is in place but the ExternalDNS
+      deployment is skipped. Either re-run with -e cloudflare_api_token="<token>"
+      or create the cloudflare-credentials Secret in the
+      {{ external_dns_namespace }} namespace and re-run.
+  when:
+    - not cloudflare_secret_present
+    - cloudflare_api_token | length == 0
+
+- name: Create Cloudflare credentials Secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudflare-credentials
+        namespace: "{{ external_dns_namespace }}"
+      type: Opaque
+      stringData:
+        CF_API_TOKEN: "{{ cloudflare_api_token }}"
+  no_log: true
+  when: cloudflare_api_token | length > 0
 
 - name: Deploy ExternalDNS against Cloudflare
-  when: cloudflare_api_token | length > 0
+  when: cloudflare_api_token | length > 0 or cloudflare_secret_present
   block:
-    - name: Create Cloudflare credentials Secret
-      kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: cloudflare-credentials
-            namespace: "{{ external_dns_namespace }}"
-          type: Opaque
-          stringData:
-            CF_API_TOKEN: "{{ cloudflare_api_token }}"
-      no_log: true
-
     - name: Create ExternalDNS Deployment
       kubernetes.core.k8s:
         context: "{{ ocp_context }}"
