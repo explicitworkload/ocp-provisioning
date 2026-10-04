@@ -6,14 +6,14 @@ ocp_context: "default/api-ocp-gv2bh-sandbox3366-opentlc-com:6443/admin"
 gpu_availability_zone: us-east-2a
 gpu_volume_size: 120
 gpu_machinesets:
-  - instance_type: g4dn.4xlarge
-    replicas: 0
-  - instance_type: g6e.4xlarge
-    replicas: 1
-  - instance_type: p4d.24xlarge
-    replicas: 0
-  - instance_type: p4de.24xlarge
-    replicas: 0
+- instance_type: g4dn.4xlarge
+  replicas: 0
+- instance_type: g6e.4xlarge
+  replicas: 1
+- instance_type: p4d.24xlarge
+  replicas: 0
+- instance_type: p4de.24xlarge
+  replicas: 0
 
 # Model serving configuration
 model_namespace: qwen3-4b
@@ -30,17 +30,36 @@ deploy_quay_registry: true
 # quay_s3_access_key: ""
 # quay_s3_secret_key: ""
 
-# AWS key for node Stop/Start resiliency tests. Pass at runtime:
-#   -e dashboard_aws_access_key_id=... -e dashboard_aws_secret_access_key=...
-# Destroy & Rebuild works without these (Machine API only).
+# Dedicated AWS key for the dashboard's node Stop/Start resiliency tests.
+# Needs only: ec2:DescribeInstances, ec2:StopInstances, ec2:StartInstances.
+#
+#   !! THIS FILE IS COMMITTED TO A PUBLIC REPO — DO NOT PASTE LIVE KEYS HERE !!
+#
+# Leave empty and supply them one of these ways instead:
+#   1. Already in the cluster — if the ops-dashboard-aws Secret exists in the
+#      dashboard namespace it is used as-is and these can stay empty.
+#   2. At runtime, kept out of shell history:
+#        read -rs AWS_KEY; read -rs AWS_SECRET
+#        ansible-playbook site.yml --tags dashboard \
+#          -e dashboard_aws_access_key_id="$AWS_KEY" \
+#          -e dashboard_aws_secret_access_key="$AWS_SECRET"
+#   3. From a vault file (ansible/**/vault.yml is gitignored):
+#        ansible-playbook site.yml -e @vault.yml --tags dashboard
+#
+# When set, these overwrite the cluster Secret. Note the cluster's own
+# machine-api credential is NOT reused: scaling uses ec2:RunInstances /
+# TerminateInstances, which does not imply Stop/Start.
+# Destroy & Rebuild needs none of this — it is pure Machine API.
+dashboard_aws_access_key_id: ""
+dashboard_aws_secret_access_key: ""
 
 # Console plugins to enable
 console_plugins:
-  - pipelines-console-plugin
-  - gitops-plugin
-  - kuadrant-console-plugin
-  - odf-console
-  - odf-client-console
+- pipelines-console-plugin
+- gitops-plugin
+- kuadrant-console-plugin
+- odf-console
+- odf-client-console
 
 #
 # OPTIONAL - Anything below is not necessary.
@@ -54,17 +73,6 @@ external_dns_domain: kubernetes.day
 # Cloudflare API token (Zone:Read + DNS:Edit on the zone above).
 #
 #   !! THIS FILE IS COMMITTED TO A PUBLIC REPO — DO NOT PASTE A LIVE TOKEN HERE !!
-#
-# Leave empty and supply it one of these ways instead:
-#   1. Already in the cluster (current setup) — if the cloudflare-credentials
-#      Secret exists in the external-dns namespace, the role uses it as-is and
-#      never needs the token again.
-#   2. At runtime, kept out of shell history:
-#        read -rs CF_TOKEN
-#        ansible-playbook site.yml -e deploy_external_dns=true \
-#          -e cloudflare_api_token="$CF_TOKEN"
-#   3. From a vault file (ansible/**/vault.yml is gitignored):
-#        ansible-playbook site.yml -e @vault.yml -e deploy_external_dns=true
 #
 # If this IS set, it takes precedence and overwrites the cluster Secret.
 cloudflare_api_token: ""

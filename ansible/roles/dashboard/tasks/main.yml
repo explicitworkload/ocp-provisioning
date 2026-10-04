@@ -213,14 +213,29 @@
   no_log: true
   when: dashboard_aws_access_key_id | length > 0
 
+# A Secret created out of band with `oc` is left alone, so report on what is
+# actually in the cluster rather than only on the variable.
+- name: Check for an existing dashboard AWS Secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ dashboard_namespace }}"
+    name: ops-dashboard-aws
+  register: dashboard_aws_secret
+  no_log: true
+
 - name: Note when EC2 stop/start is unconfigured
   ansible.builtin.debug:
     msg: >-
-      No dashboard_aws_access_key_id supplied — node Stop/Start will report a
+      No AWS credentials for the dashboard — node Stop/Start will report a
       missing-credentials error. Destroy & Rebuild still works (Machine API only).
       Supply a key with ec2:DescribeInstances, ec2:StopInstances and
-      ec2:StartInstances to enable it.
-  when: dashboard_aws_access_key_id | length == 0
+      ec2:StartInstances via dashboard_aws_access_key_id, or create the
+      ops-dashboard-aws Secret directly.
+  when:
+    - dashboard_aws_access_key_id | length == 0
+    - (dashboard_aws_secret.resources | default([]) | length) == 0
 
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
