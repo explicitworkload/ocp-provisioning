@@ -1,3 +1,7 @@
 ---
 devspaces_namespace: openshift-devspaces
 devspaces_channel: stable
+
+# Extra Route on the ExternalDNS-managed domain. Only created when
+# deploy_external_dns is true. Set empty to skip.
+devspaces_custom_host: "devspaces28.kubernetes.day"

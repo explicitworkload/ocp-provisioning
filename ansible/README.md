@@ -127,9 +127,15 @@ Installs the Red Hat OpenShift Dev Spaces operator and a `CheCluster` instance i
 
 The **Kubernetes extension** (`ms-kubernetes-tools.vscode-kubernetes-tools`), plus the YAML and Ansible extensions, are recommended via `.vscode/extensions.json` and installed by the workspace editor.
 
+When `deploy_external_dns` is true, a second Route `devspaces28.kubernetes.day` is created alongside the apps-domain URL.
+
+> **Sign-in uses the apps-domain URL.** Dev Spaces ties its OAuth redirects to `status.cheURL`, so logging in via the custom hostname redirects back to `devspaces.<apps-domain>`. To make the custom name the canonical one instead, set `spec.networking.hostname` on the `CheCluster` — that moves the URL rather than adding a second one.
+
 ### Gatus
 
-Deploys [Gatus](https://github.com/TwiN/gatus) health monitoring with endpoints for Bookinfo, Kiali, the Operations Dashboard, and the OpenShift Console. Exposed at `gatus.<apps-domain>`.
+Deploys [Gatus](https://github.com/TwiN/gatus) health monitoring, exposed at `gatus.<apps-domain>`. Monitors Bookinfo, Kiali, the Operations Dashboard, the OpenShift Console and Dev Spaces. When `deploy_external_dns` is true it also monitors the public `*.kubernetes.day` hostnames.
+
+> **Gatus has no Kubernetes service discovery.** Every endpoint is declared explicitly in the `gatus_core_endpoints` list in `roles/gatus/tasks/main.yml` — a new Route is *not* picked up automatically. Add it to that list and re-run `--tags gatus`.
 
 ### Quay Registry
 
@@ -197,8 +203,9 @@ All variables are in `group_vars/all.yml`:
 | `external_dns_domain` | `kubernetes.day` | Cloudflare zone that ExternalDNS manages |
 | `deploy_external_dns` | `false` | Opt-in switch — ExternalDNS only deploys when true |
 | `external_dns_cloudflare_proxied` | `true` | Publish proxied (orange cloud) so Cloudflare terminates TLS |
-| `cloudflare_api_token` | (empty) | Cloudflare API token (pass at runtime, not in repo) |
-| `dashboard_custom_host` | `dashboard28.kubernetes.day` | Extra dashboard Route published via ExternalDNS |
+| `cloudflare_api_token` | (empty) | Cloudflare token; if empty, an existing cluster Secret is used |
+| `dashboard_custom_host` | `dashboard28.kubernetes.day` | Extra dashboard Route, created only when ExternalDNS is on |
+| `devspaces_custom_host` | `devspaces28.kubernetes.day` | Extra Dev Spaces Route, created only when ExternalDNS is on |
 | `dashboard_aws_access_key_id` | (empty) | AWS key for node Stop/Start (pass at runtime) |
 | `dashboard_aws_secret_access_key` | (empty) | AWS secret for node Stop/Start (pass at runtime) |
 

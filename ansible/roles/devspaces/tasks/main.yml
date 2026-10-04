@@ -94,6 +94,34 @@
   delay: 20
   failed_when: false
 
+# A second Route onto the same che-gateway service. Note that Dev Spaces ties
+# its OAuth redirects to status.cheURL, so signing in via this hostname
+# redirects back to the apps-domain URL — it serves, but is not a full
+# replacement. Setting spec.networking.hostname would move the canonical URL.
+- name: Create Dev Spaces Route on the custom domain
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: devspaces-ext
+        namespace: "{{ devspaces_namespace }}"
+      spec:
+        host: "{{ devspaces_custom_host }}"
+        to:
+          kind: Service
+          name: che-gateway
+        port:
+          targetPort: 8080
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+  when:
+    - deploy_external_dns | bool
+    - devspaces_custom_host | length > 0
+
 - name: Display Dev Spaces URL
   ansible.builtin.debug:
     msg: >-

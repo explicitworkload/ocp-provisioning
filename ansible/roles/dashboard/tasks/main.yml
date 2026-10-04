@@ -372,7 +372,9 @@
         tls:
           termination: edge
           insecureEdgeTerminationPolicy: Redirect
-  when: dashboard_custom_host | length > 0
+  when:
+    - deploy_external_dns | bool
+    - dashboard_custom_host | length > 0
 
 - name: Wait for dashboard to be ready
   kubernetes.core.k8s_info:

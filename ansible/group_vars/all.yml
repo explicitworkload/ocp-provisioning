@@ -47,12 +47,27 @@ console_plugins:
 #
 # External DNS / Cloudflare — OFF by default. Runs last in the playbook.
 # Enable only when you want real records written to the Cloudflare zone:
-#   ansible-playbook site.yml -e deploy_external_dns=true \
-#     -e cloudflare_api_token="<token>"
-# The token is never stored here — Ansible writes it to the
-# cloudflare-credentials Secret in the external-dns namespace.
+#   ansible-playbook site.yml -e deploy_external_dns=true
 deploy_external_dns: false
 external_dns_domain: kubernetes.day
+
+# Cloudflare API token (Zone:Read + DNS:Edit on the zone above).
+#
+#   !! THIS FILE IS COMMITTED TO A PUBLIC REPO — DO NOT PASTE A LIVE TOKEN HERE !!
+#
+# Leave empty and supply it one of these ways instead:
+#   1. Already in the cluster (current setup) — if the cloudflare-credentials
+#      Secret exists in the external-dns namespace, the role uses it as-is and
+#      never needs the token again.
+#   2. At runtime, kept out of shell history:
+#        read -rs CF_TOKEN
+#        ansible-playbook site.yml -e deploy_external_dns=true \
+#          -e cloudflare_api_token="$CF_TOKEN"
+#   3. From a vault file (ansible/**/vault.yml is gitignored):
+#        ansible-playbook site.yml -e @vault.yml -e deploy_external_dns=true
+#
+# If this IS set, it takes precedence and overwrites the cluster Secret.
+cloudflare_api_token: ""
 
 # Publish records through the Cloudflare proxy (orange cloud) so Cloudflare
 # terminates TLS with its own kubernetes.day certificate — this is what avoids
@@ -60,7 +75,8 @@ external_dns_domain: kubernetes.day
 # Requires the zone's SSL/TLS mode to be "Full" (see ansible/README.md).
 external_dns_cloudflare_proxied: true
 
-# Extra dashboard Route on the ExternalDNS-managed domain.
-# Harmless when deploy_external_dns is false — the Route simply has no
-# DNS record pointing at it. Set empty to skip creating it.
+# Extra Routes on the ExternalDNS-managed domain. These are only created when
+# deploy_external_dns is true, so a Route never exists without a DNS record to
+# back it. Set either to "" to skip that one.
 dashboard_custom_host: "dashboard28.kubernetes.day"
+devspaces_custom_host: "devspaces28.kubernetes.day"

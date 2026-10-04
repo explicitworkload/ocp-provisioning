@@ -9,6 +9,59 @@
       metadata:
         name: "{{ gatus_namespace }}"
 
+# Gatus has no Kubernetes service discovery — every endpoint is declared here.
+# The (public) entries only exist when ExternalDNS is publishing those names.
+- name: Build Gatus endpoint list
+  ansible.builtin.set_fact:
+    gatus_endpoints: "{{ gatus_core_endpoints + gatus_public_endpoints }}"
+  vars:
+    gatus_core_endpoints:
+      - name: Bookinfo Productpage
+        url: "https://bookinfo.{{ ocp_apps_domain }}/productpage"
+        interval: 60s
+        conditions: ["[STATUS] == 200"]
+        client: {insecure: true}
+      - name: Kiali
+        url: "https://kiali.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        client: {insecure: true}
+      - name: Operations Dashboard
+        url: "https://dashboard.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == 200"]
+        client: {insecure: true}
+      - name: OpenShift Console
+        url: "https://console-openshift-console.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        client: {insecure: true}
+      - name: Dev Spaces
+        url: "https://devspaces.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        client: {insecure: true}
+    gatus_dashboard_public:
+      - name: Operations Dashboard (public)
+        url: "https://{{ dashboard_custom_host }}"
+        interval: 60s
+        conditions: ["[STATUS] == 200"]
+        client: {insecure: true}
+    gatus_devspaces_public:
+      - name: Dev Spaces (public)
+        url: "https://{{ devspaces_custom_host }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        client: {insecure: true}
+    gatus_public_endpoints: >-
+      {{
+        (gatus_dashboard_public
+         if deploy_external_dns | bool and dashboard_custom_host | length > 0 else [])
+        +
+        (gatus_devspaces_public
+         if deploy_external_dns | bool and devspaces_custom_host | length > 0 else [])
+      }}
+
 - name: Create Gatus ConfigMap
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -20,36 +73,7 @@
         name: gatus-config
         namespace: "{{ gatus_namespace }}"
       data:
-        config.yaml: |
-          endpoints:
-            - name: Bookinfo Productpage
-              url: "https://bookinfo.{{ ocp_apps_domain }}/productpage"
-              interval: 60s
-              conditions:
-                - "[STATUS] == 200"
-              client:
-                insecure: true
-            - name: Kiali
-              url: "https://kiali.{{ ocp_apps_domain }}"
-              interval: 60s
-              conditions:
-                - "[STATUS] == any(200, 301, 302, 403)"
-              client:
-                insecure: true
-            - name: Operations Dashboard
-              url: "https://dashboard.{{ ocp_apps_domain }}"
-              interval: 60s
-              conditions:
-                - "[STATUS] == 200"
-              client:
-                insecure: true
-            - name: OpenShift Console
-              url: "https://console-openshift-console.{{ ocp_apps_domain }}"
-              interval: 60s
-              conditions:
-                - "[STATUS] == any(200, 301, 302, 403)"
-              client:
-                insecure: true
+        config.yaml: "{{ {'endpoints': gatus_endpoints} | to_nice_yaml(indent=2) }}"
 
 - name: Create Gatus Deployment
   kubernetes.core.k8s:
