@@ -635,7 +635,26 @@ function addPlatformTask(type, detail) {
 
 // === AI ===
 var chatHistory = [];
-var enabledMcpServers = {};
+// Which MCP servers the user has switched on. Persisted so the choice
+// survives a reload — it previously lived only in memory, so every refresh
+// silently dropped the model's tools.
+var MCP_STORAGE_KEY = "opsDashboard.enabledMcpServers";
+
+function loadEnabledMcpServers() {
+  try {
+    return JSON.parse(localStorage.getItem(MCP_STORAGE_KEY)) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveEnabledMcpServers() {
+  try {
+    localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(enabledMcpServers));
+  } catch (_) { /* private browsing or quota — not worth failing over */ }
+}
+
+var enabledMcpServers = loadEnabledMcpServers();
 
 async function refreshAiModels() {
   var select = document.getElementById("ai-model");
@@ -715,6 +734,29 @@ async function refreshMcpServers() {
       .join("");
     var readyCount = data.servers.filter(function (s) { return s.phase === "Ready"; }).length;
     setStatusBar("mcp-status", readyCount + "/" + data.servers.length + " READY", readyCount > 0 ? "active" : "");
+
+    // Re-verify anything restored from storage: the server may have gone away
+    // or its URL changed since, and a stale entry would be sent to the model.
+    data.servers.forEach(function (s) {
+      var key = s.namespace + "/" + s.name;
+      if (!enabledMcpServers[key]) return;
+      var toolsEl = document.getElementById("mcp-tools-" + key.replace("/", "-"));
+      if (toolsEl) toolsEl.textContent = "reconnecting...";
+      fetch("/api/ai/mcp-servers/" + s.namespace + "/" + s.name + "/tools")
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r); })
+        .then(function (d) {
+          enabledMcpServers[key] = {url: d.url, tools: d.tools};
+          saveEnabledMcpServers();
+          if (toolsEl) toolsEl.textContent = d.tools.length + " tools";
+        })
+        .catch(function () {
+          delete enabledMcpServers[key];
+          saveEnabledMcpServers();
+          var t = document.getElementById("mcp-toggle-" + key.replace("/", "-"));
+          if (t) t.classList.remove("active");
+          if (toolsEl) toolsEl.textContent = "unavailable";
+        });
+    });
   } catch (e) {
     setStatusBar("mcp-status", "ERROR: " + e.message, "error");
   }
@@ -726,6 +768,7 @@ async function toggleMcpServer(key, namespace, name) {
 
   if (enabledMcpServers[key]) {
     delete enabledMcpServers[key];
+    saveEnabledMcpServers();
     if (toggleEl) toggleEl.classList.remove("active");
     if (toolsEl) toolsEl.textContent = "";
     showToast("MCP server " + name + " disabled", "info");
@@ -746,6 +789,7 @@ async function toggleMcpServer(key, namespace, name) {
       url: data.url,
       tools: data.tools,
     };
+    saveEnabledMcpServers();
     if (toggleEl) toggleEl.classList.add("active");
     if (toolsEl) toolsEl.textContent = data.tools.length + " tools";
     showToast("MCP server " + name + " enabled — " + data.tools.length + " tools", "success");
