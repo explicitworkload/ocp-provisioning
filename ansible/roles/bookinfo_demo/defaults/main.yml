@@ -1,3 +1,11 @@
 ---
 bookinfo_namespace: bookinfo
 bookinfo_image_tag: "1.20.3"
+
+# Starting canary split across the Reviews versions. Must total 100.
+# The dashboard's traffic shifting overwrites this at runtime; re-running
+# the role restores it.
+bookinfo_reviews_weights:
+  v1: 90
+  v2: 5
+  v3: 5

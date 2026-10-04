@@ -187,6 +187,13 @@ async function refreshTasks() {
         footer.className = last.fail > 0 ? "card-footer error" : "card-footer active";
       }
     } else if (hasRunning) {
+      // Reflect server state in the controls. Without this a page refresh
+      // during a sustained run left Stop hidden and the start buttons live,
+      // so the task could not be stopped and a second one could be queued.
+      if (btnBurst) btnBurst.disabled = true;
+      if (btnSustained) btnSustained.disabled = true;
+      if (btnStop) btnStop.style.display = activeSustained ? "inline-flex" : "none";
+
       var active = tasks.find(function (t) { return t.status === "running"; });
       if (active && footer) {
         if (active.duration) {

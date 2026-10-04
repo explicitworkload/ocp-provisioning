@@ -249,6 +249,60 @@
             port: http-envoy-prom
             interval: 15s
 
+# Baseline canary split for the Reviews service. The dashboard's traffic
+# shifting rewrites these same two resources, so the shapes deliberately match
+# what dashboard/app.py builds — otherwise each would fight the other.
+# The DestinationRule defines the subsets the weights refer to; without it
+# Istio rejects the VirtualService routes.
+- name: Create Reviews DestinationRule with version subsets
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: networking.istio.io/v1
+      kind: DestinationRule
+      metadata:
+        name: reviews
+        namespace: "{{ bookinfo_namespace }}"
+      spec:
+        host: reviews
+        subsets:
+          - name: v1
+            labels: {version: v1}
+          - name: v2
+            labels: {version: v2}
+          - name: v3
+            labels: {version: v3}
+
+- name: Set the starting Reviews traffic split
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: networking.istio.io/v1
+      kind: VirtualService
+      metadata:
+        name: reviews
+        namespace: "{{ bookinfo_namespace }}"
+      spec:
+        hosts:
+          - reviews
+        http:
+          - route: >-
+              {{
+                [
+                  {'destination': {'host': 'reviews', 'subset': 'v1',
+                                   'port': {'number': 9080}},
+                   'weight': bookinfo_reviews_weights.v1},
+                  {'destination': {'host': 'reviews', 'subset': 'v2',
+                                   'port': {'number': 9080}},
+                   'weight': bookinfo_reviews_weights.v2},
+                  {'destination': {'host': 'reviews', 'subset': 'v3',
+                                   'port': {'number': 9080}},
+                   'weight': bookinfo_reviews_weights.v3},
+                ] | selectattr('weight', '>', 0) | list
+              }}
+
 - name: Display bookinfo URL
   ansible.builtin.debug:
     msg: "Bookinfo productpage: https://{{ bookinfo_route.resources[0].spec.host }}/productpage"
