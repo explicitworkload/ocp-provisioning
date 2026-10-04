@@ -35,7 +35,9 @@
         loki:
           enable: false
         consolePlugin:
-          register: true
+          # `register` was removed from the FlowCollector CRD; the operator now
+          # registers the plugin with the console whenever it is enabled.
+          enable: true
           portNaming:
             enable: true
 
