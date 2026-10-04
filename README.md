@@ -21,11 +21,13 @@ ocp-provisioning/
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook (15 roles)
+│   ├── site.yml            # Main playbook (17 roles)
 │   ├── group_vars/all.yml  # Configuration variables
 │   ├── roles/              # operators, service_mesh, network_observability, gpu_worker, odf, quay, etc.
 │   └── README.md           # Ansible-specific docs
 ├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
+├── devfile.yaml            # Dev Spaces workspace definition (installs Claude CLI)
+├── .vscode/extensions.json # Extensions recommended to Dev Spaces workspaces
 └── README.md
 ```
 
@@ -37,7 +39,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 
 **What it does:**
 
-- Installs 12 operators (NFD, RHOAI 3.5, NVIDIA GPU, Service Mesh 3, Kiali, Network Observability, ODF, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link)
+- Installs 14 operators (NFD, RHOAI 3.5, NVIDIA GPU, Service Mesh 3, Kiali, Network Observability, ODF, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link, Dev Spaces)
 - Deploys Service Mesh 3 (Istio + Kiali) with Thanos Querier integration and Network Observability (eBPF FlowCollector)
 - Deploys ODF with gp3 EBS-backed Ceph storage and NooBaa object storage
 - Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
@@ -45,8 +47,10 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
 - Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying Qwen3-4B and Azure GPT-4 via reusable credentials
-- Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring
-- Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), AI Assistant (summarization, chat with MCP server tool use), floating task log with toast notifications, and sustained traffic generator
+- Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring (probes in-cluster service DNS, with the Gatus UI embedded in the dashboard)
+- Deploys OpenShift Dev Spaces with a `CheCluster` and registers this repo as a one-click workspace sample; workspaces install the Claude Code CLI and the Kubernetes extension on start
+- Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), node resiliency testing (stop/start the backing EC2 instance, or destroy a Machine and let its MachineSet rebuild it), AI Assistant (chat with MCP server tool use), embedded health monitor, floating task log with toast notifications, and sustained traffic generator
+- Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
 
 ### Quick Start
 
@@ -64,7 +68,24 @@ pip install ansible kubernetes
 ./run.sh
 ```
 
-See [ansible/README.md](ansible/README.md) for full variable reference, tags, and Quay S3 configuration.
+**Optional extras**, both off by default and never requiring secrets in the repo:
+
+```bash
+# Publish public DNS for the dashboard and Dev Spaces via Cloudflare.
+# Runs last in the playbook, after the Routes it publishes exist.
+read -rs CF_TOKEN
+ansible-playbook site.yml --tags external-dns \
+  -e deploy_external_dns=true -e cloudflare_api_token="$CF_TOKEN"
+
+# Enable node Stop/Start in the dashboard. Needs ec2:DescribeInstances,
+# ec2:StopInstances and ec2:StartInstances. Destroy & Rebuild works without it.
+read -rs AWS_KEY; read -rs AWS_SECRET
+ansible-playbook site.yml --tags dashboard \
+  -e dashboard_aws_access_key_id="$AWS_KEY" \
+  -e dashboard_aws_secret_access_key="$AWS_SECRET"
+```
+
+See [ansible/README.md](ansible/README.md) for full variable reference, tags, Cloudflare and TLS notes, node resiliency testing, and Quay S3 configuration.
 
 ---
 
