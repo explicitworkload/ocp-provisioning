@@ -2,6 +2,8 @@
 odf_namespace: openshift-storage
 odf_channel: stable-4.22
 odf_storage_class: gp3-csi
-odf_storage_size: 1Ti
-odf_device_set_count: 3
+# Size of the gp3 EBS volume backing each OSD. One OSD is created per
+# eligible (non-GPU) worker, so total provisioned capacity is this multiplied
+# by the number of those workers.
+odf_storage_size: 512Gi
 odf_device_set_replica: 1
