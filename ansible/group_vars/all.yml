@@ -43,7 +43,7 @@ console_plugins:
   - odf-client-console
 
 #
-# Anything below is not necessary optional.
+# OPTIONAL - Anything below is not necessary.
 #
 # External DNS / Cloudflare — OFF by default. Runs last in the playbook.
 # Enable only when you want real records written to the Cloudflare zone:
@@ -53,6 +53,12 @@ console_plugins:
 # cloudflare-credentials Secret in the external-dns namespace.
 deploy_external_dns: false
 external_dns_domain: kubernetes.day
+
+# Publish records through the Cloudflare proxy (orange cloud) so Cloudflare
+# terminates TLS with its own kubernetes.day certificate — this is what avoids
+# the browser cert warning, since the cluster wildcard only covers *.apps.
+# Requires the zone's SSL/TLS mode to be "Full" (see ansible/README.md).
+external_dns_cloudflare_proxied: true
 
 # Extra dashboard Route on the ExternalDNS-managed domain.
 # Harmless when deploy_external_dns is false — the Route simply has no

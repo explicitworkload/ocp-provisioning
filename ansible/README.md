@@ -195,6 +195,8 @@ All variables are in `group_vars/all.yml`:
 | `dashboard_password` | (random) | Dashboard login password (auto-generated, override at runtime) |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 | `external_dns_domain` | `kubernetes.day` | Cloudflare zone that ExternalDNS manages |
+| `deploy_external_dns` | `false` | Opt-in switch — ExternalDNS only deploys when true |
+| `external_dns_cloudflare_proxied` | `true` | Publish proxied (orange cloud) so Cloudflare terminates TLS |
 | `cloudflare_api_token` | (empty) | Cloudflare API token (pass at runtime, not in repo) |
 | `dashboard_custom_host` | `dashboard28.kubernetes.day` | Extra dashboard Route published via ExternalDNS |
 | `dashboard_aws_access_key_id` | (empty) | AWS key for node Stop/Start (pass at runtime) |
@@ -238,7 +240,19 @@ Ansible stores the token in the `cloudflare-credentials` Secret in the `external
 
 Routes whose host falls inside `external_dns_domain` are published automatically. The dashboard's `dashboard28.kubernetes.day` Route is one of them.
 
-> **TLS note:** the cluster's default wildcard certificate only covers `*.apps.<cluster>`, so browsers show a name-mismatch warning on `dashboard28.kubernetes.day`. To remove it, either enable the Cloudflare proxy (orange cloud) so Cloudflare terminates TLS, or attach a matching certificate to the Route.
+### TLS and the Cloudflare proxy
+
+The cluster's default wildcard certificate only covers `*.apps.<cluster>`, so it does not match `dashboard28.kubernetes.day`. Records are therefore published **proxied** (orange cloud, `external_dns_cloudflare_proxied: true`) — Cloudflare terminates TLS with its own certificate for the zone, so the browser sees a valid cert.
+
+> **Set the zone's SSL/TLS mode to "Full".** Cloudflare still has to reach the origin, and the OpenShift router serves HTTPS with a certificate that does not match this hostname:
+>
+> | Mode | Result |
+> |------|--------|
+> | **Full** | ✅ Cloudflare connects over HTTPS without validating the origin cert — correct for this setup |
+> | Full (strict) | ❌ Fails — the router's cert does not match `kubernetes.day` |
+> | Flexible | ❌ Redirect loop — Cloudflare calls the origin over HTTP and the Route redirects back to HTTPS |
+
+To publish a plain unproxied record instead (grey cloud, direct to the router, with a browser cert warning), set `external_dns_cloudflare_proxied: false`.
 
 ## Node resiliency testing
 
