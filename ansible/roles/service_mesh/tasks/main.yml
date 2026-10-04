@@ -118,6 +118,15 @@
           namespace: "{{ service_mesh_namespace }}"
           accessible_namespaces:
             - "**"
+          # Pin the Route host. Without this the operator names it
+          # kiali-<namespace>.<domain>, which would not match the web_fqdn
+          # below — Kiali builds its OAuth redirect from web_fqdn, so the
+          # login flow would bounce to a hostname no Route serves.
+          ingress:
+            enabled: true
+            override_yaml:
+              spec:
+                host: "kiali.{{ ocp_apps_domain }}"
         server:
           web_fqdn: "kiali.{{ ocp_apps_domain }}"
           web_port: ""

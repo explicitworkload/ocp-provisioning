@@ -15,31 +15,35 @@
   ansible.builtin.set_fact:
     gatus_endpoints: "{{ gatus_core_endpoints + gatus_public_endpoints }}"
   vars:
-    # In-cluster service DNS: skips the load-balancer hairpin and, where the
-    # service speaks plain HTTP, the TLS handshake too. The ingress path is
-    # still covered by the public (*.kubernetes.day) checks below.
+    # Public routes, deliberately: these exercise DNS, the load balancer,
+    # the Route and TLS as well as the app. Probing in-cluster service DNS is
+    # faster but skips exactly the layers that break most often — a misnamed
+    # Kiali Route once passed internal checks while the public URL was dead.
     gatus_core_endpoints:
       - name: Bookinfo Productpage
-        url: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
-        interval: 60s
-        conditions: ["[STATUS] == 200"]
-      - name: Kiali
-        url: "https://kiali.istio-system.svc.cluster.local:20001/"
+        url: "https://bookinfo.{{ ocp_apps_domain }}/productpage"
         interval: 60s
         conditions: ["[STATUS] == 200"]
         client: {insecure: true}
-      - name: Operations Dashboard
-        url: "http://ops-dashboard.dashboard.svc.cluster.local:8080/healthz"
-        interval: 60s
-        conditions: ["[STATUS] == 200"]
-      - name: Dev Spaces
-        url: "http://che-gateway.openshift-devspaces.svc.cluster.local:8080/"
+      - name: Kiali
+        url: "https://kiali.{{ ocp_apps_domain }}"
         interval: 60s
         conditions: ["[STATUS] == any(200, 301, 302, 403)"]
-      - name: OpenShift Console
-        url: "https://console.openshift-console.svc.cluster.local:443/"
+        client: {insecure: true}
+      - name: Operations Dashboard
+        url: "https://dashboard.{{ ocp_apps_domain }}"
         interval: 60s
         conditions: ["[STATUS] == 200"]
+        client: {insecure: true}
+      - name: Dev Spaces
+        url: "https://devspaces.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        client: {insecure: true}
+      - name: OpenShift Console
+        url: "https://console-openshift-console.{{ ocp_apps_domain }}"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
         client: {insecure: true}
     gatus_dashboard_public:
       - name: Operations Dashboard (public)
