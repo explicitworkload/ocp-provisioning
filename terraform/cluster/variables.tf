@@ -52,3 +52,28 @@ variable "ssh_public_key_path" {
   default     = "~/.ssh/id_rsa.pub"
   description = "Path to the SSH public key for cluster node access"
 }
+
+variable "lightspeed_azure_api_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Azure OpenAI API key for OpenShift Lightspeed. Leave empty to skip Lightspeed configuration. Pass at apply time (TF_VAR_lightspeed_azure_api_key) — never commit it."
+}
+
+variable "lightspeed_azure_url" {
+  type        = string
+  default     = "https://llm-gpt4-lightspeed.cognitiveservices.azure.com/"
+  description = "Azure OpenAI endpoint URL for Lightspeed"
+}
+
+variable "lightspeed_azure_deployment" {
+  type        = string
+  default     = "gpt-4"
+  description = "Azure OpenAI deployment name for Lightspeed"
+}
+
+variable "lightspeed_azure_model" {
+  type        = string
+  default     = "gpt-4"
+  description = "Model name exposed to Lightspeed"
+}

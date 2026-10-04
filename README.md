@@ -184,6 +184,7 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | 6 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
 | 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
 | 8 | `console_plugins` | Enable console plugins |
+| 9 | `lightspeed_config` | Configure Lightspeed against Azure OpenAI (skipped without an API key) |
 
 #### Operators
 
@@ -200,6 +201,35 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | Web Terminal | fast | In-console terminal |
 
 **Console plugins enabled:** pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
+
+#### OpenShift Lightspeed (Azure OpenAI)
+
+The Lightspeed operator installs unconditionally, but it is only *configured*
+when an Azure API key is supplied. Without one the `lightspeed_config` phase is
+skipped (`count = 0`) and the operator sits idle rather than failing.
+
+The key is **never stored in this repo**. Pass it at apply time:
+
+```bash
+read -rs TF_VAR_lightspeed_azure_api_key
+export TF_VAR_lightspeed_azure_api_key
+terraform apply
+```
+
+Terraform then creates the `azure-api-keys` Secret in `openshift-lightspeed`
+and applies an `OLSConfig` referencing it. The endpoint, deployment and model
+default to the values below and can be overridden:
+
+| Variable | Default |
+|----------|---------|
+| `lightspeed_azure_url` | `https://llm-gpt4-lightspeed.cognitiveservices.azure.com/` |
+| `lightspeed_azure_deployment` | `gpt-4` |
+| `lightspeed_azure_model` | `gpt-4` |
+
+> You can also create the `OLSConfig` by hand in the console — **Operators →
+> Installed Operators → OpenShift Lightspeed → OLSConfig → Create** gives a
+> form — but the Secret must exist first, and a console-created config will be
+> overwritten on the next `terraform apply`.
 
 #### Networking
 

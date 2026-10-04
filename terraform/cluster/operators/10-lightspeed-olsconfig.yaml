@@ -1,0 +1,26 @@
+---
+# Azure OpenAI backend for OpenShift Lightspeed.
+#
+# The API key is NOT here. It lives in the azure-api-keys Secret in the
+# openshift-lightspeed namespace, which Terraform creates at apply time from
+# the lightspeed_azure_api_key variable — never committed to this repo.
+apiVersion: ols.openshift.io/v1alpha1
+kind: OLSConfig
+metadata:
+  name: cluster
+spec:
+  llm:
+    providers:
+      - name: Azure
+        type: azure_openai
+        url: AZURE_OPENAI_URL
+        deploymentName: AZURE_DEPLOYMENT_NAME
+        credentialsSecretRef:
+          name: azure-api-keys
+        models:
+          - name: AZURE_MODEL_NAME
+            parameters:
+              toolBudgetRatio: 0.5
+  ols:
+    defaultProvider: Azure
+    defaultModel: AZURE_MODEL_NAME

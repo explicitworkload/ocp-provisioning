@@ -281,6 +281,50 @@ resource "null_resource" "openshift_ai" {
 }
 
 # Phase 10: Enable console plugins
+# Phase: Configure OpenShift Lightspeed against Azure OpenAI.
+# Skipped entirely when no API key is supplied, so the operator installs but
+# stays unconfigured rather than failing.
+resource "null_resource" "lightspeed_config" {
+  count      = var.lightspeed_azure_api_key == "" ? 0 : 1
+  depends_on = [null_resource.operators]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      AZURE_API_KEY = var.lightspeed_azure_api_key
+    }
+    command     = <<-SCRIPT
+			set -eo pipefail
+			${local.brew_init}
+			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
+
+			echo "Waiting for Lightspeed Operator to be ready..."
+			until oc get crd olsconfigs.ols.openshift.io 2>/dev/null; do
+				sleep 15
+			done
+
+			echo "Creating Azure credentials secret..."
+			oc create secret generic azure-api-keys \
+			  -n openshift-lightspeed \
+			  --from-literal=apitoken="$AZURE_API_KEY" \
+			  --dry-run=client -o yaml | oc apply -f -
+
+			echo "Applying OLSConfig..."
+			sed -e "s|AZURE_OPENAI_URL|${var.lightspeed_azure_url}|g" \
+			    -e "s|AZURE_DEPLOYMENT_NAME|${var.lightspeed_azure_deployment}|g" \
+			    -e "s|AZURE_MODEL_NAME|${var.lightspeed_azure_model}|g" \
+			    ${path.module}/operators/10-lightspeed-olsconfig.yaml | oc apply -f -
+
+			echo "Lightspeed configured against Azure OpenAI."
+		SCRIPT
+  }
+
+  triggers = {
+    cluster_name = local.cluster_name
+    config       = "${var.lightspeed_azure_url}|${var.lightspeed_azure_deployment}|${var.lightspeed_azure_model}"
+  }
+}
+
 resource "null_resource" "console_plugins" {
   depends_on = [null_resource.operators]
 
