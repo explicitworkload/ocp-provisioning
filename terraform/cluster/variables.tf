@@ -53,12 +53,6 @@ variable "ssh_public_key_path" {
   description = "Path to the SSH public key for cluster node access"
 }
 
-variable "lightspeed_azure_api_key" {
-  type        = string
-  default     = ""
-  sensitive   = true
-  description = "Azure OpenAI API key for OpenShift Lightspeed. Leave empty to skip Lightspeed configuration. Pass at apply time (TF_VAR_lightspeed_azure_api_key) — never commit it."
-}
 
 variable "lightspeed_azure_url" {
   type        = string

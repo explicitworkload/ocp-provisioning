@@ -184,7 +184,7 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | 6 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
 | 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
 | 8 | `console_plugins` | Enable console plugins |
-| 9 | `lightspeed_config` | Configure Lightspeed against Azure OpenAI (skipped without an API key) |
+| 9 | `lightspeed_config` | Configure Lightspeed against Azure OpenAI (skipped unless the `azure-api-keys` Secret exists) |
 
 #### Operators
 
@@ -204,21 +204,36 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 
 #### OpenShift Lightspeed (Azure OpenAI)
 
-The Lightspeed operator installs unconditionally, but it is only *configured*
-when an Azure API key is supplied. Without one the `lightspeed_config` phase is
-skipped (`count = 0`) and the operator sits idle rather than failing.
+> **Prerequisite — create the credentials Secret by hand before provisioning.**
+> Terraform deliberately does **not** create it.
 
-The key is **never stored in this repo**. Pass it at apply time:
+Anything passed to Terraform as a variable is written into `terraform.tfstate`
+in **plaintext** — `sensitive = true` only hides it from CLI output, not from
+state. Creating the Secret out of band keeps the credential out of state, out
+of any plan file, and out of this repo entirely.
+
+The same `azure-api-keys` Secret is also consumed by the Ansible `litellm`
+role, so it is a shared prerequisite rather than Lightspeed-only.
 
 ```bash
-read -rs TF_VAR_lightspeed_azure_api_key
-export TF_VAR_lightspeed_azure_api_key
-terraform apply
+oc create namespace openshift-lightspeed --dry-run=client -o yaml | oc apply -f -
+
+read -rs AZ_CLIENT_ID; read -rs AZ_TENANT_ID; read -rs AZ_CLIENT_SECRET
+oc create secret generic azure-api-keys -n openshift-lightspeed \
+  --from-literal=client_id="$AZ_CLIENT_ID" \
+  --from-literal=tenant_id="$AZ_TENANT_ID" \
+  --from-literal=client_secret="$AZ_CLIENT_SECRET"
 ```
 
-Terraform then creates the `azure-api-keys` Secret in `openshift-lightspeed`
-and applies an `OLSConfig` referencing it. The endpoint, deployment and model
-default to the values below and can be overridden:
+Using `read -rs` keeps the values out of shell history. Then run
+`terraform apply`: the `lightspeed_config` phase detects the Secret and applies
+an `OLSConfig` referencing it.
+
+**If the Secret is missing the phase skips with instructions rather than
+failing**, so a cluster build never blocks on it — create the Secret and
+re-run `terraform apply` to pick it up.
+
+Endpoint, deployment and model are plain variables (no secrets):
 
 | Variable | Default |
 |----------|---------|
@@ -226,10 +241,10 @@ default to the values below and can be overridden:
 | `lightspeed_azure_deployment` | `gpt-4` |
 | `lightspeed_azure_model` | `gpt-4` |
 
-> You can also create the `OLSConfig` by hand in the console — **Operators →
-> Installed Operators → OpenShift Lightspeed → OLSConfig → Create** gives a
-> form — but the Secret must exist first, and a console-created config will be
-> overwritten on the next `terraform apply`.
+> The console can also create an `OLSConfig` — **Operators → Installed
+> Operators → OpenShift Lightspeed → OLSConfig → Create** — but the Secret must
+> exist first either way, and a console-created config is overwritten on the
+> next `terraform apply`.
 
 #### Networking
 

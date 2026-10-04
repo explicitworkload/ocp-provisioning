@@ -282,32 +282,42 @@ resource "null_resource" "openshift_ai" {
 
 # Phase 10: Enable console plugins
 # Phase: Configure OpenShift Lightspeed against Azure OpenAI.
-# Skipped entirely when no API key is supplied, so the operator installs but
-# stays unconfigured rather than failing.
+#
+# The azure-api-keys Secret is a manual prerequisite, deliberately not created
+# here: anything passed through a Terraform variable is written to state in
+# plaintext. Creating it out of band keeps the credential out of state, out of
+# the repo and out of any plan file. The Ansible litellm role consumes the same
+# Secret, so it is a shared prerequisite rather than Lightspeed-only.
+#
+# Absent the Secret this phase skips with instructions instead of failing, so a
+# cluster build never blocks on it. Re-run apply once the Secret exists.
 resource "null_resource" "lightspeed_config" {
-  count      = var.lightspeed_azure_api_key == "" ? 0 : 1
   depends_on = [null_resource.operators]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
-    environment = {
-      AZURE_API_KEY = var.lightspeed_azure_api_key
-    }
     command     = <<-SCRIPT
 			set -eo pipefail
 			${local.brew_init}
 			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-			echo "Waiting for Lightspeed Operator to be ready..."
+			echo "Waiting for Lightspeed CRD..."
 			until oc get crd olsconfigs.ols.openshift.io 2>/dev/null; do
 				sleep 15
 			done
 
-			echo "Creating Azure credentials secret..."
-			oc create secret generic azure-api-keys \
-			  -n openshift-lightspeed \
-			  --from-literal=apitoken="$AZURE_API_KEY" \
-			  --dry-run=client -o yaml | oc apply -f -
+			if ! oc get secret azure-api-keys -n openshift-lightspeed >/dev/null 2>&1; then
+				echo ""
+				echo "SKIPPING Lightspeed configuration: secret azure-api-keys not found."
+				echo "Create it, then re-run terraform apply:"
+				echo ""
+				echo "  oc create secret generic azure-api-keys -n openshift-lightspeed \\"
+				echo "    --from-literal=client_id=<id> \\"
+				echo "    --from-literal=tenant_id=<tenant> \\"
+				echo "    --from-literal=client_secret=<secret>"
+				echo ""
+				exit 0
+			fi
 
 			echo "Applying OLSConfig..."
 			sed -e "s|AZURE_OPENAI_URL|${var.lightspeed_azure_url}|g" \
