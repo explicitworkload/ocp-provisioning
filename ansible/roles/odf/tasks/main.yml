@@ -58,12 +58,16 @@
   retries: 60
   delay: 30
 
-# GPU nodes are excluded server-side via node-role.kubernetes.io/gpu, which
-# comes from the MachineSet template and so exists as soon as the node
-# registers. Do not filter on nvidia.com/gpu.present: that label is applied by
-# the GPU operator, which runs after this role, and its dots cannot be
-# addressed through a Jinja attribute path anyway.
-- name: Get non-GPU worker nodes for ODF
+# Exclusions are done server-side with label selectors.
+#
+# GPU: node-role.kubernetes.io/gpu comes from the MachineSet template, so it
+# exists as soon as the node registers. Do not filter on nvidia.com/gpu.present
+# — that is applied by the GPU operator, which runs after this role, and its
+# dots cannot be addressed through a Jinja attribute path anyway.
+#
+# Control plane: on these sandbox clusters the master also carries the worker
+# role, so filtering on worker alone places an OSD on the control plane.
+- name: Get eligible worker nodes for ODF
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
     api_version: v1
@@ -71,6 +75,8 @@
     label_selectors:
       - "node-role.kubernetes.io/worker="
       - "!node-role.kubernetes.io/gpu"
+      - "!node-role.kubernetes.io/master"
+      - "!node-role.kubernetes.io/control-plane"
   register: worker_nodes
 
 - name: Select non-GPU worker nodes
@@ -84,8 +90,9 @@
 - name: Fail when no eligible ODF nodes were found
   ansible.builtin.fail:
     msg: >-
-      No non-GPU worker nodes available for ODF. Refusing to continue rather
-      than placing storage on GPU nodes.
+      No dedicated worker nodes available for ODF — every worker is also a GPU
+      or control-plane node. Refusing to continue rather than placing storage
+      on them. On a compact cluster, relax the selectors above deliberately.
   when: odf_nodes | length == 0
 
 - name: Label worker nodes for ODF storage
