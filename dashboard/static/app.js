@@ -808,18 +808,24 @@ function renderMetrics(mx) {
       "</span>"
     );
   }
-  var items = [
-    stat("latency", (mx.totalMs || 0) + "ms", "Full round trip including any tool calls. Not TTFT — this endpoint does not stream, so the whole completion is awaited."),
-    stat("in", mx.promptTokens || 0, "Prompt tokens, summed across rounds"),
-    stat("out", mx.completionTokens || 0, "Completion tokens, summed across rounds"),
-    stat("total", mx.totalTokens || 0, "Total tokens billed for this response, prompt + completion across every round"),
-    stat("tok/s", mx.tokensPerSec || 0, "Completion tokens per second over the whole request"),
-  ];
-  if (mx.rounds > 1) {
-    items.splice(1, 0, stat("first call", (mx.firstResponseMs || 0) + "ms", "How long the first upstream completion took, before any tool calls"));
+  var items = [];
+  if (mx.ttftMs !== null && mx.ttftMs !== undefined) {
+    items.push(stat("TTFT", (mx.ttftMs / 1000).toFixed(2) + "s",
+      "Time to first token. Reasoning counts — for a thinking model this is the opening <think>, not visible text."));
   }
-  if (mx.costUsd > 0) items.push(stat("cost", "$" + mx.costUsd.toFixed(6), "Reported by LiteLLM for this response"));
-  if (mx.rounds > 1) items.push(stat("rounds", mx.rounds, "LLM calls made, including tool-call follow-ups"));
+  // Only worth showing when reasoning delayed visible text enough to notice.
+  if (mx.ttfoMs !== null && mx.ttfoMs !== undefined && mx.ttftMs !== null &&
+      mx.ttfoMs - mx.ttftMs > 50) {
+    items.push(stat("TTFO", (mx.ttfoMs / 1000).toFixed(2) + "s",
+      "Time to first visible output, after the reasoning block closed"));
+  }
+  items.push(stat("", (mx.completionTokens || 0) + " tokens", "Completion tokens"));
+  items.push(stat("", (mx.tokensPerSec || 0) + " T/s",
+    "Decode throughput, measured from the first token so prefill is excluded"));
+  items.push(stat("", (mx.promptTokens || 0) + " prompt", "Prompt tokens"));
+  items.push(stat("", ((mx.totalMs || 0) / 1000).toFixed(1) + "s", "Total wall clock"));
+  if (mx.costUsd > 0) items.push(stat("cost", "$" + mx.costUsd.toFixed(6), "Reported by LiteLLM"));
+  if (mx.rounds > 1) items.push(stat("rounds", mx.rounds, "LLM calls including tool-call follow-ups"));
   if (mx.toolCalls > 0) items.push(stat("tools", mx.toolCalls, "MCP tool invocations"));
   return '<div class="chat-metrics">' + items.join("") + "</div>";
 }
@@ -895,6 +901,8 @@ async function sendChat() {
   var mcpUrls = getEnabledMcpUrls();
 
   try {
+    var stats = { startTime: performance.now(), firstTokenTime: null, firstOutputTime: null, deltas: 0 };
+
     var res = await fetch("/api/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -904,26 +912,104 @@ async function sendChat() {
         mcpServers: mcpUrls,
       }),
     });
-    var data = await res.json();
-    if (!res.ok) {
-      setStatusBar("chat-status", "ERROR: " + (data.error || "unknown"), "error");
-      showToast("Chat error: " + (data.error || "unknown"), "error");
+
+    if (!res.ok || !res.body) {
+      var errText = "unknown";
+      try { errText = (await res.json()).error || errText; } catch (_) {}
+      setStatusBar("chat-status", "ERROR: " + errText, "error");
+      showToast("Chat error: " + errText, "error");
       btn.disabled = false;
       return;
     }
 
-    if (data.toolCalls && data.toolCalls.length > 0) {
-      data.toolCalls.forEach(function (tc) {
-        chatHistory.push({ role: "tool", content: tc.content || "(tool call)" });
+    // Placeholder the stream writes into, so text paints as it arrives.
+    var live = { role: "assistant", content: "", streaming: true };
+    chatHistory.push(live);
+    renderChatMessages();
+
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+    var finalPayload = null;
+    var streamError = null;
+
+    function handleEvent(name, payload) {
+      if (name === "delta") {
+        // Reasoning counts: for a thinking model the first token is the
+        // opening <think>, not visible prose. TTFO tracks the latter.
+        var piece = payload.reasoning || payload.content || "";
+        if (!piece) return;
+        if (stats.firstTokenTime === null) stats.firstTokenTime = performance.now();
+        stats.deltas += 1;
+        live.content += piece;
+        if (stats.firstOutputTime === null && splitThinking(live.content).answer) {
+          stats.firstOutputTime = performance.now();
+        }
+        renderChatMessages();
+      } else if (name === "tool") {
+        if (payload.status === "running") {
+          setStatusBar("chat-status", "TOOL: " + payload.name, "active");
+        } else {
+          chatHistory.splice(chatHistory.length - 1, 0, {
+            role: "tool",
+            content: payload.result || "(tool call)",
+          });
+          renderChatMessages();
+        }
+      } else if (name === "done") {
+        finalPayload = payload;
+      } else if (name === "error") {
+        streamError = payload.error || "stream failed";
+      }
+    }
+
+    while (true) {
+      var step = await reader.read();
+      if (step.done) break;
+      buffer += decoder.decode(step.value, { stream: true });
+      var blocks = buffer.split("\n\n");
+      buffer = blocks.pop();
+      blocks.forEach(function (block) {
+        var name = null, raw = null;
+        block.split("\n").forEach(function (l) {
+          if (l.indexOf("event: ") === 0) name = l.slice(7).trim();
+          else if (l.indexOf("data: ") === 0) raw = l.slice(6);
+        });
+        if (!name || raw === null) return;
+        try { handleEvent(name, JSON.parse(raw)); } catch (_) {}
       });
     }
 
-    chatHistory.push({ role: "assistant", content: data.reply, metrics: data.metrics });
-    renderChatMessages();
-    if (tokens) {
-      tokens.textContent = data.usage.prompt_tokens + " in / " + data.usage.completion_tokens + " out tokens";
+    if (streamError) {
+      setStatusBar("chat-status", "ERROR: " + streamError, "error");
+      showToast("Chat error: " + streamError, "error");
+      btn.disabled = false;
+      return;
     }
-    setStatusBar("chat-status", data.model, "active");
+
+    var endTime = performance.now();
+    var mx = (finalPayload && finalPayload.metrics) || {};
+    // Prefer the server's real usage; delta count is only an approximation
+    // because one delta is not reliably one token.
+    var outTokens = mx.completionTokens || stats.deltas;
+    // Decode throughput: exclude prefill by measuring from the first token.
+    var decodeMs = stats.firstTokenTime === null ? 0 : endTime - stats.firstTokenTime;
+
+    live.streaming = false;
+    live.content = (finalPayload && finalPayload.reply) || live.content;
+    live.metrics = Object.assign({}, mx, {
+      ttftMs: stats.firstTokenTime === null ? null : Math.round(stats.firstTokenTime - stats.startTime),
+      ttfoMs: stats.firstOutputTime === null ? null : Math.round(stats.firstOutputTime - stats.startTime),
+      totalMs: Math.round(endTime - stats.startTime),
+      completionTokens: outTokens,
+      tokensPerSec: decodeMs > 0 ? Math.round((outTokens / (decodeMs / 1000)) * 10) / 10 : 0,
+    });
+    renderChatMessages();
+
+    if (tokens) {
+      tokens.textContent = (mx.promptTokens || 0) + " in / " + outTokens + " out tokens";
+    }
+    setStatusBar("chat-status", (finalPayload && finalPayload.model) || model, "active");
   } catch (e) {
     setStatusBar("chat-status", "ERROR: " + e.message, "error");
     showToast("Chat error: " + e.message, "error");

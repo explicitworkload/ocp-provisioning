@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import requests as http_requests
-from flask import Flask, render_template, jsonify, request, session, redirect, url_for
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for, Response
 from kubernetes import client, config
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -997,6 +997,152 @@ def ai_models():
         return jsonify({"error": str(e)}), 500
 
 
+def _sse(event, data):
+    return "event: %s\ndata: %s\n\n" % (event, json.dumps(data))
+
+
+def _stream_chat(payload, model, tool_server_map):
+    """Drive the completion (and any MCP tool rounds) as Server-Sent Events.
+
+    Timing is deliberately left to the browser: only the client knows when a
+    delta actually painted, so TTFT/TTFO are measured there. This yields
+    tokens and lets the UI do the clock.
+    """
+    prompt_tokens = 0
+    completion_tokens = 0
+    cost = 0.0
+    rounds = 0
+    tools_run = 0
+    final_text = ""
+
+    try:
+        for _ in range(5):
+            rounds += 1
+            parts = []
+            tool_acc = {}
+
+            with http_requests.post(
+                f"{LITELLM_URL}/v1/chat/completions",
+                headers=_llm_headers(), json=payload, stream=True, timeout=180,
+            ) as r:
+                r.raise_for_status()
+                try:
+                    cost += float(r.headers.get("x-litellm-response-cost-original") or 0)
+                except (TypeError, ValueError):
+                    pass
+
+                for line in r.iter_lines():
+                    if not line or not line.startswith(b"data: "):
+                        continue
+                    raw = line[6:].decode("utf-8", "replace")
+                    if raw.strip() == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(raw)
+                    except ValueError:
+                        continue
+
+                    usage = data.get("usage") or {}
+                    if usage:
+                        prompt_tokens += usage.get("prompt_tokens") or 0
+                        completion_tokens += usage.get("completion_tokens") or 0
+
+                    for choice in data.get("choices") or []:
+                        delta = choice.get("delta") or {}
+
+                        # Models that separate reasoning send it here; qwen3
+                        # on this stack inlines <think> in content instead.
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            parts.append(reasoning)
+                            yield _sse("delta", {"reasoning": reasoning})
+
+                        text = delta.get("content")
+                        if text:
+                            parts.append(text)
+                            yield _sse("delta", {"content": text})
+
+                        # Tool calls stream in fragments keyed by index, with
+                        # arguments split across chunks.
+                        for tc in delta.get("tool_calls") or []:
+                            slot = tool_acc.setdefault(
+                                tc.get("index", 0),
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                slot["arguments"] += fn["arguments"]
+
+            final_text = "".join(parts)
+
+            if not tool_acc:
+                break
+
+            payload["messages"].append({
+                "role": "assistant",
+                "content": final_text or None,
+                "tool_calls": [
+                    {
+                        "id": slot["id"],
+                        "type": "function",
+                        "function": {
+                            "name": slot["name"],
+                            "arguments": slot["arguments"],
+                        },
+                    }
+                    for slot in tool_acc.values()
+                ],
+            })
+
+            for slot in tool_acc.values():
+                tools_run += 1
+                yield _sse("tool", {"name": slot["name"], "status": "running"})
+                srv_url = tool_server_map.get(slot["name"], "")
+                if srv_url:
+                    try:
+                        args = json.loads(slot["arguments"] or "{}")
+                    except ValueError:
+                        args = {}
+                    try:
+                        result = str(_run_async(
+                            _mcp_call_tool(srv_url, slot["name"], args)
+                        ))
+                    except Exception as exc:
+                        result = f"Error calling tool: {exc}"
+                else:
+                    result = f"Unknown tool: {slot['name']}"
+
+                payload["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": slot["id"],
+                    "content": result,
+                })
+                yield _sse("tool", {
+                    "name": slot["name"], "status": "done", "result": result,
+                })
+        else:
+            final_text = final_text or "(tool call loop reached max rounds)"
+
+        yield _sse("done", {
+            "reply": final_text,
+            "model": model,
+            "metrics": {
+                "promptTokens": prompt_tokens,
+                "completionTokens": completion_tokens,
+                "totalTokens": prompt_tokens + completion_tokens,
+                "rounds": rounds,
+                "toolCalls": tools_run,
+                "costUsd": round(cost, 6),
+            },
+        })
+    except Exception as exc:
+        yield _sse("error", {"error": str(exc)})
+
+
 @app.route("/api/ai/chat", methods=["POST"])
 @login_required
 def ai_chat():
@@ -1009,6 +1155,7 @@ def ai_chat():
     if not model:
         return jsonify({"error": "model is required"}), 400
 
+    # Resolve tools up front: the request context is gone inside the generator.
     all_mcp_tools = []
     tool_server_map = {}
     for srv_url in mcp_server_urls:
@@ -1025,109 +1172,22 @@ def ai_chat():
         "messages": list(messages),
         "temperature": 0.7,
         "max_tokens": 2048,
+        "stream": True,
+        "stream_options": {"include_usage": True},
     }
-
     if all_mcp_tools:
         payload["tools"] = _mcp_tools_to_openai(all_mcp_tools)
 
-    started = time.time()
-    stats = {"rounds": 0, "toolCalls": 0, "prompt": 0, "completion": 0,
-             "firstMs": None, "cost": 0.0}
-
-    def _metrics():
-        total_ms = round((time.time() - started) * 1000)
-        secs = max(total_ms / 1000.0, 0.001)
-        return {
-            # Without streaming there is no true time-to-first-token; this is
-            # how long the first upstream completion took to come back.
-            "firstResponseMs": stats["firstMs"],
-            "totalMs": total_ms,
-            "rounds": stats["rounds"],
-            "toolCalls": stats["toolCalls"],
-            "promptTokens": stats["prompt"],
-            "completionTokens": stats["completion"],
-            "totalTokens": stats["prompt"] + stats["completion"],
-            "tokensPerSec": round(stats["completion"] / secs, 1),
-            # LiteLLM reports 0.0 for self-hosted models with no pricing
-            # configured, which is accurate — the UI hides a zero cost.
-            "costUsd": round(stats["cost"], 6),
-        }
-
-    try:
-        max_rounds = 5
-        for _ in range(max_rounds):
-            stats["rounds"] += 1
-            round_started = time.time()
-            r = http_requests.post(
-                f"{LITELLM_URL}/v1/chat/completions",
-                headers=_llm_headers(), json=payload, timeout=120,
-            )
-            if stats["firstMs"] is None:
-                stats["firstMs"] = round((time.time() - round_started) * 1000)
-            r.raise_for_status()
-            data = r.json()
-            # Accumulate across tool-call rounds; the last response alone
-            # undercounts everything spent getting there.
-            round_usage = data.get("usage") or {}
-            stats["prompt"] += round_usage.get("prompt_tokens") or 0
-            stats["completion"] += round_usage.get("completion_tokens") or 0
-            try:
-                stats["cost"] += float(
-                    r.headers.get("x-litellm-response-cost-original") or 0
-                )
-            except (TypeError, ValueError):
-                pass
-            choice = data["choices"][0]
-            msg = choice["message"]
-
-            if choice.get("finish_reason") != "tool_calls" and not msg.get("tool_calls"):
-                return jsonify({
-                    "reply": msg.get("content", ""),
-                    "model": data.get("model", model),
-                    "toolCalls": [
-                        m for m in payload["messages"]
-                        if m.get("role") == "tool"
-                    ],
-                    "usage": {
-                        "prompt_tokens": stats["prompt"],
-                        "completion_tokens": stats["completion"],
-                    },
-                    "metrics": _metrics(),
-                })
-
-            payload["messages"].append(msg)
-
-            for tc in msg.get("tool_calls", []):
-                stats["toolCalls"] += 1
-                fn_name = tc["function"]["name"]
-                fn_args = json.loads(tc["function"]["arguments"] or "{}")
-                srv_url = tool_server_map.get(fn_name, "")
-
-                if srv_url:
-                    try:
-                        result = _run_async(_mcp_call_tool(srv_url, fn_name, fn_args))
-                    except Exception as e:
-                        result = f"Error calling tool: {e}"
-                else:
-                    result = f"Unknown tool: {fn_name}"
-
-                payload["messages"].append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
-
-        return jsonify({
-            "reply": msg.get("content", "") or "(tool call loop reached max rounds)",
-            "model": data.get("model", model),
-            "usage": {
-                "prompt_tokens": stats["prompt"],
-                "completion_tokens": stats["completion"],
-            },
-            "metrics": _metrics(),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return Response(
+        _stream_chat(payload, model, tool_server_map),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Without this the OpenShift router buffers the whole response and
+            # the stream arrives as one lump, defeating the point.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/healthz")
