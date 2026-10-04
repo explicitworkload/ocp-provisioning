@@ -168,7 +168,7 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | Role | Instance Type | Count | Notes |
 |------|---------------|-------|-------|
 | Master | `m5.xlarge` (4 vCPU, 16 GB) | 3 | Control plane |
-| CPU Worker | `m5.4xlarge` (16 vCPU, 64 GB) | 6 | + 300 GB additional gp3 SSD each |
+| CPU Worker | `m5.4xlarge` (16 vCPU, 64 GB) | 6 | Default root volume only |
 | GPU Worker | `g4dn.4xlarge` (16 vCPU, 64 GB, 1x T4) | 1 | NVIDIA GPU workloads |
 | GPU Worker | `p4de.24xlarge` (96 vCPU, 1.1 TB, 8x A100 80GB) | 0 | Scale-up ready (set replicas to 1) |
 
@@ -177,14 +177,13 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | Phase | Resource | Description |
 |-------|----------|-------------|
 | 1 | `generate_manifests` | Generate install manifests from `install-config.yaml` |
-| 2 | `patch_worker_machinesets` | Add 300 GB gp3 SSD to each worker MachineSet |
-| 3 | `cluster_install` | Run `openshift-install create cluster` |
-| 4 | `gpu_machineset` | Apply GPU worker MachineSets and patch security groups |
-| 5 | `operators` | Install all operator subscriptions |
-| 6 | `nfd_instance` | Create NodeFeatureDiscovery instance for hardware detection |
-| 7 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
-| 8 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
-| 9 | `console_plugins` | Enable console plugins |
+| 2 | `cluster_install` | Run `openshift-install create cluster` |
+| 3 | `gpu_machineset` | Apply GPU worker MachineSets and patch security groups |
+| 4 | `operators` | Install all operator subscriptions |
+| 5 | `nfd_instance` | Create NodeFeatureDiscovery instance for hardware detection |
+| 6 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
+| 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
+| 8 | `console_plugins` | Enable console plugins |
 
 #### Operators
 

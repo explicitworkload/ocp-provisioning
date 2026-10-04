@@ -40,11 +40,6 @@ variable "worker_replicas" {
   description = "Number of CPU worker nodes"
 }
 
-variable "worker_extra_disk_size" {
-  type        = number
-  default     = 300
-  description = "Size in GB of the additional SSD attached to each CPU worker"
-}
 
 variable "pull_secret_path" {
   type        = string

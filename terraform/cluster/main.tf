@@ -73,48 +73,10 @@ resource "null_resource" "generate_manifests" {
   }
 }
 
-# Phase 2: Patch worker MachineSets to add 300GB additional SSD
-resource "null_resource" "patch_worker_machinesets" {
-  depends_on = [null_resource.generate_manifests]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    command     = <<-SCRIPT
-			set -euo pipefail
-			python3 -m venv /tmp/pyyaml-venv
-			/tmp/pyyaml-venv/bin/pip install pyyaml -q
-
-			for f in ${local.install_dir}/openshift/99_openshift-cluster-api_worker-machineset-*.yaml; do
-				[ -f "$f" ] || continue
-				/tmp/pyyaml-venv/bin/python3 -c "
-			import yaml, sys
-
-			with open('$f') as fh:
-			    doc = yaml.safe_load(fh)
-
-			block_devices = doc['spec']['template']['spec']['providerSpec']['value']['blockDevices']
-			block_devices.append({
-			    'deviceName': '/dev/xvdb',
-			    'ebs': {
-			        'encrypted': True,
-			        'volumeSize': ${var.worker_extra_disk_size},
-			        'volumeType': 'gp3',
-			        'iops': 3000
-			    }
-			})
-
-			with open('$f', 'w') as fh:
-			    yaml.dump(doc, fh, default_flow_style=False)
-			"
-				echo "Patched $f with additional ${var.worker_extra_disk_size}GB SSD"
-			done
-		SCRIPT
-  }
-}
 
 # Phase 3: Create the cluster from modified manifests
 resource "null_resource" "cluster_install" {
-  depends_on = [null_resource.patch_worker_machinesets]
+  depends_on = [null_resource.generate_manifests]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
