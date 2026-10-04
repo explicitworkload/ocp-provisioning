@@ -15,29 +15,34 @@
   ansible.builtin.set_fact:
     gatus_endpoints: "{{ gatus_core_endpoints + gatus_public_endpoints }}"
   vars:
+    # In-cluster service DNS: skips the load-balancer hairpin and, where the
+    # service speaks plain HTTP, the TLS handshake too. The console is checked
+    # both ways so an ingress failure is distinguishable from an app failure.
     gatus_core_endpoints:
       - name: Bookinfo Productpage
-        url: "https://bookinfo.{{ ocp_apps_domain }}/productpage"
+        url: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
         interval: 60s
         conditions: ["[STATUS] == 200"]
-        client: {insecure: true}
       - name: Kiali
-        url: "https://kiali.{{ ocp_apps_domain }}"
+        url: "https://kiali.istio-system.svc.cluster.local:20001/"
         interval: 60s
-        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+        conditions: ["[STATUS] == 200"]
         client: {insecure: true}
       - name: Operations Dashboard
-        url: "https://dashboard.{{ ocp_apps_domain }}"
+        url: "http://ops-dashboard.dashboard.svc.cluster.local:8080/healthz"
+        interval: 60s
+        conditions: ["[STATUS] == 200"]
+      - name: Dev Spaces
+        url: "http://che-gateway.openshift-devspaces.svc.cluster.local:8080/"
+        interval: 60s
+        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
+      - name: OpenShift Console
+        url: "https://console.openshift-console.svc.cluster.local:443/"
         interval: 60s
         conditions: ["[STATUS] == 200"]
         client: {insecure: true}
-      - name: OpenShift Console
+      - name: OpenShift Console (ingress)
         url: "https://console-openshift-console.{{ ocp_apps_domain }}"
-        interval: 60s
-        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
-        client: {insecure: true}
-      - name: Dev Spaces
-        url: "https://devspaces.{{ ocp_apps_domain }}"
         interval: 60s
         conditions: ["[STATUS] == any(200, 301, 302, 403)"]
         client: {insecure: true}

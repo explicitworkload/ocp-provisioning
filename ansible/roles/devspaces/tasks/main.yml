@@ -94,6 +94,37 @@
   delay: 20
   failed_when: false
 
+# Adds a tile to the Dev Spaces "Create Workspace" page so this repo is one
+# click away instead of having to paste a Git URL. The dashboard watches for
+# ConfigMaps carrying the getting-started-samples component label.
+- name: Register this repo as a Dev Spaces sample
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ocp-provisioning-sample
+        namespace: "{{ devspaces_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: che.eclipse.org
+          app.kubernetes.io/component: getting-started-samples
+      data:
+        samples.json: |
+          [
+            {
+              "displayName": "OCP Provisioning",
+              "description": "Ansible day-2 automation and Operations Dashboard for OpenShift. Claude CLI and the Kubernetes extension are installed on start.",
+              "tags": ["Python", "Ansible", "OpenShift"],
+              "url": "{{ devspaces_sample_repo }}",
+              "icon": {
+                "mediatype": "image/svg+xml",
+                "base64data": "{{ devspaces_sample_icon }}"
+              }
+            }
+          ]
+
 # A second Route onto the same che-gateway service. Note that Dev Spaces ties
 # its OAuth redirects to status.cheURL, so signing in via this hostname
 # redirects back to the apps-domain URL — it serves, but is not a full

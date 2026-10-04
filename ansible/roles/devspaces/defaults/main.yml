@@ -5,3 +5,7 @@ devspaces_channel: stable
 # Extra Route on the ExternalDNS-managed domain. Only created when
 # deploy_external_dns is true. Set empty to skip.
 devspaces_custom_host: "devspaces28.kubernetes.day"
+
+# Repo offered as a one-click sample on the Create Workspace page.
+devspaces_sample_repo: "https://github.com/explicitworkload/ocp-provisioning"
+devspaces_sample_icon: "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTEiIGZpbGw9IiNlZTAwMDAiLz48dGV4dCB4PSIxMiIgeT0iMTciIGZvbnQtc2l6ZT0iMTMiIGZvbnQtZmFtaWx5PSJtb25vc3BhY2UiIGZpbGw9IiNmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk9DUDwvdGV4dD48L3N2Zz4="
