@@ -2,7 +2,7 @@
 
 Automated provisioning and day-2 configuration of OpenShift Container Platform (OCP) clusters on AWS. This project supports two workflows:
 
-1. **Terraform (full cluster)** — stands up a cluster from scratch via `openshift-install`, including bastion host, GPU workers, ODF storage, and all operators
+1. **Terraform (full cluster)** — stands up a cluster from scratch via `openshift-install`, including bastion host, GPU workers, and the base operators
 2. **Ansible (day-2 only)** — configures an existing cluster with operators, Service Mesh, ODF, Quay, GPU workers, model serving, and demo tooling
 
 Both are designed for repeatable demo and sandbox environments.
@@ -91,7 +91,7 @@ See [ansible/README.md](ansible/README.md) for full variable reference, tags, Cl
 
 ## Option B: Terraform (Full Cluster from Scratch)
 
-Use this to provision a complete cluster from nothing, including the bastion host, ODF storage, and all operators.
+Use this to provision a complete cluster from nothing, including the bastion host and the base operators. Storage (ODF) and Quay are left to the Ansible day-2 playbook, so they are configured in one place.
 
 ### Prerequisites
 
@@ -183,28 +183,24 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | 5 | `operators` | Install all operator subscriptions |
 | 6 | `nfd_instance` | Create NodeFeatureDiscovery instance for hardware detection |
 | 7 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
-| 8 | `odf_storage` | Configure Local Storage and ODF StorageCluster |
-| 9 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
-| 10 | `console_plugins` | Enable console plugins |
-| 11 | `quay_registry` | Deploy Quay Registry (waits for NooBaa) |
+| 8 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
+| 9 | `console_plugins` | Enable console plugins |
 
 #### Operators
 
 | Operator | Channel | Purpose |
 |----------|---------|---------|
-| OpenShift Data Foundation | stable-4.22 | Storage (Ceph + NooBaa object storage via Local Storage) |
-| Local Storage Operator | stable | Discovers and manages worker node SSDs for ODF |
 | Node Feature Discovery | stable | Hardware feature detection for GPU scheduling |
 | NVIDIA GPU Operator | v26.7 | GPU drivers, device plugin, and monitoring |
 | OpenShift AI (RHOAI) | stable-3.5 | KServe, OGX, AI Gateway, TrustyAI |
 | Red Hat Lightspeed | stable | AI assistant for OpenShift console |
 | Cluster Observability Operator | stable | Monitoring and observability |
 | OpenShift Pipelines | latest | Tekton-based CI/CD pipelines |
-| Red Hat Quay | stable-3.18 | Private container registry (backed by NooBaa) |
+| Red Hat Connectivity Link | stable | Kuadrant API gateway policies |
 | OpenShift GitOps | latest | Argo CD-based GitOps |
 | Web Terminal | fast | In-console terminal |
 
-**Console plugins enabled:** odf-console, odf-client-console, pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
+**Console plugins enabled:** pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin
 
 #### Networking
 

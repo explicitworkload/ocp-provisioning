@@ -276,45 +276,6 @@ resource "null_resource" "gpu_clusterpolicy" {
   }
 }
 
-# Phase 8: Configure local storage and ODF StorageCluster
-resource "null_resource" "odf_storage" {
-  depends_on = [null_resource.operators]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    command     = <<-SCRIPT
-			set -eo pipefail
-			${local.brew_init}
-			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
-
-			echo "Waiting for Local Storage Operator to be ready..."
-			until oc get csv -n openshift-local-storage -o jsonpath='{.items[?(@.spec.displayName=="Local Storage")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-				sleep 30
-			done
-
-			echo "Labeling worker nodes for ODF storage..."
-			oc get nodes -l node-role.kubernetes.io/worker,!node-role.kubernetes.io/gpu --no-headers -o name \
-			  | xargs -I{} oc label {} cluster.ocs.openshift.io/openshift-storage="" --overwrite
-
-			echo "Applying local storage discovery and volume set..."
-			oc apply -f ${path.module}/operators/04-local-storage.yaml
-
-			echo "Waiting for StorageCluster CRD..."
-			until oc get crd storageclusters.ocs.openshift.io 2>/dev/null; do
-				sleep 15
-			done
-
-			echo "Applying ODF StorageCluster..."
-			oc apply -f ${path.module}/operators/04-odf-storage.yaml
-
-			echo "ODF StorageCluster created. Devices will be discovered and adopted."
-		SCRIPT
-  }
-
-  triggers = {
-    cluster_name = local.cluster_name
-  }
-}
 
 # Phase 9: Configure OpenShift AI (waits for RHOAI operator to be ready)
 resource "null_resource" "openshift_ai" {
@@ -368,7 +329,7 @@ resource "null_resource" "console_plugins" {
 			${local.brew_init}
 			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
 
-			PLUGINS=(odf-console pipelines-console-plugin gitops-plugin kuadrant-console-plugin)
+			PLUGINS=(pipelines-console-plugin gitops-plugin kuadrant-console-plugin)
 			for plugin in "$${PLUGINS[@]}"; do
 				echo "Enabling console plugin: $plugin"
 				oc patch consoles.operator.openshift.io cluster --type=json \
@@ -384,40 +345,3 @@ resource "null_resource" "console_plugins" {
   }
 }
 
-# Phase 11: Configure Quay Registry (waits for Quay operator to be ready)
-resource "null_resource" "quay_registry" {
-  depends_on = [null_resource.odf_storage]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    command     = <<-SCRIPT
-			set -eo pipefail
-			${local.brew_init}
-			export KUBECONFIG=${local.install_dir}/auth/kubeconfig
-
-			echo "Waiting for Quay Operator to be ready..."
-			until oc get csv -n quay-enterprise -o jsonpath='{.items[?(@.spec.displayName=="Red Hat Quay")].status.phase}' 2>/dev/null | grep -q Succeeded; do
-				sleep 30
-			done
-
-			echo "Waiting for QuayRegistry CRD..."
-			until oc get crd quayregistries.quay.redhat.com 2>/dev/null; do
-				sleep 15
-			done
-
-			echo "Waiting for NooBaa to be ready..."
-			until oc get noobaa noobaa -n openshift-storage -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Ready; do
-				sleep 30
-			done
-
-			echo "Creating Quay Registry..."
-			oc apply -f ${path.module}/operators/06-quay-registry.yaml
-
-			echo "Quay Registry created."
-		SCRIPT
-  }
-
-  triggers = {
-    cluster_name = local.cluster_name
-  }
-}
