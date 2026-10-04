@@ -1,6 +1,6 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-rsb7q-sandbox1245-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-f6q4w-sandbox3621-opentlc-com:6443/admin"
 
 # GPU Worker configuration
 gpu_availability_zone: us-east-2a

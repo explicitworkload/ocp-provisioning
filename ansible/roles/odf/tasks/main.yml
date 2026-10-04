@@ -183,6 +183,208 @@
   delay: 15
   until: noobaa_patch is succeeded
 
+# ---------------------------------------------------------------------------
+# Workaround for an MCG bug observed on ODF 4.22.5-rhodf.
+#
+# noobaa-operator creates the noobaa-db-pg StatefulSet, lets NooBaa bootstrap
+# into it, then creates a CNPG cluster roughly four minutes later and repoints
+# noobaa-core at it WITHOUT migrating any data. When bootstrap wins that race
+# the system, admin account and first.bucket are stranded in the StatefulSet
+# database and NooBaa loops forever on "account not found", leaving
+# StorageCluster at Progressing/NoobaaInitializing. Ceph itself is unaffected.
+#
+# This copies the stranded rows into the CNPG primary, which preserves the
+# original system ID so the PV-pool agent's persisted identity stays valid.
+# Re-bootstrapping instead would mint a new ID and strand the agent.
+#
+# Guarded by an explicit state check, so it is inert once the operator is
+# fixed. Set odf_fix_noobaa_cnpg=false to skip it entirely.
+# ---------------------------------------------------------------------------
+- name: Wait for NooBaa to settle (ready, or stranded by the CNPG bug)
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: "{{ odf_namespace }}"
+    name: noobaa
+  register: nb_cr
+  until: >-
+    nb_cr.resources | length > 0 and (
+      nb_cr.resources[0].status.phase | default('') == 'Ready'
+      or 'account not found' in (
+        nb_cr.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Available') | map(attribute='message')
+        | join(' ')
+      )
+    )
+  retries: 40
+  delay: 15
+  when: odf_fix_noobaa_cnpg | bool
+
+- name: Record whether NooBaa is stranded
+  ansible.builtin.set_fact:
+    noobaa_stranded: >-
+      {{ odf_fix_noobaa_cnpg | bool
+         and nb_cr.resources | default([]) | length > 0
+         and nb_cr.resources[0].status.phase | default('') != 'Ready'
+         and 'account not found' in (
+               nb_cr.resources[0].status.conditions | default([])
+               | selectattr('type', 'equalto', 'Available')
+               | map(attribute='message') | join(' ')
+             ) }}
+
+- name: Repair the stranded NooBaa system
+  when: noobaa_stranded | bool
+  block:
+    - name: Find the CNPG primary pod
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ odf_namespace }}"
+        label_selectors:
+          - "cnpg.io/cluster=noobaa-db-pg-cluster"
+          - "role=primary"
+      register: cnpg_primary
+
+    - name: Fail if no CNPG primary was found
+      ansible.builtin.fail:
+        msg: "NooBaa is stranded but no CNPG primary pod was found — repair manually."
+      when: cnpg_primary.resources | length == 0
+
+    - name: Confirm the data really is stranded before touching anything
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          old=$(oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }} noobaa-db-pg-0 --
+            psql -U postgres -d nbcore -t -A -c "select count(*) from systems");
+          new=$(oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }}
+            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
+            psql -U postgres -d nbcore -t -A -c "select count(*) from systems");
+          echo "$old $new"
+        executable: /bin/bash
+      register: nb_counts
+      changed_when: false
+
+    - name: Abort repair unless the old DB has a system and CNPG has none
+      ansible.builtin.fail:
+        msg: >-
+          Unexpected database state ({{ nb_counts.stdout }} = old/new system
+          count). Expected the old StatefulSet DB to hold the system and CNPG
+          to be empty. Repair manually.
+      when: nb_counts.stdout.split() | map('int') | list != [1, 0]
+
+    - name: Scale down the NooBaa writers
+      kubernetes.core.k8s:
+        context: "{{ ocp_context }}"
+        state: patched
+        kind: "{{ item.kind }}"
+        api_version: apps/v1
+        name: "{{ item.name }}"
+        namespace: "{{ odf_namespace }}"
+        definition:
+          spec:
+            replicas: 0
+      loop:
+        - {kind: Deployment, name: noobaa-operator}
+        - {kind: StatefulSet, name: noobaa-core}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Wait for noobaa-core to stop
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ odf_namespace }}"
+        name: noobaa-core-0
+      register: nb_core_pod
+      until: nb_core_pod.resources | length == 0
+      retries: 20
+      delay: 10
+
+    - name: Create a temporary file for the dump
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .sql
+      register: nb_dump
+
+    - name: Dump the stranded system from the StatefulSet database
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }} noobaa-db-pg-0 --
+          pg_dump -U postgres -d nbcore --data-only --disable-triggers
+          {{ odf_noobaa_tables | map('regex_replace', '^', '-t public.') | join(' ') }}
+          > {{ nb_dump.path | quote }}
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Load it into the CNPG primary
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          oc --context {{ ocp_context | quote }} exec -i -n {{ odf_namespace }}
+            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
+            psql -U postgres -d nbcore
+            -c "TRUNCATE {{ odf_noobaa_tables | join(',') }} CASCADE" &&
+          oc --context {{ ocp_context | quote }} exec -i -n {{ odf_namespace }}
+            {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
+            psql -U postgres -d nbcore -v ON_ERROR_STOP=1
+            < {{ nb_dump.path | quote }}
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Verify the system landed in CNPG
+      ansible.builtin.shell:
+        cmd: >-
+          oc --context {{ ocp_context | quote }} exec -n {{ odf_namespace }}
+          {{ cnpg_primary.resources[0].metadata.name }} -c postgres --
+          psql -U postgres -d nbcore -t -A -c "select count(*) from systems"
+        executable: /bin/bash
+      register: nb_verify
+      changed_when: false
+      failed_when: nb_verify.stdout | trim != '1'
+
+  always:
+    - name: Remove the temporary dump
+      ansible.builtin.file:
+        path: "{{ nb_dump.path }}"
+        state: absent
+      when: nb_dump.path is defined
+
+    - name: Scale the NooBaa writers back up
+      kubernetes.core.k8s:
+        context: "{{ ocp_context }}"
+        state: patched
+        kind: "{{ item.kind }}"
+        api_version: apps/v1
+        name: "{{ item.name }}"
+        namespace: "{{ odf_namespace }}"
+        definition:
+          spec:
+            replicas: 1
+      loop:
+        - {kind: StatefulSet, name: noobaa-core}
+        - {kind: Deployment, name: noobaa-operator}
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Wait for NooBaa to become ready after repair
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: "{{ odf_namespace }}"
+    name: noobaa
+  register: nb_after
+  until: >-
+    nb_after.resources | length > 0 and
+    nb_after.resources[0].status.phase | default('') == 'Ready'
+  retries: 40
+  delay: 15
+  when: noobaa_stranded | bool
+
 - name: Wait for BackingStore CRD
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
