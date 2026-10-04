@@ -1014,7 +1014,8 @@ def ai_chat():
         payload["tools"] = _mcp_tools_to_openai(all_mcp_tools)
 
     started = time.time()
-    stats = {"rounds": 0, "toolCalls": 0, "prompt": 0, "completion": 0, "firstMs": None}
+    stats = {"rounds": 0, "toolCalls": 0, "prompt": 0, "completion": 0,
+             "firstMs": None, "cost": 0.0}
 
     def _metrics():
         total_ms = round((time.time() - started) * 1000)
@@ -1030,6 +1031,9 @@ def ai_chat():
             "completionTokens": stats["completion"],
             "totalTokens": stats["prompt"] + stats["completion"],
             "tokensPerSec": round(stats["completion"] / secs, 1),
+            # LiteLLM reports 0.0 for self-hosted models with no pricing
+            # configured, which is accurate — the UI hides a zero cost.
+            "costUsd": round(stats["cost"], 6),
         }
 
     try:
@@ -1050,6 +1054,12 @@ def ai_chat():
             round_usage = data.get("usage") or {}
             stats["prompt"] += round_usage.get("prompt_tokens") or 0
             stats["completion"] += round_usage.get("completion_tokens") or 0
+            try:
+                stats["cost"] += float(
+                    r.headers.get("x-litellm-response-cost-original") or 0
+                )
+            except (TypeError, ValueError):
+                pass
             choice = data["choices"][0]
             msg = choice["message"]
 

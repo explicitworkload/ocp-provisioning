@@ -805,12 +805,16 @@ function renderMetrics(mx) {
     );
   }
   var items = [
-    stat("first", (mx.firstResponseMs || 0) + "ms", "Time until the first upstream completion returned"),
-    stat("total", (mx.totalMs || 0) + "ms", "Full round trip including any tool calls"),
+    stat("latency", (mx.totalMs || 0) + "ms", "Full round trip including any tool calls. Not TTFT — this endpoint does not stream, so the whole completion is awaited."),
     stat("in", mx.promptTokens || 0, "Prompt tokens, summed across rounds"),
     stat("out", mx.completionTokens || 0, "Completion tokens, summed across rounds"),
+    stat("total", mx.totalTokens || 0, "Total tokens billed for this response, prompt + completion across every round"),
     stat("tok/s", mx.tokensPerSec || 0, "Completion tokens per second over the whole request"),
   ];
+  if (mx.rounds > 1) {
+    items.splice(1, 0, stat("first call", (mx.firstResponseMs || 0) + "ms", "How long the first upstream completion took, before any tool calls"));
+  }
+  if (mx.costUsd > 0) items.push(stat("cost", "$" + mx.costUsd.toFixed(6), "Reported by LiteLLM for this response"));
   if (mx.rounds > 1) items.push(stat("rounds", mx.rounds, "LLM calls made, including tool-call follow-ups"));
   if (mx.toolCalls > 0) items.push(stat("tools", mx.toolCalls, "MCP tool invocations"));
   return '<div class="chat-metrics">' + items.join("") + "</div>";
