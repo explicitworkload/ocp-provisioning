@@ -476,15 +476,74 @@ function renderNodes(nodes) {
   container.innerHTML = nodes
     .map(function (n) {
       var statusClass = n.ready ? "ready" : "not-ready";
+      var detail = [];
+      if (n.phase) detail.push(n.phase);
+      if (n.ec2State) detail.push(n.ec2State);
+      var select = n.isMaster
+        ? '<span class="node-guard" title="Control-plane node — protected">&#8212;</span>'
+        : '<input type="checkbox" class="node-pick" value="' + escapeHtml(n.name) + '">';
       return (
         '<div class="node-row">' +
+        select +
         '<div class="node-status ' + statusClass + '"></div>' +
-        '<span class="node-name">' + n.name + "</span>" +
+        '<span class="node-name">' + escapeHtml(n.name) + "</span>" +
         '<span class="node-roles">' + n.roles.join(", ") + "</span>" +
+        '<span class="node-detail">' + detail.join(" / ") + "</span>" +
         "</div>"
       );
     })
     .join("");
+}
+
+function selectedNodes() {
+  return Array.prototype.slice
+    .call(document.querySelectorAll(".node-pick:checked"))
+    .map(function (el) { return el.value; });
+}
+
+async function nodeAction(action) {
+  var nodes = selectedNodes();
+  if (!nodes.length) {
+    showToast("Select one or two worker nodes first", "info");
+    return;
+  }
+  if (nodes.length > 2) {
+    showToast("At most two nodes at a time", "error");
+    return;
+  }
+  var prompts = {
+    stop: "Stop the EC2 instance(s) for:\n\n" + nodes.join("\n") +
+      "\n\nThe node goes NotReady and its workloads reschedule. Start it again to recover.",
+    start: "Start the EC2 instance(s) for:\n\n" + nodes.join("\n"),
+    destroy: "DESTROY:\n\n" + nodes.join("\n") +
+      "\n\nThe Machine is deleted and its MachineSet provisions a replacement. " +
+      "This is irreversible for the current instance.",
+  };
+  if (!confirm(prompts[action])) return;
+
+  var labels = { stop: "STOPPING", start: "STARTING", destroy: "DESTROYING" };
+  setStatusBar("platform-status", labels[action] + " " + nodes.length + " NODE(S)...", "active");
+  try {
+    var res = await fetch("/api/platform/node/" + action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes }),
+    });
+    var data = await res.json();
+    if (res.ok) {
+      setStatusBar("platform-status", labels[action] + " REQUESTED — " + nodes.join(", "), "active");
+      showToast(action + " requested for " + nodes.join(", "), "success");
+      addPlatformTask(action, action + " — " + nodes.join(", "));
+      setTimeout(refreshPlatform, 5000);
+    } else {
+      setStatusBar("platform-status", "ERROR: " + data.error, "error");
+      showToast(action + " error: " + data.error, "error");
+      addPlatformTask(action + "-error", "Failed to " + action + " " + nodes.join(", "));
+    }
+  } catch (e) {
+    setStatusBar("platform-status", "ERROR: " + e.message, "error");
+    showToast(action + " error: " + e.message, "error");
+  }
 }
 
 async function scaleMachineSet(name) {

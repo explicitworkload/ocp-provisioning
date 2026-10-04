@@ -1,0 +1,3 @@
+---
+devspaces_namespace: openshift-devspaces
+devspaces_channel: stable

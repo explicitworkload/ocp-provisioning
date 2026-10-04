@@ -33,6 +33,20 @@
         ocp_apps_domain: "{{ cluster_ingress.resources[0].spec.domain }}"
       tags: [always]
 
+    - name: Get cluster infrastructure
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context }}"
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+      register: cluster_infra
+      tags: [always]
+
+    - name: Set cluster name fact
+      ansible.builtin.set_fact:
+        ocp_cluster_name: "{{ cluster_infra.resources[0].status.infrastructureName }}"
+      tags: [always]
+
     - name: Enable user workload monitoring
       kubernetes.core.k8s:
         context: "{{ ocp_context }}"
@@ -76,6 +90,9 @@
     - role: console_plugins
       tags: [console]
 
+    - role: devspaces
+      tags: [devspaces]
+
     - role: bookinfo_demo
       tags: [bookinfo, service-mesh-demo]
 
@@ -93,3 +110,9 @@
 
     - role: litellm
       tags: [litellm]
+
+    # Last: publishes live DNS records to Cloudflare. Opt-in only, and runs
+    # after every Route it might need to publish already exists.
+    - role: external_dns
+      tags: [external-dns, dns]
+      when: deploy_external_dns | bool

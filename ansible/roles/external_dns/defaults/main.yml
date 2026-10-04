@@ -1,0 +1,23 @@
+---
+# Opt-in. This role publishes real DNS records to a live Cloudflare zone, so it
+# stays off until explicitly enabled:
+#   ansible-playbook site.yml -e deploy_external_dns=true \
+#     -e cloudflare_api_token="<token>"
+deploy_external_dns: false
+
+# The Red Hat External DNS Operator only supports AWS, GCP, Azure, BlueCat and
+# Infoblox — it has no Cloudflare provider. So this role deploys upstream
+# ExternalDNS directly, which does.
+external_dns_namespace: external-dns
+external_dns_image: registry.k8s.io/external-dns/external-dns:v0.15.1
+
+# Cloudflare zone that ExternalDNS is allowed to manage.
+external_dns_domain: kubernetes.day
+
+# Route records through the Cloudflare proxy (orange cloud). Leaving this
+# false publishes a plain DNS record pointing straight at the router.
+external_dns_cloudflare_proxied: false
+
+# Cloudflare API token with Zone:Read + DNS:Edit on the zone above.
+# Pass at runtime: -e cloudflare_api_token="..." — never commit it.
+cloudflare_api_token: ""

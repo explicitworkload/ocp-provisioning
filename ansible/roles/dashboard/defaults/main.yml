@@ -3,3 +3,14 @@ dashboard_namespace: dashboard
 dashboard_image_tag: latest
 dashboard_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
 dashboard_secret_key: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+
+# Extra Route on a domain managed by ExternalDNS. Set empty to skip.
+# The cluster's default wildcard cert does not cover this name, so browsers
+# will warn until a matching certificate is attached.
+dashboard_custom_host: "dashboard28.kubernetes.day"
+
+# AWS key used only for node Stop/Start resiliency tests. Needs
+# ec2:DescribeInstances, ec2:StopInstances, ec2:StartInstances.
+# Pass at runtime — never commit. Destroy & Rebuild does not need these.
+dashboard_aws_access_key_id: ""
+dashboard_aws_secret_access_key: ""

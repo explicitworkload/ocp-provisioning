@@ -3,3 +3,4 @@ requests==2.32.*
 gunicorn==23.*
 kubernetes==32.*
 mcp>=1.9,<2
+boto3>=1.34,<2

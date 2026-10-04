@@ -30,6 +30,10 @@ deploy_quay_registry: true
 # quay_s3_access_key: ""
 # quay_s3_secret_key: ""
 
+# AWS key for node Stop/Start resiliency tests. Pass at runtime:
+#   -e dashboard_aws_access_key_id=... -e dashboard_aws_secret_access_key=...
+# Destroy & Rebuild works without these (Machine API only).
+
 # Console plugins to enable
 console_plugins:
   - pipelines-console-plugin
@@ -37,3 +41,20 @@ console_plugins:
   - kuadrant-console-plugin
   - odf-console
   - odf-client-console
+
+#
+# Anything below is not necessary optional.
+#
+# External DNS / Cloudflare — OFF by default. Runs last in the playbook.
+# Enable only when you want real records written to the Cloudflare zone:
+#   ansible-playbook site.yml -e deploy_external_dns=true \
+#     -e cloudflare_api_token="<token>"
+# The token is never stored here — Ansible writes it to the
+# cloudflare-credentials Secret in the external-dns namespace.
+deploy_external_dns: false
+external_dns_domain: kubernetes.day
+
+# Extra dashboard Route on the ExternalDNS-managed domain.
+# Harmless when deploy_external_dns is false — the Route simply has no
+# DNS record pointing at it. Set empty to skip creating it.
+dashboard_custom_host: "dashboard28.kubernetes.day"

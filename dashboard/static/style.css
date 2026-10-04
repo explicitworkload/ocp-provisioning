@@ -891,6 +891,51 @@ footer a:hover { color: var(--green); }
 .node-status.ready { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
 .node-status.not-ready { background: var(--red); }
 
+.node-pick {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-bright);
+  background: var(--bg-input);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.node-pick:checked {
+  border-color: var(--green-dim);
+  background: var(--green-900);
+}
+
+.node-pick:checked::after {
+  content: '\2713';
+  position: absolute;
+  top: -3px;
+  left: 1px;
+  font-size: 12px;
+  color: var(--green);
+}
+
+.node-guard {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.node-detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--amber);
+  text-transform: uppercase;
+  min-width: 90px;
+  text-align: right;
+}
+
 /* === LOGIN === */
 .login-wrapper {
   display: flex;

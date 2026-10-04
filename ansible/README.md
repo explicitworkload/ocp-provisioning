@@ -6,7 +6,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 
 ## What gets installed
 
-### Operators (12 subscriptions)
+### Operators (13 subscriptions)
 
 | Operator | Namespace | Channel |
 |----------|-----------|---------|
@@ -22,6 +22,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 | Network Observability | openshift-operators | stable |
 | Service Mesh 3 (Sail) | openshift-operators | stable |
 | Kiali (OSSM) | openshift-operators | stable |
+| Dev Spaces | openshift-operators | stable |
 
 ### Service Mesh 3
 
@@ -95,10 +96,36 @@ A self-service operations dashboard built with Flask and deployed via OpenShift 
 - **Circuit breaker** — limit connections to the reviews service to demonstrate cascading failure prevention
 - **Request timeout & retries** — set timeouts and auto-retries on the reviews service
 - **Platform Admin** — view and scale worker/GPU MachineSets, node status, cluster shutdown (separate page)
+- **Resiliency testing** — select one or two worker nodes and **Stop** them (powers the EC2 instance off so the node goes NotReady), **Start** them again, or **Destroy & Rebuild** (deletes the Machine so its MachineSet provisions a replacement). Control-plane nodes are refused
 - **AI Assistant** — summarization and chat with models served via LiteLLM, MCP server discovery and tool use for live cluster interaction (separate page)
 - **Floating task log** — pinned bottom-right panel with live progress, toast notifications for all actions
 - **Help page** — built-in guide with demo scenarios for each feature
 - Links to Gatus health monitor
+
+### External DNS (Cloudflare) — optional, off by default
+
+Watches OpenShift Routes and publishes matching records to a Cloudflare zone (`kubernetes.day`), so any Route whose host falls in that zone gets a DNS record without manual Cloudflare edits.
+
+This role is **disabled by default** and runs **last** in the playbook, after every Route it might publish already exists. Enable it explicitly:
+
+```bash
+ansible-playbook site.yml --tags external-dns \
+  -e deploy_external_dns=true \
+  -e cloudflare_api_token="<token>"
+```
+
+> **Why not the Red Hat External DNS Operator?** That operator only supports AWS, GCP, Azure, BlueCat and Infoblox — its `ExternalDNS` CRD has no Cloudflare provider. This role therefore deploys upstream ExternalDNS directly, which does support Cloudflare.
+
+Records are owned via a TXT registry keyed to the cluster's infrastructure name, so ExternalDNS only ever modifies records it created. The API token is **never stored in the repo** — Ansible writes it to the `cloudflare-credentials` Secret in the `external-dns` namespace (see [Cloudflare API token](#cloudflare-api-token)).
+
+### Dev Spaces
+
+Installs the Red Hat OpenShift Dev Spaces operator and a `CheCluster` instance in `openshift-devspaces`. Opening this repository as a workspace picks up the root [`devfile.yaml`](../devfile.yaml), which on each workspace start:
+
+- installs the **Claude Code CLI** (`@anthropic-ai/claude-code`) into `~/.npm-global`
+- installs Ansible and the Kubernetes Python client
+
+The **Kubernetes extension** (`ms-kubernetes-tools.vscode-kubernetes-tools`), plus the YAML and Ansible extensions, are recommended via `.vscode/extensions.json` and installed by the workspace editor.
 
 ### Gatus
 
@@ -167,6 +194,11 @@ All variables are in `group_vars/all.yml`:
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
 | `dashboard_password` | (random) | Dashboard login password (auto-generated, override at runtime) |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
+| `external_dns_domain` | `kubernetes.day` | Cloudflare zone that ExternalDNS manages |
+| `cloudflare_api_token` | (empty) | Cloudflare API token (pass at runtime, not in repo) |
+| `dashboard_custom_host` | `dashboard28.kubernetes.day` | Extra dashboard Route published via ExternalDNS |
+| `dashboard_aws_access_key_id` | (empty) | AWS key for node Stop/Start (pass at runtime) |
+| `dashboard_aws_secret_access_key` | (empty) | AWS secret for node Stop/Start (pass at runtime) |
 
 ## Dashboard password
 
@@ -191,6 +223,41 @@ oc create secret generic ops-dashboard-auth -n dashboard \
   --dry-run=client -o yaml | oc apply -f -
 oc rollout restart deployment/ops-dashboard -n dashboard
 ```
+
+## Cloudflare API token
+
+ExternalDNS needs a Cloudflare API token with **Zone:Read** and **DNS:Edit** on the managed zone. Create it at Cloudflare → My Profile → API Tokens, then pass it at runtime — **do not commit it**:
+
+```bash
+ansible-playbook site.yml --tags external-dns \
+  -e deploy_external_dns=true \
+  -e cloudflare_api_token="<token>"
+```
+
+Ansible stores the token in the `cloudflare-credentials` Secret in the `external-dns` namespace and the deployment reads it from there — it is never written to disk in this repo.
+
+Routes whose host falls inside `external_dns_domain` are published automatically. The dashboard's `dashboard28.kubernetes.day` Route is one of them.
+
+> **TLS note:** the cluster's default wildcard certificate only covers `*.apps.<cluster>`, so browsers show a name-mismatch warning on `dashboard28.kubernetes.day`. To remove it, either enable the Cloudflare proxy (orange cloud) so Cloudflare terminates TLS, or attach a matching certificate to the Route.
+
+## Node resiliency testing
+
+The dashboard's Platform page can simulate node failure:
+
+| Action | Mechanism | Credentials needed |
+|--------|-----------|--------------------|
+| Destroy & Rebuild | Deletes the `Machine`; its MachineSet provisions a replacement | None — Kubernetes RBAC only |
+| Stop / Start | `ec2:StopInstances` / `ec2:StartInstances` on the backing instance | AWS key (below) |
+
+Destroy & Rebuild works out of the box. Stop/Start needs an AWS key with `ec2:DescribeInstances`, `ec2:StopInstances` and `ec2:StartInstances` — the cluster's own machine-api credential is **not** reused, since the standard OpenShift IAM policy grants run/terminate but not stop/start:
+
+```bash
+ansible-playbook site.yml --tags dashboard \
+  -e dashboard_aws_access_key_id="$AWS_ACCESS_KEY" \
+  -e dashboard_aws_secret_access_key="$AWS_SECRET_KEY"
+```
+
+Without it, Stop/Start returns a clear "credentials lack ec2:StopInstances" error and the rest of the dashboard is unaffected. Control-plane nodes are always refused, and at most two nodes can be targeted at once.
 
 ## Quay without ODF
 
@@ -233,6 +300,8 @@ ansible-playbook site.yml --tags litellm            # LiteLLM proxy only
 ansible-playbook site.yml --tags bookinfo           # Bookinfo demo app
 ansible-playbook site.yml --tags dashboard          # Operations dashboard
 ansible-playbook site.yml --tags gatus              # Gatus health monitoring
+ansible-playbook site.yml --tags external-dns       # External DNS + Cloudflare
+ansible-playbook site.yml --tags devspaces          # OpenShift Dev Spaces
 ```
 
 ## Playbook structure
@@ -260,6 +329,8 @@ ansible/
     ├── litellm/                # LiteLLM proxy, PostgreSQL, reusable Azure credentials
     ├── bookinfo_demo/          # Istio Bookinfo sample app with sidecar injection
     ├── dashboard/              # Operations dashboard (BuildConfig from Git)
+    ├── external_dns/           # Upstream ExternalDNS -> Cloudflare (opt-in)
+    ├── devspaces/              # Dev Spaces operator + CheCluster
     └── gatus/                  # Gatus health monitoring
 ```
 

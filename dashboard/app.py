@@ -29,6 +29,7 @@ LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm.litellm.svc.cluster.
 LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 BOOKINFO_NS = "bookinfo"
 MACHINE_API_NS = "openshift-machine-api"
+AWS_REGION = os.environ.get("AWS_REGION", "")
 
 try:
     config.load_incluster_config()
@@ -544,29 +545,119 @@ def _get_machinesets():
     return results
 
 
+def _parse_provider_id(provider_id):
+    """aws:///us-east-2a/i-0abc123 -> ('us-east-2a', 'i-0abc123')"""
+    if not provider_id or not provider_id.startswith("aws://"):
+        return None, None
+    parts = provider_id.rstrip("/").split("/")
+    if len(parts) < 2:
+        return None, None
+    return parts[-2], parts[-1]
+
+
+def _machine_index():
+    """Map node name (or machine name when unjoined) -> machine details.
+
+    Sourced from Machine objects rather than Nodes so that a stopped or
+    failed instance still resolves after its Node drops out of the API.
+    """
+    out = {}
+    ms = k8s_custom.list_namespaced_custom_object(
+        "machine.openshift.io", "v1beta1", MACHINE_API_NS, "machines"
+    )
+    for m in ms.get("items", []):
+        meta = m.get("metadata") or {}
+        status = m.get("status") or {}
+        node_ref = (status.get("nodeRef") or {}).get("name")
+        _, iid = _parse_provider_id((m.get("spec") or {}).get("providerID", ""))
+        role = (meta.get("labels") or {}).get(
+            "machine.openshift.io/cluster-api-machine-role", ""
+        )
+        out[node_ref or meta.get("name")] = {
+            "machine": meta.get("name"),
+            "node": node_ref,
+            "instanceId": iid,
+            "phase": status.get("phase"),
+            "isMaster": role in ("master", "control-plane"),
+        }
+    return out
+
+
+def _ec2_client():
+    import boto3
+
+    if not AWS_REGION:
+        raise RuntimeError("AWS_REGION is not set on the dashboard deployment")
+    return boto3.client("ec2", region_name=AWS_REGION)
+
+
+def _attach_ec2_state(nodes):
+    ids = [n["instanceId"] for n in nodes if n.get("instanceId")]
+    if not ids:
+        return
+    try:
+        resp = _ec2_client().describe_instances(InstanceIds=ids)
+    except Exception:
+        return
+    states = {}
+    for res in resp.get("Reservations", []):
+        for inst in res.get("Instances", []):
+            states[inst["InstanceId"]] = (inst.get("State") or {}).get("Name")
+    for n in nodes:
+        n["ec2State"] = states.get(n.get("instanceId"))
+
+
 @app.route("/api/platform/status")
 @login_required
 def platform_status():
     try:
         machinesets = _get_machinesets()
-        nodes = k8s_core.list_node()
-        node_summary = []
-        for n in nodes.items:
+        machines = _machine_index()
+
+        live = {}
+        for n in k8s_core.list_node().items:
             labels = n.metadata.labels or {}
-            roles = [
-                k.split("/")[1]
-                for k in labels
-                if k.startswith("node-role.kubernetes.io/")
-            ]
-            ready = any(
-                c.type == "Ready" and c.status == "True"
-                for c in (n.status.conditions or [])
-            )
+            live[n.metadata.name] = {
+                "roles": [
+                    k.split("/")[1]
+                    for k in labels
+                    if k.startswith("node-role.kubernetes.io/")
+                ],
+                "ready": any(
+                    c.type == "Ready" and c.status == "True"
+                    for c in (n.status.conditions or [])
+                ),
+            }
+
+        node_summary = []
+        for m in machines.values():
+            seen = live.get(m["node"] or "", {})
             node_summary.append({
-                "name": n.metadata.name,
-                "roles": roles,
-                "ready": ready,
+                "name": m["node"] or m["machine"],
+                "roles": seen.get("roles", ["master"] if m["isMaster"] else ["worker"]),
+                "ready": seen.get("ready", False),
+                "machine": m["machine"],
+                "instanceId": m["instanceId"],
+                "phase": m["phase"],
+                "isMaster": m["isMaster"],
             })
+
+        covered = {m["node"] for m in machines.values() if m["node"]}
+        for name, seen in live.items():
+            if name in covered:
+                continue
+            node_summary.append({
+                "name": name,
+                "roles": seen["roles"],
+                "ready": seen["ready"],
+                "machine": None,
+                "instanceId": None,
+                "phase": None,
+                "isMaster": bool({"master", "control-plane"} & set(seen["roles"])),
+            })
+
+        node_summary.sort(key=lambda n: (not n["isMaster"], n["name"]))
+        _attach_ec2_state(node_summary)
         return jsonify({"machinesets": machinesets, "nodes": node_summary})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -609,6 +700,110 @@ def platform_shutdown():
         return jsonify({"status": "shutdown initiated", "scaled": scaled})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# --- Resiliency testing ---
+
+MAX_RESILIENCY_TARGETS = 2
+
+
+def _resolve_targets(names):
+    """Validate requested node names against the Machine inventory.
+
+    Control-plane nodes are refused: losing quorum takes the cluster (and this
+    dashboard) down in a way the dashboard cannot recover from.
+    """
+    index = _machine_index()
+    by_machine = {m["machine"]: m for m in index.values()}
+    targets, errors = [], []
+    for name in names:
+        info = index.get(name) or by_machine.get(name)
+        if not info:
+            errors.append(f"{name}: no matching node or machine")
+        elif info["isMaster"]:
+            errors.append(f"{name}: control-plane node, refusing")
+        else:
+            targets.append(info)
+    return targets, errors
+
+
+def _resiliency_request():
+    body = request.get_json(silent=True) or {}
+    names = body.get("nodes") or []
+    if not names:
+        return None, (jsonify({"error": "nodes required"}), 400)
+    if len(names) > MAX_RESILIENCY_TARGETS:
+        return None, (
+            jsonify({"error": f"at most {MAX_RESILIENCY_TARGETS} nodes at a time"}),
+            400,
+        )
+    targets, errors = _resolve_targets(names)
+    if errors:
+        return None, (jsonify({"error": "; ".join(errors)}), 400)
+    return targets, None
+
+
+def _ec2_power(action):
+    targets, err = _resiliency_request()
+    if err:
+        return err
+    missing = [t["machine"] for t in targets if not t["instanceId"]]
+    if missing:
+        return jsonify({"error": f"no EC2 instance id for: {', '.join(missing)}"}), 400
+    ids = [t["instanceId"] for t in targets]
+    try:
+        ec2 = _ec2_client()
+        if action == "stop":
+            ec2.stop_instances(InstanceIds=ids)
+        else:
+            ec2.start_instances(InstanceIds=ids)
+    except ImportError:
+        return jsonify({"error": "boto3 is not installed in the dashboard image"}), 500
+    except Exception as e:
+        msg = str(e)
+        if "UnauthorizedOperation" in msg:
+            msg = (
+                "AWS credentials lack ec2:StopInstances/StartInstances. "
+                "Supply a key with those permissions via the ops-dashboard-aws secret."
+            )
+        return jsonify({"error": msg}), 500
+    return jsonify({
+        "status": f"{action} requested",
+        "nodes": [t["node"] or t["machine"] for t in targets],
+        "instances": ids,
+    })
+
+
+@app.route("/api/platform/node/stop", methods=["POST"])
+@login_required
+def node_stop():
+    return _ec2_power("stop")
+
+
+@app.route("/api/platform/node/start", methods=["POST"])
+@login_required
+def node_start():
+    return _ec2_power("start")
+
+
+@app.route("/api/platform/node/destroy", methods=["POST"])
+@login_required
+def node_destroy():
+    """Delete the Machine; its MachineSet provisions a replacement."""
+    targets, err = _resiliency_request()
+    if err:
+        return err
+    deleted = []
+    try:
+        for t in targets:
+            k8s_custom.delete_namespaced_custom_object(
+                "machine.openshift.io", "v1beta1", MACHINE_API_NS,
+                "machines", t["machine"],
+            )
+            deleted.append(t["machine"])
+    except Exception as e:
+        return jsonify({"error": str(e), "deleted": deleted}), 500
+    return jsonify({"status": "destroy requested", "machines": deleted})
 
 
 # --- AI ---

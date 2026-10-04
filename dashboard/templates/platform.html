@@ -29,16 +29,23 @@
     </section>
 
     <section class="panel-group">
-      <h2 class="section-title"><span class="marker"></span>NODE STATUS</h2>
+      <h2 class="section-title"><span class="marker"></span>RESILIENCY TESTING</h2>
       <div class="grid">
         <div class="card">
           <div class="card-header">
             <span class="card-icon">&#9673;</span>
-            Cluster Nodes
+            Node Failure Simulation
           </div>
           <div class="card-body">
+            <p class="card-desc">Select one or two worker nodes, then stop them to simulate an outage, or destroy them to force a rebuild. Control-plane nodes are locked. <strong>Stop</strong> powers the EC2 instance off &mdash; <strong>Start</strong> brings the same instance back. <strong>Destroy</strong> deletes the Machine and its MachineSet provisions a fresh one.</p>
             <div id="platform-nodes" class="platform-table">
               <div class="log-empty">Loading...</div>
+            </div>
+            <div class="input-row" style="margin-top:8px">
+              <button class="btn btn-primary" onclick="refreshPlatform()">&#8635; Refresh</button>
+              <button class="btn btn-reset btn-danger" onclick="nodeAction('stop')">&#9208; Stop</button>
+              <button class="btn btn-primary" onclick="nodeAction('start')">&#9654; Start</button>
+              <button class="btn btn-reset btn-danger" onclick="nodeAction('destroy')">&#10006; Destroy &amp; Rebuild</button>
             </div>
           </div>
         </div>

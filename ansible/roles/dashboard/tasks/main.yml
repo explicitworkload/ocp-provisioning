@@ -90,6 +90,9 @@
         - apiGroups: ["machine.openshift.io"]
           resources: ["machinesets"]
           verbs: ["get", "list", "patch", "update"]
+        - apiGroups: ["machine.openshift.io"]
+          resources: ["machines"]
+          verbs: ["get", "list", "delete"]
         - apiGroups: [""]
           resources: ["nodes"]
           verbs: ["get", "list"]
@@ -187,6 +190,38 @@
         litellm-api-key: "{{ litellm_creds.resources[0].data.LITELLM_MASTER_KEY | b64decode }}"
   when: litellm_creds.resources | length > 0
 
+- name: Set AWS region fact for EC2 resiliency actions
+  ansible.builtin.set_fact:
+    dashboard_aws_region: >-
+      {{ cluster_infra.resources[0].status.platformStatus.aws.region
+         | default('', true) }}
+
+- name: Create dashboard AWS Secret for EC2 stop/start
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ops-dashboard-aws
+        namespace: "{{ dashboard_namespace }}"
+      type: Opaque
+      stringData:
+        aws_access_key_id: "{{ dashboard_aws_access_key_id }}"
+        aws_secret_access_key: "{{ dashboard_aws_secret_access_key }}"
+  no_log: true
+  when: dashboard_aws_access_key_id | length > 0
+
+- name: Note when EC2 stop/start is unconfigured
+  ansible.builtin.debug:
+    msg: >-
+      No dashboard_aws_access_key_id supplied — node Stop/Start will report a
+      missing-credentials error. Destroy & Rebuild still works (Machine API only).
+      Supply a key with ec2:DescribeInstances, ec2:StopInstances and
+      ec2:StartInstances to enable it.
+  when: dashboard_aws_access_key_id | length == 0
+
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -252,6 +287,20 @@
                         name: ops-dashboard-ai
                         key: litellm-api-key
                         optional: true
+                  - name: AWS_REGION
+                    value: "{{ dashboard_aws_region }}"
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: ops-dashboard-aws
+                        key: aws_access_key_id
+                        optional: true
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: ops-dashboard-aws
+                        key: aws_secret_access_key
+                        optional: true
                 readinessProbe:
                   httpGet:
                     path: /healthz
@@ -303,6 +352,28 @@
         tls:
           termination: edge
 
+- name: Create dashboard Route on the custom domain
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: ops-dashboard-ext
+        namespace: "{{ dashboard_namespace }}"
+      spec:
+        host: "{{ dashboard_custom_host }}"
+        to:
+          kind: Service
+          name: ops-dashboard
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+  when: dashboard_custom_host | length > 0
+
 - name: Wait for dashboard to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
@@ -320,4 +391,7 @@
 
 - name: Display dashboard URL
   ansible.builtin.debug:
-    msg: "Operations Dashboard: https://dashboard.{{ ocp_apps_domain }}"
+    msg: >-
+      Operations Dashboard: https://dashboard.{{ ocp_apps_domain }}
+      {{ ' | custom: https://' ~ dashboard_custom_host
+         if dashboard_custom_host | length > 0 else '' }}

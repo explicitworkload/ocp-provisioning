@@ -1,0 +1,54 @@
+schemaVersion: 2.2.2
+metadata:
+  name: ocp-provisioning
+  displayName: OCP Provisioning
+  description: Ansible day-2 automation and Operations Dashboard for OpenShift
+  language: Python
+  tags:
+    - Python
+    - Ansible
+    - OpenShift
+
+components:
+  - name: tooling
+    container:
+      image: registry.redhat.io/devspaces/udi-rhel9:latest
+      memoryRequest: 1Gi
+      memoryLimit: 6Gi
+      cpuRequest: 200m
+      cpuLimit: "2"
+      mountSources: true
+      env:
+        - name: NPM_CONFIG_PREFIX
+          value: /home/user/.npm-global
+        - name: PATH
+          value: /home/user/.npm-global/bin:/home/user/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+commands:
+  - id: install-claude-cli
+    exec:
+      component: tooling
+      commandLine: >-
+        npm config set prefix /home/user/.npm-global &&
+        npm install -g @anthropic-ai/claude-code &&
+        claude --version
+      label: Install Claude Code CLI
+
+  - id: install-python-deps
+    exec:
+      component: tooling
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: pip install --user ansible kubernetes
+      label: Install Ansible and Kubernetes client
+
+  - id: run-dashboard
+    exec:
+      component: tooling
+      workingDir: ${PROJECT_SOURCE}/dashboard
+      commandLine: pip install --user -r requirements.txt && python app.py
+      label: Run Operations Dashboard locally
+
+events:
+  postStart:
+    - install-claude-cli
+    - install-python-deps

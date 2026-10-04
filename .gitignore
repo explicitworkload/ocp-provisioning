@@ -51,6 +51,10 @@ cluster/install-dir/
 terraform/cluster/install-dir/
 .claude/
 
+# Python
+__pycache__/
+*.pyc
+
 # Ansible
 ansible/collections/
 *.retry
