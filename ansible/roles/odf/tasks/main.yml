@@ -233,8 +233,23 @@
 # original system ID so the PV-pool agent's persisted identity stays valid.
 # Re-bootstrapping instead would mint a new ID and strand the agent.
 #
-# Guarded by an explicit state check, so it is inert once the operator is
-# fixed. Set odf_fix_noobaa_cnpg=false to skip it entirely.
+# VERSION SCOPE — this targets ODF 4.22.5-rhodf (mcg-operator 4.22.5-rhodf),
+# where the bug was observed and the fix verified. It is reported upstream
+# against the NooBaa/MCG operator, not odf-operator.
+#
+# Deliberately NOT gated on the version string, for two reasons:
+#   * It is a race, so it does not fire on every 4.22.5 install. A version
+#     match would be neither necessary nor sufficient.
+#   * If the fix slips past 4.22.5, a version pin would silently stop
+#     protecting the very releases that still need it.
+# The trigger is the observed failure signature instead, so this is inert on
+# any release where the bug is absent — including a fixed 4.22.5 rebuild.
+#
+# 4.21.13 ships CNPG too, so downgrading the channel is not an escape.
+#
+# WHEN THE UPSTREAM FIX SHIPS: delete this whole block and the
+# odf_fix_noobaa_cnpg / odf_noobaa_tables defaults rather than leaving dead
+# code in a storage role. Set odf_fix_noobaa_cnpg=false to skip it meanwhile.
 # ---------------------------------------------------------------------------
 # Placement matters. NooBaa reaches Ready against the StatefulSet DB *before*
 # CNPG is created and core is repointed, so a transient Ready proves nothing —
