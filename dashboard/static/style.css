@@ -1566,6 +1566,14 @@ main.ai-page {
   padding-top: 8px;
 }
 
+/* While a reply is still streaming, let the reasoning grow instead of
+   trapping it in a 260px nested scroller that never follows the new text.
+   The cap returns once the message completes, keeping history compact. */
+.chat-msg.streaming .chat-think-body {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .chat-answer { color: var(--text-secondary); }
 
 /* === PER-RESPONSE METRICS === */

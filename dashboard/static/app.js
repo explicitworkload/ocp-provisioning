@@ -770,10 +770,15 @@ function renderChatMessages() {
     container.innerHTML = '<div class="chat-empty">Start a conversation with the model</div>';
     return;
   }
+  // Only pin to the bottom if the reader is already there, so scrolling back
+  // through history is not yanked away on every streamed delta.
+  var stick = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+
   container.innerHTML = chatHistory
     .filter(function (m) { return m.role !== "system"; })
     .map(function (m) {
       var cls = m.role === "user" ? "user" : m.role === "tool" ? "tool-result" : "assistant";
+      if (m.streaming) cls += " streaming";
       var roleLabel = m.role === "tool" ? "TOOL RESULT" : m.role.toUpperCase();
       var body = m.role === "user"
         ? escapeHtml(m.content || "")
@@ -789,7 +794,11 @@ function renderChatMessages() {
       );
     })
     .join("");
-  container.scrollTop = container.scrollHeight;
+
+  // A still-growing reasoning block is uncapped, so keep its tail in view too.
+  var liveThink = container.querySelector(".chat-msg.streaming .chat-think-body");
+  if (liveThink) liveThink.scrollTop = liveThink.scrollHeight;
+  if (stick) container.scrollTop = container.scrollHeight;
 }
 
 function escapeHtml(text) {
