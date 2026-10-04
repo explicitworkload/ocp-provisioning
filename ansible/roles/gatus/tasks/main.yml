@@ -16,8 +16,8 @@
     gatus_endpoints: "{{ gatus_core_endpoints + gatus_public_endpoints }}"
   vars:
     # In-cluster service DNS: skips the load-balancer hairpin and, where the
-    # service speaks plain HTTP, the TLS handshake too. The console is checked
-    # both ways so an ingress failure is distinguishable from an app failure.
+    # service speaks plain HTTP, the TLS handshake too. The ingress path is
+    # still covered by the public (*.kubernetes.day) checks below.
     gatus_core_endpoints:
       - name: Bookinfo Productpage
         url: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
@@ -40,11 +40,6 @@
         url: "https://console.openshift-console.svc.cluster.local:443/"
         interval: 60s
         conditions: ["[STATUS] == 200"]
-        client: {insecure: true}
-      - name: OpenShift Console (ingress)
-        url: "https://console-openshift-console.{{ ocp_apps_domain }}"
-        interval: 60s
-        conditions: ["[STATUS] == any(200, 301, 302, 403)"]
         client: {insecure: true}
     gatus_dashboard_public:
       - name: Operations Dashboard (public)
