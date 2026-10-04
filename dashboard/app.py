@@ -831,13 +831,30 @@ def _run_async(coro):
         loop.close()
 
 
+def _sa_token():
+    """The pod's own ServiceAccount token, used to authenticate to MCP servers."""
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _mcp_headers():
+    # The openshift-mcp-server metrics toolset forwards the caller's bearer
+    # token to Prometheus rather than using its own ServiceAccount, so without
+    # this every metrics tool fails with "no bearer token found".
+    token = _sa_token()
+    return {"Authorization": "Bearer " + token} if token else {}
+
+
 def _is_streamable_http(url):
     return url.rstrip("/").endswith("/mcp")
 
 
 async def _mcp_list_tools(server_url):
     if _is_streamable_http(server_url):
-        async with streamablehttp_client(server_url) as (read_stream, write_stream, _):
+        async with streamablehttp_client(server_url, headers=_mcp_headers()) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as sess:
                 await sess.initialize()
                 result = await sess.list_tools()
@@ -847,7 +864,7 @@ async def _mcp_list_tools(server_url):
                     for t in result.tools
                 ]
     else:
-        async with sse_client(server_url) as (read_stream, write_stream):
+        async with sse_client(server_url, headers=_mcp_headers()) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as sess:
                 await sess.initialize()
                 result = await sess.list_tools()
@@ -869,10 +886,10 @@ async def _mcp_call_tool(server_url, tool_name, arguments):
             return "\n".join(parts)
 
     if _is_streamable_http(server_url):
-        async with streamablehttp_client(server_url) as (r, w, _):
+        async with streamablehttp_client(server_url, headers=_mcp_headers()) as (r, w, _):
             return await _call(r, w)
     else:
-        async with sse_client(server_url) as (r, w):
+        async with sse_client(server_url, headers=_mcp_headers()) as (r, w):
             return await _call(r, w)
 
 

@@ -147,6 +147,27 @@
           name: default
           namespace: "{{ dashboard_namespace }}"
 
+# The MCP server's metrics toolset forwards the caller's bearer token to
+# Prometheus, so the dashboard's own identity needs to be allowed to query it.
+# cluster-monitoring-view grants read-only access to prometheuses/api.
+- name: Bind dashboard SA to cluster-monitoring-view
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ops-dashboard-monitoring
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-monitoring-view
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+
 - name: Bind dashboard SA to MCP ClusterRole
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
