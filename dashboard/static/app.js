@@ -283,11 +283,15 @@ function setFaultMode(mode) {
   if (abort) abort.style.display = mode === "abort" ? "flex" : "none";
 }
 
+// Toggle only the state classes. Overwriting className here used to wipe the
+// element's own class, which forced every status onto card-footer styling
+// regardless of where it was placed.
 function setStatusBar(id, text, type) {
   var el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
-  el.className = "card-footer" + (type ? " " + type : "");
+  el.classList.remove("active", "error");
+  if (type) el.classList.add(type);
 }
 
 async function applyTrafficShift() {

@@ -1424,16 +1424,56 @@ main.ai-page {
   min-height: 300px;
   max-height: calc(100vh - 330px);
   background: var(--bg-input);
+  gap: 18px;
+  padding: 16px;
 }
 
+/* Turns read as distinct blocks instead of one continuous wall: the user's
+   prompt sits right and narrow, the reply left and wide, so the eye can find
+   where each exchange starts when the history gets long. */
+.ai-chat .chat-msg {
+  border-bottom: none;
+  padding: 10px 14px;
+  max-width: 88%;
+}
+
+.ai-chat .chat-msg.user {
+  align-self: flex-end;
+  max-width: 76%;
+  background: var(--amber-900);
+  border: 1px solid var(--amber-dim);
+  border-right: 3px solid var(--amber);
+}
+
+.ai-chat .chat-msg.user .chat-msg-role { color: var(--amber); text-align: right; }
+.ai-chat .chat-msg.user > div:not(.chat-msg-role) { text-align: right; }
+
+.ai-chat .chat-msg.assistant {
+  align-self: flex-start;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-left: 3px solid var(--green-dim);
+}
+
+.ai-chat .chat-msg.tool-result {
+  align-self: stretch;
+  max-width: 100%;
+  opacity: 0.75;
+}
+
+/* Inline beside the send button rather than a full-width bar. */
 .ai-chat-status {
   font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 2px;
+  font-size: 9px;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--text-muted);
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
+  align-self: center;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ai-chat-status.active { color: var(--green); }
