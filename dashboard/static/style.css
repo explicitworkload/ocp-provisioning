@@ -1576,6 +1576,42 @@ main.ai-page {
 
 .chat-answer { color: var(--text-secondary); }
 
+/* === TOOL RESULT (folded) === */
+.chat-tool { width: 100%; }
+
+.chat-tool > summary {
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--amber);
+  user-select: none;
+  padding: 2px 0;
+}
+
+.chat-tool > summary::-webkit-details-marker { display: none; }
+.chat-tool > summary::before { content: '\25B8  '; }
+.chat-tool[open] > summary::before { content: '\25BE  '; }
+.chat-tool > summary:hover { color: var(--green); }
+
+.chat-tool-body {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* === PER-RESPONSE METRICS === */
 .chat-metrics {
   display: flex;

@@ -779,15 +779,15 @@ function renderChatMessages() {
     .map(function (m) {
       var cls = m.role === "user" ? "user" : m.role === "tool" ? "tool-result" : "assistant";
       if (m.streaming) cls += " streaming";
-      var roleLabel = m.role === "tool" ? "TOOL RESULT" : m.role.toUpperCase();
+      var roleLabel = m.role.toUpperCase();
       var body = m.role === "user"
         ? escapeHtml(m.content || "")
         : m.role === "tool"
-          ? renderMarkdown(m.content || "")
+          ? renderToolResult(m)
           : renderAssistant(m.content || "");
       return (
         '<div class="chat-msg ' + cls + '">' +
-        '<div class="chat-msg-role">' + roleLabel + "</div>" +
+        (m.role === "tool" ? "" : '<div class="chat-msg-role">' + roleLabel + "</div>") +
         '<div>' + body + "</div>" +
         renderMetrics(m.metrics) +
         "</div>"
@@ -805,6 +805,22 @@ function escapeHtml(text) {
   var div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Tool output is raw cluster data and can run to thousands of lines. Fold it
+// so the model's answer stays readable, but keep it one click away.
+function renderToolResult(m) {
+  var text = m.content || "";
+  var size = text.length > 1200
+    ? Math.round(text.length / 1000) + "k chars"
+    : text.length + " chars";
+  return (
+    '<details class="chat-tool">' +
+    "<summary>Tool result &middot; " + escapeHtml(m.name || "tool") +
+    " &middot; " + size + "</summary>" +
+    '<div class="chat-tool-body">' + escapeHtml(text) + "</div>" +
+    "</details>"
+  );
 }
 
 function renderMetrics(mx) {
@@ -961,6 +977,7 @@ async function sendChat() {
         } else {
           chatHistory.splice(chatHistory.length - 1, 0, {
             role: "tool",
+            name: payload.name,
             content: payload.result || "(tool call)",
           });
           renderChatMessages();
