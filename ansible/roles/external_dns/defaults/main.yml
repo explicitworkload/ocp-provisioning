@@ -14,6 +14,14 @@ external_dns_image: registry.k8s.io/external-dns/external-dns:v0.15.1
 # Cloudflare zone that ExternalDNS is allowed to manage.
 external_dns_domain: kubernetes.day
 
+# Ownership marker written into the TXT registry. ExternalDNS only modifies
+# records whose owner matches this, which is what stops two clusters fighting
+# over a zone. It deliberately defaults to the zone name rather than the
+# cluster name: these sandbox clusters are rebuilt often and reuse the same
+# hostnames, and a cluster-derived id would leave every record stranded under
+# the dead cluster's name. Set this per-cluster if two ever share the zone.
+external_dns_txt_owner_id: "{{ external_dns_domain }}"
+
 # Route records through the Cloudflare proxy (orange cloud) so Cloudflare
 # terminates TLS with its own certificate for the zone. Set false to publish
 # a plain DNS record pointing straight at the router instead.

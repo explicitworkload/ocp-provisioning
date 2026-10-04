@@ -140,7 +140,7 @@
                           '--provider=cloudflare',
                           '--domain-filter=' ~ external_dns_domain,
                           '--registry=txt',
-                          '--txt-owner-id=' ~ ocp_cluster_name,
+                          '--txt-owner-id=' ~ external_dns_txt_owner_id,
                           '--txt-prefix=externaldns-',
                           '--policy=sync',
                           '--log-level=info',
@@ -187,5 +187,5 @@
       ansible.builtin.debug:
         msg: >-
           ExternalDNS managing {{ external_dns_domain }} from OpenShift Routes
-          (owner id {{ ocp_cluster_name }}). Routes with a host in that zone get
+          (owner id {{ external_dns_txt_owner_id }}). Routes with a host in that zone get
           a Cloudflare record automatically.
