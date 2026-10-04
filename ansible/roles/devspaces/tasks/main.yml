@@ -101,6 +101,7 @@
 # click away instead of having to paste a Git URL. The dashboard watches for
 # ConfigMaps carrying the getting-started-samples component label.
 - name: Register this repo as a Dev Spaces sample
+  register: devspaces_sample
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -133,6 +134,43 @@
 # its OAuth redirects to status.cheURL, so signing in via this hostname
 # redirects back to the apps-domain URL — it serves, but is not a full
 # replacement. Setting spec.networking.hostname would move the canonical URL.
+# The dashboard reads sample ConfigMaps at startup, and this role usually
+# creates ours *after* the operator has already started it — so without a
+# restart the tile silently never appears.
+#
+# Delete the pod rather than touching the Deployment: the Che operator owns
+# that Deployment and reconciles away any pod-template change, which discards
+# the new ReplicaSet and leaves the original pod running. The ReplicaSet
+# recreates the pod and the operator is indifferent to that.
+#
+# Guarded on the ConfigMap actually changing, so repeat runs do not bounce
+# the dashboard.
+- name: Restart the Dev Spaces dashboard to pick up the sample
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: "{{ devspaces_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/component=devspaces-dashboard
+  when: devspaces_sample.changed
+
+- name: Wait for the Dev Spaces dashboard to come back
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ devspaces_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/component=devspaces-dashboard
+      - status.phase=Running
+  register: devspaces_dash_pod
+  until: devspaces_dash_pod.resources | default([]) | length > 0
+  retries: 30
+  delay: 10
+  when: devspaces_sample.changed
+
 - name: Create Dev Spaces Route on the custom domain
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
