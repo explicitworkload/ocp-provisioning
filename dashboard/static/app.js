@@ -780,6 +780,7 @@ function renderChatMessages() {
         '<div class="chat-msg ' + cls + '">' +
         '<div class="chat-msg-role">' + roleLabel + "</div>" +
         '<div>' + body + "</div>" +
+        renderMetrics(m.metrics) +
         "</div>"
       );
     })
@@ -791,6 +792,28 @@ function escapeHtml(text) {
   var div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function renderMetrics(mx) {
+  if (!mx) return "";
+  function stat(label, value, title) {
+    return (
+      '<span class="chat-metric"' + (title ? ' title="' + title + '"' : "") + ">" +
+      '<span class="chat-metric-k">' + label + "</span>" +
+      escapeHtml(String(value)) +
+      "</span>"
+    );
+  }
+  var items = [
+    stat("first", (mx.firstResponseMs || 0) + "ms", "Time until the first upstream completion returned"),
+    stat("total", (mx.totalMs || 0) + "ms", "Full round trip including any tool calls"),
+    stat("in", mx.promptTokens || 0, "Prompt tokens, summed across rounds"),
+    stat("out", mx.completionTokens || 0, "Completion tokens, summed across rounds"),
+    stat("tok/s", mx.tokensPerSec || 0, "Completion tokens per second over the whole request"),
+  ];
+  if (mx.rounds > 1) items.push(stat("rounds", mx.rounds, "LLM calls made, including tool-call follow-ups"));
+  if (mx.toolCalls > 0) items.push(stat("tools", mx.toolCalls, "MCP tool invocations"));
+  return '<div class="chat-metrics">' + items.join("") + "</div>";
 }
 
 // Reasoning models (qwen3 and friends) emit their scratchpad in <think> tags.
@@ -887,7 +910,7 @@ async function sendChat() {
       });
     }
 
-    chatHistory.push({ role: "assistant", content: data.reply });
+    chatHistory.push({ role: "assistant", content: data.reply, metrics: data.metrics });
     renderChatMessages();
     if (tokens) {
       tokens.textContent = data.usage.prompt_tokens + " in / " + data.usage.completion_tokens + " out tokens";

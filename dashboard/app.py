@@ -1013,20 +1013,47 @@ def ai_chat():
     if all_mcp_tools:
         payload["tools"] = _mcp_tools_to_openai(all_mcp_tools)
 
+    started = time.time()
+    stats = {"rounds": 0, "toolCalls": 0, "prompt": 0, "completion": 0, "firstMs": None}
+
+    def _metrics():
+        total_ms = round((time.time() - started) * 1000)
+        secs = max(total_ms / 1000.0, 0.001)
+        return {
+            # Without streaming there is no true time-to-first-token; this is
+            # how long the first upstream completion took to come back.
+            "firstResponseMs": stats["firstMs"],
+            "totalMs": total_ms,
+            "rounds": stats["rounds"],
+            "toolCalls": stats["toolCalls"],
+            "promptTokens": stats["prompt"],
+            "completionTokens": stats["completion"],
+            "totalTokens": stats["prompt"] + stats["completion"],
+            "tokensPerSec": round(stats["completion"] / secs, 1),
+        }
+
     try:
         max_rounds = 5
         for _ in range(max_rounds):
+            stats["rounds"] += 1
+            round_started = time.time()
             r = http_requests.post(
                 f"{LITELLM_URL}/v1/chat/completions",
                 headers=_llm_headers(), json=payload, timeout=120,
             )
+            if stats["firstMs"] is None:
+                stats["firstMs"] = round((time.time() - round_started) * 1000)
             r.raise_for_status()
             data = r.json()
+            # Accumulate across tool-call rounds; the last response alone
+            # undercounts everything spent getting there.
+            round_usage = data.get("usage") or {}
+            stats["prompt"] += round_usage.get("prompt_tokens") or 0
+            stats["completion"] += round_usage.get("completion_tokens") or 0
             choice = data["choices"][0]
             msg = choice["message"]
 
             if choice.get("finish_reason") != "tool_calls" and not msg.get("tool_calls"):
-                usage = data.get("usage", {})
                 return jsonify({
                     "reply": msg.get("content", ""),
                     "model": data.get("model", model),
@@ -1035,14 +1062,16 @@ def ai_chat():
                         if m.get("role") == "tool"
                     ],
                     "usage": {
-                        "prompt_tokens": usage.get("prompt_tokens", 0),
-                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "prompt_tokens": stats["prompt"],
+                        "completion_tokens": stats["completion"],
                     },
+                    "metrics": _metrics(),
                 })
 
             payload["messages"].append(msg)
 
             for tc in msg.get("tool_calls", []):
+                stats["toolCalls"] += 1
                 fn_name = tc["function"]["name"]
                 fn_args = json.loads(tc["function"]["arguments"] or "{}")
                 srv_url = tool_server_map.get(fn_name, "")
@@ -1061,14 +1090,14 @@ def ai_chat():
                     "content": result,
                 })
 
-        usage = data.get("usage", {})
         return jsonify({
             "reply": msg.get("content", "") or "(tool call loop reached max rounds)",
             "model": data.get("model", model),
             "usage": {
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
+                "prompt_tokens": stats["prompt"],
+                "completion_tokens": stats["completion"],
             },
+            "metrics": _metrics(),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -1363,6 +1363,133 @@ footer a:hover { color: var(--green); }
   font-weight: 600;
 }
 
+/* === AI PAGE LAYOUT ===
+   Chat-first: a thin toolbar, a conversation that takes the remaining
+   viewport, and MCP servers folded away at the bottom. Wider than the
+   standard centred column since chat benefits from the line length. */
+main.ai-page {
+  max-width: 1500px;
+  padding: 18px 24px 24px;
+  gap: 12px;
+}
+
+.ai-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  flex-wrap: wrap;
+}
+
+.ai-toolbar-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ai-toolbar .ai-select { min-width: 260px; }
+.ai-toolbar-gap { flex: 1; }
+
+/* setStatusBar() rewrites className to card-footer, so neutralise the
+   card chrome here while keeping its active/error colours. */
+.ai-toolbar-status,
+.ai-toolbar .card-footer {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: none !important;
+  background: none !important;
+  padding: 0 !important;
+}
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  padding: 14px;
+  clip-path: polygon(0 8px, 8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+}
+
+/* Viewport-relative rather than a flex chain, which collapses here. */
+.ai-chat .chat-messages {
+  min-height: 300px;
+  max-height: calc(100vh - 330px);
+  background: var(--bg-input);
+}
+
+.ai-chat-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.ai-chat-status.active { color: var(--green); }
+.ai-chat-status.error { color: var(--red); }
+
+.ai-mcp {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+}
+
+.ai-mcp > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.ai-mcp > summary::-webkit-details-marker { display: none; }
+.ai-mcp > summary::before { content: '\25B8'; color: var(--green); }
+.ai-mcp[open] > summary::before { content: '\25BE'; }
+.ai-mcp > summary:hover { color: var(--green); }
+
+.ai-mcp-count,
+.ai-mcp > summary .card-footer {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  border: none !important;
+  background: none !important;
+  padding: 0 !important;
+  text-transform: uppercase;
+}
+
+.ai-mcp-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .ai-toolbar .ai-select { min-width: 160px; }
+  .ai-chat .chat-messages { max-height: calc(100vh - 380px); }
+}
+
 /* === REASONING (<think>) BLOCK === */
 .chat-think {
   margin-bottom: 10px;
@@ -1400,6 +1527,28 @@ footer a:hover { color: var(--green); }
 }
 
 .chat-answer { color: var(--text-secondary); }
+
+/* === PER-RESPONSE METRICS === */
+.chat-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+
+.chat-metric { white-space: nowrap; }
+
+.chat-metric-k {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-right: 5px;
+}
 
 .chat-input-row {
   display: flex;
