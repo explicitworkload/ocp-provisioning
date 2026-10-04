@@ -31,6 +31,10 @@ BOOKINFO_NS = "bookinfo"
 MACHINE_API_NS = "openshift-machine-api"
 AWS_REGION = os.environ.get("AWS_REGION", "")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
+# A cluster-wide pods_top can return ~39k tokens on its own, which alone
+# overflows a 32k context once the tool schemas are added. Cap what gets fed
+# back to the model; the head of the table is the useful part.
+MCP_RESULT_MAX_CHARS = int(os.environ.get("MCP_RESULT_MAX_CHARS", "8000"))
 
 try:
     config.load_incluster_config()
@@ -997,6 +1001,18 @@ def ai_models():
         return jsonify({"error": str(e)}), 500
 
 
+def _truncate_tool_result(text):
+    if len(text) <= MCP_RESULT_MAX_CHARS:
+        return text
+    kept = text[:MCP_RESULT_MAX_CHARS]
+    dropped = len(text) - MCP_RESULT_MAX_CHARS
+    return (
+        kept
+        + f"\n\n[truncated: {dropped} more characters omitted. Ask for a "
+          "narrower query, e.g. a single namespace, to see the rest.]"
+    )
+
+
 def _sse(event, data):
     return "event: %s\ndata: %s\n\n" % (event, json.dumps(data))
 
@@ -1025,7 +1041,12 @@ def _stream_chat(payload, model, tool_server_map):
                 f"{LITELLM_URL}/v1/chat/completions",
                 headers=_llm_headers(), json=payload, stream=True, timeout=180,
             ) as r:
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    # Without the body this surfaces as a bare "400 Bad
+                    # Request", which hides context-overflow errors.
+                    raise RuntimeError(
+                        f"upstream {r.status_code}: {r.text[:400]}"
+                    )
                 try:
                     cost += float(r.headers.get("x-litellm-response-cost-original") or 0)
                 except (TypeError, ValueError):
@@ -1116,6 +1137,7 @@ def _stream_chat(payload, model, tool_server_map):
                 else:
                     result = f"Unknown tool: {slot['name']}"
 
+                result = _truncate_tool_result(result)
                 payload["messages"].append({
                     "role": "tool",
                     "tool_call_id": slot["id"],
