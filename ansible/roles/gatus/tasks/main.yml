@@ -98,6 +98,12 @@
           metadata:
             labels:
               app: gatus
+            annotations:
+              # Gatus reads its config only at startup, and a mounted
+              # ConfigMap change does not restart it. Rolling this hash into
+              # the pod template makes any endpoint edit trigger a rollout,
+              # so a re-run actually applies the new config.
+              checksum/config: "{{ gatus_endpoints | to_json | hash('sha1') }}"
           spec:
             containers:
               - name: gatus
