@@ -771,7 +771,11 @@ function renderChatMessages() {
     .map(function (m) {
       var cls = m.role === "user" ? "user" : m.role === "tool" ? "tool-result" : "assistant";
       var roleLabel = m.role === "tool" ? "TOOL RESULT" : m.role.toUpperCase();
-      var body = m.role === "user" ? escapeHtml(m.content || "") : renderMarkdown(m.content || "");
+      var body = m.role === "user"
+        ? escapeHtml(m.content || "")
+        : m.role === "tool"
+          ? renderMarkdown(m.content || "")
+          : renderAssistant(m.content || "");
       return (
         '<div class="chat-msg ' + cls + '">' +
         '<div class="chat-msg-role">' + roleLabel + "</div>" +
@@ -787,6 +791,42 @@ function escapeHtml(text) {
   var div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Reasoning models (qwen3 and friends) emit their scratchpad in <think> tags.
+// Split it off so the answer leads and the reasoning is available but folded.
+function splitThinking(text) {
+  var src = text || "";
+  var reasoning = [];
+  var answer = src.replace(/<think>([\s\S]*?)<\/think>/gi, function (_m, inner) {
+    reasoning.push(inner.trim());
+    return "";
+  });
+  // A block left open means the reply was cut off mid-thought.
+  var open = answer.match(/<think>([\s\S]*)$/i);
+  if (open) {
+    reasoning.push(open[1].trim());
+    answer = answer.slice(0, open.index);
+  }
+  return {
+    reasoning: reasoning.join("\n\n").trim(),
+    answer: answer.trim(),
+  };
+}
+
+function renderAssistant(content) {
+  var parts = splitThinking(content);
+  if (!parts.reasoning) return renderMarkdown(content || "");
+  // With no answer the model only ever produced reasoning, so show it.
+  var openAttr = parts.answer ? "" : " open";
+  var words = parts.reasoning.split(/\s+/).length;
+  return (
+    '<details class="chat-think"' + openAttr + ">" +
+    "<summary>Reasoning &middot; " + words + " words</summary>" +
+    '<div class="chat-think-body">' + renderMarkdown(parts.reasoning) + "</div>" +
+    "</details>" +
+    (parts.answer ? '<div class="chat-answer">' + renderMarkdown(parts.answer) + "</div>" : "")
+  );
 }
 
 function renderMarkdown(text) {
