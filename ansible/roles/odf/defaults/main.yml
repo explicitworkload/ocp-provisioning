@@ -39,3 +39,16 @@ odf_noobaa_tables:
   - tiers
   - vector_buckets
   - vector_indices
+
+# NooBaa PV-pool backing store. Object redundancy comes from replication
+# across the pool's agent nodes, so a single volume means a single copy and
+# the console reports Object Resiliency as Pending forever. Three volumes
+# matches NooBaa's default replica count.
+#
+# Raw consumption is volumes x size (3 x 50Gi = 150Gi of gp3), for roughly
+# one volume's worth of usable object capacity once replicated.
+#
+# Scaling this UP is supported; NooBaa does not support scaling it back down.
+odf_noobaa_pv_pool_volumes: 3
+odf_noobaa_pv_pool_size: 50Gi
+

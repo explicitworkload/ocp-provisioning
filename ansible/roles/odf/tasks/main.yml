@@ -213,11 +213,11 @@
       spec:
         type: pv-pool
         pvPool:
-          numVolumes: 1
+          numVolumes: "{{ odf_noobaa_pv_pool_volumes | int }}"
           storageClass: "{{ odf_storage_class }}"
           resources:
             requests:
-              storage: 50Gi
+              storage: "{{ odf_noobaa_pv_pool_size }}"
 
 # ---------------------------------------------------------------------------
 # Workaround for an MCG bug observed on ODF 4.22.5-rhodf.
