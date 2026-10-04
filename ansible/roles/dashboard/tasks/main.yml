@@ -96,6 +96,12 @@
         - apiGroups: [""]
           resources: ["nodes"]
           verbs: ["get", "list"]
+        # pods_top / nodes_top in the MCP metrics toolset read the metrics
+        # API, which cluster-monitoring-view does not cover — that grants
+        # prometheuses/api only.
+        - apiGroups: ["metrics.k8s.io"]
+          resources: ["pods", "nodes"]
+          verbs: ["get", "list"]
 
 - name: Create RBAC for dashboard to discover MCP servers
   kubernetes.core.k8s:
