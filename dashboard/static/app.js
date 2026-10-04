@@ -635,6 +635,13 @@ function addPlatformTask(type, detail) {
 
 // === AI ===
 var chatHistory = [];
+// Lets the user abort a running completion; the stream is a fetch, so
+// aborting the signal tears down the reader and the upstream request.
+var chatAbort = null;
+
+function stopChat() {
+  if (chatAbort) chatAbort.abort();
+}
 // Which MCP servers the user has switched on. Persisted so the choice
 // survives a reload — it previously lived only in memory, so every refresh
 // silently dropped the model's tools.
@@ -979,7 +986,12 @@ async function sendChat() {
   try {
     var stats = { startTime: performance.now(), firstTokenTime: null, firstOutputTime: null, deltas: 0 };
 
+    chatAbort = new AbortController();
+    var stopBtn = document.getElementById("btn-chat-stop");
+    if (stopBtn) stopBtn.style.display = "inline-flex";
+
     var res = await fetch("/api/ai/chat", {
+      signal: chatAbort.signal,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1040,6 +1052,8 @@ async function sendChat() {
       }
     }
 
+    var aborted = false;
+    try {
     while (true) {
       var step = await reader.read();
       if (step.done) break;
@@ -1055,6 +1069,10 @@ async function sendChat() {
         if (!name || raw === null) return;
         try { handleEvent(name, JSON.parse(raw)); } catch (_) {}
       });
+    }
+    } catch (err) {
+      if (err && err.name === "AbortError") aborted = true;
+      else throw err;
     }
 
     if (streamError) {
@@ -1074,6 +1092,10 @@ async function sendChat() {
 
     live.streaming = false;
     live.content = (finalPayload && finalPayload.reply) || live.content;
+    if (aborted) {
+      live.stopped = true;
+      live.content = (live.content || "") + "\n\n_[stopped]_";
+    }
     live.metrics = Object.assign({}, mx, {
       ttftMs: stats.firstTokenTime === null ? null : Math.round(stats.firstTokenTime - stats.startTime),
       ttfoMs: stats.firstOutputTime === null ? null : Math.round(stats.firstOutputTime - stats.startTime),
@@ -1091,6 +1113,9 @@ async function sendChat() {
     setStatusBar("chat-status", "ERROR: " + e.message, "error");
     showToast("Chat error: " + e.message, "error");
   }
+  chatAbort = null;
+  var stopBtnEnd = document.getElementById("btn-chat-stop");
+  if (stopBtnEnd) stopBtnEnd.style.display = "none";
   btn.disabled = false;
 }
 
