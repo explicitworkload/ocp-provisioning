@@ -7,7 +7,7 @@ dashboard_secret_key: "{{ lookup('password', '/dev/null length=32 chars=ascii_le
 # Extra Route on a domain managed by ExternalDNS. Set empty to skip.
 # The cluster's default wildcard cert does not cover this name, so browsers
 # will warn until a matching certificate is attached.
-dashboard_custom_host: "dashboard28.kubernetes.day"
+dashboard_custom_host: "dashboard{{ ocp_host_suffix }}.{{ external_dns_domain }}"
 
 # AWS key used only for node Stop/Start resiliency tests. Needs
 # ec2:DescribeInstances, ec2:StopInstances, ec2:StartInstances.

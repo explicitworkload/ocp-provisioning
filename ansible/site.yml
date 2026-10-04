@@ -47,6 +47,16 @@
         ocp_cluster_name: "{{ cluster_infra.resources[0].status.infrastructureName }}"
       tags: [always]
 
+    # Two digits appended to the public hostnames. Derived from the cluster's
+    # infrastructure name rather than drawn at random, so it is stable across
+    # re-runs (no DNS churn, the URL does not move under you) while still
+    # differing between clusters that share the zone.
+    - name: Derive two-digit suffix for public hostnames
+      ansible.builtin.set_fact:
+        ocp_host_suffix: >-
+          {{ 10 + ((ocp_cluster_name | hash('md5'))[:8] | int(base=16) % 90) }}
+      tags: [always]
+
     - name: Enable user workload monitoring
       kubernetes.core.k8s:
         context: "{{ ocp_context }}"

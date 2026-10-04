@@ -58,6 +58,11 @@
   retries: 60
   delay: 30
 
+# GPU nodes are excluded server-side via node-role.kubernetes.io/gpu, which
+# comes from the MachineSet template and so exists as soon as the node
+# registers. Do not filter on nvidia.com/gpu.present: that label is applied by
+# the GPU operator, which runs after this role, and its dots cannot be
+# addressed through a Jinja attribute path anyway.
 - name: Get non-GPU worker nodes for ODF
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
@@ -65,17 +70,23 @@
     kind: Node
     label_selectors:
       - "node-role.kubernetes.io/worker="
+      - "!node-role.kubernetes.io/gpu"
   register: worker_nodes
 
 - name: Select non-GPU worker nodes
   ansible.builtin.set_fact:
     odf_nodes: >-
       {{ worker_nodes.resources
-         | rejectattr('metadata.labels.nvidia.com/gpu.present', 'defined')
          | map(attribute='metadata.name')
-         | list
          | sort
          | list }}
+
+- name: Fail when no eligible ODF nodes were found
+  ansible.builtin.fail:
+    msg: >-
+      No non-GPU worker nodes available for ODF. Refusing to continue rather
+      than placing storage on GPU nodes.
+  when: odf_nodes | length == 0
 
 - name: Label worker nodes for ODF storage
   kubernetes.core.k8s:

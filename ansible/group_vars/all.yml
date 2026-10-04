@@ -1,6 +1,6 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-gv2bh-sandbox3366-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-rsb7q-sandbox1245-opentlc-com:6443/admin"
 
 # GPU Worker configuration
 gpu_availability_zone: us-east-2a
@@ -83,8 +83,10 @@ cloudflare_api_token: ""
 # Requires the zone's SSL/TLS mode to be "Full" (see ansible/README.md).
 external_dns_cloudflare_proxied: true
 
-# Extra Routes on the ExternalDNS-managed domain. These are only created when
-# deploy_external_dns is true, so a Route never exists without a DNS record to
-# back it. Set either to "" to skip that one.
-dashboard_custom_host: "dashboard28.kubernetes.day"
-devspaces_custom_host: "devspaces28.kubernetes.day"
+# Extra Routes on the ExternalDNS-managed domain are named automatically as
+#   dashboard<NN>.<domain>  /  devspaces<NN>.<domain>
+# where NN is two digits derived from the cluster's infrastructure name — the
+# same cluster always gets the same hostnames, different clusters do not
+# collide. They are only created when deploy_external_dns is true.
+# Override dashboard_custom_host / devspaces_custom_host to pin a name, or set
+# either to "" to skip that Route.
