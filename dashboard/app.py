@@ -30,6 +30,7 @@ LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 BOOKINFO_NS = "bookinfo"
 MACHINE_API_NS = "openshift-machine-api"
 AWS_REGION = os.environ.get("AWS_REGION", "")
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
 
 try:
     config.load_incluster_config()
@@ -585,13 +586,27 @@ def _machine_index():
 
 def _ec2_client():
     import boto3
+    from botocore.config import Config
 
     if not AWS_REGION:
         raise RuntimeError("AWS_REGION is not set on the dashboard deployment")
-    return boto3.client("ec2", region_name=AWS_REGION)
+    if not AWS_ACCESS_KEY_ID:
+        raise RuntimeError(
+            "No AWS credentials on the dashboard — set the ops-dashboard-aws secret"
+        )
+    # Fail fast rather than letting botocore retry against a slow endpoint,
+    # since this runs inline on the platform status page.
+    return boto3.client(
+        "ec2",
+        region_name=AWS_REGION,
+        config=Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1}),
+    )
 
 
 def _attach_ec2_state(nodes):
+    # Without a key, boto3 would fall back to probing instance metadata.
+    if not AWS_ACCESS_KEY_ID:
+        return
     ids = [n["instanceId"] for n in nodes if n.get("instanceId")]
     if not ids:
         return
