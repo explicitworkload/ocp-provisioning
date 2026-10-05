@@ -38,5 +38,13 @@ ansible-galaxy collection install -r requirements.yml 2>/dev/null || true
 if [[ "$(uname)" == "Darwin" ]]; then
   script -q /dev/null ansible-playbook site.yml "$@"
 else
-  script -qe -c "ansible-playbook site.yml $(printf '%q ' "$@")" /dev/null
+  # Build the argument suffix only when there is something to quote: bash's
+  # printf emits '' for a %q with no corresponding argument, so a bare
+  # ./run.sh produced "ansible-playbook site.yml ''" and died with
+  # "the playbook:  could not be found".
+  extra=""
+  if (( $# )); then
+    extra=" $(printf '%q ' "$@")"
+  fi
+  script -qe -c "ansible-playbook site.yml$extra" /dev/null
 fi
