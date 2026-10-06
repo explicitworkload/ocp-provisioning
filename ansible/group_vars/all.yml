@@ -1,6 +1,6 @@
 ---
 # OpenShift cluster context
-ocp_context: "default/api-ocp-qq5xf-sandbox3648-opentlc-com:6443/admin"
+ocp_context: "default/api-ocp-dzcqc-sandbox2923-opentlc-com:6443/admin"
 
 # GPU Worker configuration
 gpu_availability_zone: us-east-2a
@@ -52,6 +52,39 @@ deploy_quay_registry: true
 # Destroy & Rebuild needs none of this — it is pure Machine API.
 dashboard_aws_access_key_id: ""
 dashboard_aws_secret_access_key: ""
+
+# Write permissions handed to callers of the OpenShift MCP server — both the
+# Operations Dashboard AI assistant and the server's own mcp-viewer identity.
+# Paired with cluster-reader, which supplies read on everything else.
+#
+# Deliberately omitted, because an LLM drives these tools:
+#   secrets            - would expose the pull secret, LiteLLM key, Cloudflare
+#                        token and the dashboard password
+#   rolebindings/roles - self-escalation back to cluster-admin
+#   serviceaccounts    - token minting is escalation by another route
+#   pods/exec, attach  - a shell in any container sidesteps every limit above
+#
+# The MCP server itself still runs read_only = false; this ClusterRole, not
+# that flag, is what actually bounds the blast radius.
+mcp_write_rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, configmaps, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - deployments/scale
+      - statefulsets
+      - statefulsets/scale
+      - daemonsets
+      - replicasets
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["route.openshift.io"]
+    resources: [routes]
+    verbs: [get, list, watch, create, update, patch, delete]
 
 # Zero Trust Workload Identity Manager (SPIFFE/SPIRE).
 # Deploys a SPIRE server StatefulSet plus an agent and CSI-driver DaemonSet on

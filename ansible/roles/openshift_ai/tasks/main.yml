@@ -225,7 +225,37 @@
         name: mcp-viewer
         namespace: "{{ mcp_server_namespace }}"
 
-- name: Bind cluster edit role to MCP server ServiceAccount
+# Shared by mcp-viewer and the dashboard SA. Defined in both this role and
+# the dashboard role from the same group_vars list, so neither ordering nor a
+# tag-limited run can leave a binding pointing at a ClusterRole that does not
+# exist yet — which RBAC permits, and which silently grants nothing.
+- name: Create the MCP workload-write ClusterRole
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: mcp-workload-write
+      rules: "{{ mcp_write_rules }}"
+
+# Previously bound to "edit", which reaches secrets in every namespace. The
+# MCP service answers unauthenticated callers as this ServiceAccount, so that
+# was a wider path than the dashboard's own authenticated one.
+#
+# roleRef is immutable, so the old binding has to be deleted rather than
+# patched — apply would fail with "cannot change roleRef".
+- name: Remove the old cluster-edit binding for mcp-viewer
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    name: mcp-viewer-binding
+
+- name: Bind MCP server ServiceAccount to read and workload-write
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -234,15 +264,20 @@
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata:
-        name: mcp-viewer-binding
+        name: "mcp-viewer-{{ item.suffix }}"
       roleRef:
         apiGroup: rbac.authorization.k8s.io
         kind: ClusterRole
-        name: edit
+        name: "{{ item.role }}"
       subjects:
         - kind: ServiceAccount
           name: mcp-viewer
           namespace: "{{ mcp_server_namespace }}"
+  loop:
+    - {suffix: read, role: cluster-reader}
+    - {suffix: write, role: mcp-workload-write}
+  loop_control:
+    label: "mcp-viewer-{{ item.suffix }} -> {{ item.role }}"
 
 - name: Create MCP server config
   register: mcp_config

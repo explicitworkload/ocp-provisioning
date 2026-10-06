@@ -202,6 +202,50 @@
           name: default
           namespace: "{{ dashboard_namespace }}"
 
+# The MCP server acts as whoever called it whenever a bearer token is present,
+# and the dashboard always sends one (the metrics toolset needs it). So every
+# tool the AI assistant invokes runs as this ServiceAccount, not as the
+# server's mcp-viewer identity — without these the assistant could not even
+# list pods, while unauthenticated callers could.
+#
+# Same ClusterRole definition as the openshift_ai role, from the same
+# group_vars list; applying it here too keeps --tags dashboard self-contained.
+- name: Create the MCP workload-write ClusterRole
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: mcp-workload-write
+      rules: "{{ mcp_write_rules }}"
+
+- name: Bind dashboard SA to read and workload-write
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: "ops-dashboard-{{ item.suffix }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: "{{ item.role }}"
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+  loop:
+    - {suffix: reader, role: cluster-reader}
+    - {suffix: mcp-write, role: mcp-workload-write}
+  loop_control:
+    label: "ops-dashboard-{{ item.suffix }} -> {{ item.role }}"
+
 - name: Fetch LiteLLM API key from litellm namespace
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
