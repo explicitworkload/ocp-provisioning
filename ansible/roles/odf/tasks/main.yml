@@ -251,97 +251,70 @@
 # odf_fix_noobaa_cnpg / odf_noobaa_tables defaults rather than leaving dead
 # code in a storage role. Set odf_fix_noobaa_cnpg=false to skip it meanwhile.
 # ---------------------------------------------------------------------------
-# Placement matters. NooBaa reaches Ready against the StatefulSet DB *before*
-# CNPG is created and core is repointed, so a transient Ready proves nothing —
-# an earlier version of this check gated on it and skipped the repair every
-# time.
+# Detection reads the databases, not the NooBaa CR's conditions. Two earlier
+# attempts both failed on timing, in opposite directions:
 #
-# If the failure signature is already present there is nothing to wait for, so
-# check first and go straight to the repair. Otherwise gate on the PV-pool
-# backing store, which can only connect once NooBaa genuinely works. A timeout
-# there is a signal, not an error.
-- name: Check whether NooBaa is already stranded
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
-    api_version: noobaa.io/v1alpha1
-    kind: NooBaa
-    namespace: "{{ odf_namespace }}"
-    name: noobaa
-  register: nb_pre
-  when: odf_fix_noobaa_cnpg | bool
-
-- name: Record the early stranded signal
-  ansible.builtin.set_fact:
-    noobaa_stranded_early: >-
-      {{ odf_fix_noobaa_cnpg | bool
-         and nb_pre.resources | default([]) | length > 0
-         and 'account not found' in (
-               nb_pre.resources[0].status.conditions | default([])
-               | selectattr('type', 'equalto', 'Available')
-               | map(attribute='message') | join(' ')
-             ) }}
-
-- name: Wait for the backing store to settle
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
-    api_version: noobaa.io/v1alpha1
-    kind: BackingStore
-    namespace: "{{ odf_namespace }}"
-    name: noobaa-pv-backing-store
-  register: bs_settle
-  until: >-
-    bs_settle.resources | length > 0 and
-    bs_settle.resources[0].status.phase | default('') == 'Ready'
-  retries: 24
-  delay: 15
-  failed_when: false
-  when:
-    - odf_fix_noobaa_cnpg | bool
-    - not noobaa_stranded_early | bool
-
-# Poll rather than read once. The "account not found" message only appears
-# after the operator has repointed core at CNPG, which is minutes after the
-# backing store wait above gives up — a single read landed in that gap, saw a
-# NooBaa that was merely "Configuring", skipped the repair, and left the
-# StorageCluster in NoobaaInitializing until its own wait timed out.
+#   * reading the Available message once could land before the operator had
+#     repointed core at CNPG, so "account not found" had not appeared yet and
+#     the repair was skipped;
+#   * polling until Ready-or-stranded exited on the *transient* Ready NooBaa
+#     reports against the StatefulSet DB, before the migration has even been
+#     attempted - same skip, different cause.
 #
-# Exit as soon as NooBaa is either genuinely Ready or definitely stranded.
-# failed_when is false because running out of retries here just means neither
-# verdict arrived; the repair stays unrun and the later waits report it.
-- name: Read NooBaa after settling
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
-    api_version: noobaa.io/v1alpha1
-    kind: NooBaa
-    namespace: "{{ odf_namespace }}"
-    name: noobaa
-  register: nb_cr
-  until: >-
-    nb_cr.resources | default([]) | length > 0 and (
-      nb_cr.resources[0].status.phase | default('') == 'Ready'
-      or 'account not found' in (
-           nb_cr.resources[0].status.conditions | default([])
-           | selectattr('type', 'equalto', 'Available')
-           | map(attribute='message') | join(' ')
-         )
-    )
-  retries: 24
+# Row counts do not flap: either the live database holds the system or it does
+# not. But counts alone are ambiguous while the migration is legitimately in
+# flight (CNPG is empty then too), so STRANDED requires both that the
+# databases disagree AND that NooBaa has actually given up with
+# "account not found". HEALTHY is the single unambiguous signal - CNPG holding
+# the system - and exits immediately.
+#
+# Running out of retries is not an error: it means no verdict, the repair
+# stays unrun, and the StorageCluster wait further down reports the problem.
+- name: Decide whether NooBaa is stranded
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+
+      # No CNPG cluster: this build does not migrate, nothing to repair.
+      primary=$($OC get pod -l cnpg.io/cluster=noobaa-db-pg-cluster,role=primary \
+                  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+      [ -z "$primary" ] && { echo NOCNPG; exit 0; }
+      # Old StatefulSet DB already gone: migration finished and was cleaned up.
+      $OC get pod noobaa-db-pg-0 >/dev/null 2>&1 || { echo NOOLD; exit 0; }
+
+      systems() {
+        $OC exec "$1" ${2:+-c "$2"} -- psql -U postgres -d nbcore -t -A \
+          -c "select count(*) from systems" </dev/null 2>/dev/null | tr -cd '0-9'
+      }
+      old=$(systems noobaa-db-pg-0)
+      new=$(systems "$primary" postgres)
+
+      msg=$($OC get noobaa noobaa \
+            -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.message}{end}' 2>/dev/null)
+      gaveup=0
+      case "$msg" in *"account not found"*) gaveup=1 ;; esac
+
+      echo "old=${old:-?} new=${new:-?} gaveup=$gaveup" >&2
+      if [ "${new:-0}" -ge 1 ] 2>/dev/null; then
+        echo HEALTHY
+      elif [ "$old" = "1" ] && [ "$new" = "0" ] && [ "$gaveup" = "1" ]; then
+        echo STRANDED
+      else
+        echo WAIT
+      fi
+  register: nb_verdict
+  until: nb_verdict.stdout | default('') | trim != 'WAIT'
+  retries: 40
   delay: 15
+  changed_when: false
   failed_when: false
   when: odf_fix_noobaa_cnpg | bool
 
 - name: Record whether NooBaa is stranded
   ansible.builtin.set_fact:
-    noobaa_stranded: >-
-      {{ noobaa_stranded_early | bool or (
-         odf_fix_noobaa_cnpg | bool
-         and nb_cr.resources | default([]) | length > 0
-         and nb_cr.resources[0].status.phase | default('') != 'Ready'
-         and 'account not found' in (
-               nb_cr.resources[0].status.conditions | default([])
-               | selectattr('type', 'equalto', 'Available')
-               | map(attribute='message') | join(' ')
-             )) }}
+    noobaa_stranded: "{{ (nb_verdict.stdout | default('') | trim) == 'STRANDED' }}"
 
 - name: Repair the stranded NooBaa system
   when: noobaa_stranded | bool
