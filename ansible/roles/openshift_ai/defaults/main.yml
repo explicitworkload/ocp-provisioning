@@ -26,12 +26,24 @@ mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift
 # These are the operand CRs that actually back those menus.
 rhoai_feature_namespace: redhat-ods-applications
 
-# MLflow experiment tracking. sqlite is self-contained and needs no external
-# database; point mlflow_backend_store_uri at a postgres URL for anything
-# beyond a demo, since sqlite does not survive a pod move.
+# MLflow experiment tracking.
 deploy_mlflow_server: true
-mlflow_backend_store_uri: "sqlite:////mlflow/mlflow.db"
 mlflow_storage_size: 10Gi
+
+# postgres | sqlite. sqlite needs nothing but lives in the pod's volume and
+# does not survive a pod move; postgres stands up a small dedicated database.
+mlflow_backend: postgres
+mlflow_sqlite_uri: "sqlite:////mlflow/mlflow.db"
+
+mlflow_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
+mlflow_db_storage: 10Gi
+mlflow_db_user: mlflow
+mlflow_db_name: mlflow
+# Password is generated on first run and then reused from the
+# mlflow-db-credentials Secret, so it does not churn and is never committed.
+# Alphanumeric on purpose: it goes into a postgresql:// DSN, and anything
+# needing percent-encoding there is a silent connection failure.
+mlflow_db_password: ""
 
 # Console observability plugins (needs cluster-observability-operator).
 deploy_observability_uiplugins: true

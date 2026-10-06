@@ -383,10 +383,191 @@
               | zip(rhoai_feature_crds.results
                     | map(attribute='resources') | map('length') | map('int') | list)) }}
 
-# sqlite by default: self-contained, no external database to stand up. The
-# reference script prefers an existing postgres Deployment and falls back to
-# sqlite when there is none - there is none here, so this matches its fallback
-# path. Override mlflow_backend_store_uri with a postgres URL for real use.
+# --- MLflow PostgreSQL backend ---------------------------------------------
+# sqlite lives inside the MLflow pod's volume, so every experiment is lost the
+# moment the pod moves. This is a small dedicated database for it, following
+# the same shape as litellm-db.
+
+- name: Look for an existing MLflow database password
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    kind: Secret
+    namespace: "{{ rhoai_feature_namespace }}"
+    name: mlflow-db-credentials
+  register: mlflow_db_secret
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+  no_log: true
+
+# Generated once and kept, so the DSN keeps matching the password already
+# baked into the database's data directory. Regenerating it every run would
+# authenticate fine on first boot and fail on every one after.
+- name: Resolve the MLflow database password
+  ansible.builtin.set_fact:
+    mlflow_db_password_effective: >-
+      {{ mlflow_db_password if mlflow_db_password | default('') | length > 0
+         else ((mlflow_db_secret.resources | first).data['POSTGRES_PASSWORD'] | b64decode
+               if mlflow_db_secret.resources | default([]) | length > 0
+               else lookup('password', '/dev/null length=24 chars=ascii_letters,digits')) }}
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+  no_log: true
+
+# database-url is the key the MLflow CR dereferences via backendStoreUriFrom.
+# sslmode=disable because this never leaves the cluster network and the image
+# serves no TLS.
+- name: Create the MLflow database credentials
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mlflow-db-credentials
+        namespace: "{{ rhoai_feature_namespace }}"
+      type: Opaque
+      stringData:
+        POSTGRES_USER: "{{ mlflow_db_user }}"
+        POSTGRES_PASSWORD: "{{ mlflow_db_password_effective }}"
+        POSTGRES_DB: "{{ mlflow_db_name }}"
+        database-url: >-
+          postgresql://{{ mlflow_db_user }}:{{ mlflow_db_password_effective }}@mlflow-db.{{ rhoai_feature_namespace }}.svc.cluster.local:5432/{{ mlflow_db_name }}?sslmode=disable
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+  no_log: true
+
+- name: Create the MLflow database PVC
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: mlflow-db
+        namespace: "{{ rhoai_feature_namespace }}"
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "{{ mlflow_db_storage }}"
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+
+# Recreate, not RollingUpdate: the PVC is ReadWriteOnce, so a rolling update
+# would deadlock with the new pod waiting for a volume the old one still holds.
+- name: Deploy the MLflow database
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mlflow-db
+        namespace: "{{ rhoai_feature_namespace }}"
+        labels:
+          app: mlflow-db
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mlflow-db
+        strategy:
+          type: Recreate
+        template:
+          metadata:
+            labels:
+              app: mlflow-db
+          spec:
+            containers:
+              - name: postgres
+                image: "{{ mlflow_db_image }}"
+                ports:
+                  - containerPort: 5432
+                env:
+                  - name: POSTGRESQL_USER
+                    valueFrom:
+                      secretKeyRef: {name: mlflow-db-credentials, key: POSTGRES_USER}
+                  - name: POSTGRESQL_PASSWORD
+                    valueFrom:
+                      secretKeyRef: {name: mlflow-db-credentials, key: POSTGRES_PASSWORD}
+                  - name: POSTGRESQL_DATABASE
+                    valueFrom:
+                      secretKeyRef: {name: mlflow-db-credentials, key: POSTGRES_DB}
+                readinessProbe:
+                  exec:
+                    command: [/usr/libexec/check-container]
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/pgsql/data
+                resources:
+                  requests: {cpu: 100m, memory: 256Mi}
+                  limits: {cpu: "1", memory: 1Gi}
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: mlflow-db
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+
+- name: Create the MLflow database Service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mlflow-db
+        namespace: "{{ rhoai_feature_namespace }}"
+        labels:
+          app: mlflow-db
+      spec:
+        selector:
+          app: mlflow-db
+        ports:
+          - port: 5432
+            targetPort: 5432
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+
+# The MLflow operator runs a migration Job against this on first reconcile; if
+# the database is not accepting connections the Job fails and the operator
+# leaves MLflow stuck, so wait here rather than race it.
+- name: Wait for the MLflow database to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ rhoai_feature_namespace }}"
+    name: mlflow-db
+  register: mlflow_db_deploy
+  until: >-
+    mlflow_db_deploy.resources | length > 0 and
+    (mlflow_db_deploy.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+  when:
+    - deploy_mlflow_server | bool
+    - mlflow_backend == 'postgres'
+
+# backendStoreUriFrom reads the DSN out of the Secret rather than inlining it,
+# so the password never appears in the CR. sqlite takes the literal-URI form
+# instead, since there is no Secret to point at.
 - name: Create the MLflow tracking server
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -399,12 +580,18 @@
       # redhat-ods-applications - a namespace here is silently ignored.
       metadata:
         name: mlflow
-      spec:
-        serveArtifacts: true
-        artifactsDestination: "file:///mlflow/artifacts"
-        backendStoreUri: "{{ mlflow_backend_store_uri }}"
-        storage:
-          size: "{{ mlflow_storage_size }}"
+      spec: >-
+        {{
+          {
+            'serveArtifacts': true,
+            'artifactsDestination': 'file:///mlflow/artifacts',
+            'storage': {'size': mlflow_storage_size},
+          } | combine(
+            {'backendStoreUriFrom': {'name': 'mlflow-db-credentials', 'key': 'database-url'}}
+            if mlflow_backend == 'postgres'
+            else {'backendStoreUri': mlflow_sqlite_uri}
+          )
+        }}
   when:
     - deploy_mlflow_server | bool
     - rhoai_crd_present['mlflows.mlflow.opendatahub.io'] | default(0) | int > 0
