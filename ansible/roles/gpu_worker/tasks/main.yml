@@ -51,7 +51,7 @@
     api_version: machine.openshift.io/v1beta1
     kind: MachineSet
     namespace: openshift-machine-api
-    name: "{{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}"
+    name: "{{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
   register: gpu_ms
   until: >-
     gpu_ms.resources | length > 0 and
@@ -116,7 +116,7 @@
 - name: Display GPU MachineSet status
   ansible.builtin.debug:
     msg: >-
-      GPU MachineSet {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
+      GPU MachineSet {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}
       — {{ item.replicas }} replica(s)
   loop: "{{ gpu_machinesets }}"
   loop_control:
