@@ -234,6 +234,7 @@
 # --- LiteLLM Proxy ---
 
 - name: Create LiteLLM config
+  register: litellm_config
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -266,6 +267,14 @@
                 model: openai/{{ litellm_embedding_model_id }}
                 api_base: {{ litellm_embedding_api_base }}
                 api_key: none
+              # Without mode: embedding LiteLLM assumes chat and sends the
+              # health check - and the UI "Test connection" - to
+              # /v1/chat/completions. text-embeddings-inference serves only
+              # /v1/embeddings and answers 404 on the others, so a perfectly
+              # working model reports
+              #   NotFoundError: OpenAIException - Error code: 404
+              model_info:
+                mode: embedding
           litellm_settings:
             drop_params: true
           general_settings:
@@ -386,6 +395,21 @@
           targetPort: http
         tls:
           termination: edge
+
+# config.yaml is a mounted ConfigMap read once at startup, and the Deployment
+# spec does not change when it does - so adding or editing a model silently
+# had no effect until the pod was bounced by hand. Guarded on the ConfigMap
+# actually changing so repeat runs do not restart the proxy.
+- name: Restart LiteLLM to pick up config changes
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    label_selectors:
+      - app=litellm
+  when: litellm_config.changed
 
 - name: Wait for LiteLLM proxy to be ready
   kubernetes.core.k8s_info:
