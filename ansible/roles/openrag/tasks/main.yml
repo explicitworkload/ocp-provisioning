@@ -1,0 +1,517 @@
+---
+- name: Create the OpenRAG and OpenSearch namespaces
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  loop:
+    - "{{ openrag_namespace }}"
+    - "{{ openrag_opensearch_namespace }}"
+  loop_control:
+    label: "{{ item }}"
+
+# ---------------------------------------------------------------------------
+# OpenSearch — the OpenRAG chart expects this to already exist.
+# ---------------------------------------------------------------------------
+
+# The OpenSearch image's entrypoint is not executable by an arbitrary uid, so
+# under restricted-v2 the container dies with
+#   exec container process `.../opensearch-docker-entrypoint.sh`: Permission denied
+# nonroot-v2 is the narrowest SCC that lets it run as its own uid 1000
+# (MustRunAsNonRoot + fsGroup RunAsAny). anyuid would also work but additionally
+# permits root, so it is not used. Namespace-scoped RoleBinding, not cluster.
+- name: Allow OpenSearch to run as uid 1000 via the nonroot-v2 SCC
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: opensearch-nonroot-v2
+        namespace: "{{ openrag_opensearch_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:nonroot-v2
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ openrag_opensearch_namespace }}"
+
+# force_update, or the module fails the second time with "Repository already
+# have a repository named opensearch" rather than treating it as present.
+# OpenRAG hardcodes use_ssl=True and builds https:// URLs in
+# src/config/settings.py, with no env var to override - so the security
+# plugin has to stay ON and serve TLS. Running OpenSearch without it gets
+# an endless "OpenSearch ping failed" loop in the backend even though plain
+# curl to :9200 works.
+#
+# OpenSearch 2.12+ refuses to start unless OPENSEARCH_INITIAL_ADMIN_PASSWORD
+# is strong, hence the appended character classes.
+- name: Look for an existing OpenSearch admin password
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    kind: Secret
+    namespace: "{{ openrag_opensearch_namespace }}"
+    name: opensearch-admin
+  register: openrag_os_secret
+  no_log: true
+
+- name: Generate the OpenSearch admin password
+  ansible.builtin.set_fact:
+    openrag_opensearch_password: >-
+      {{ (openrag_os_secret.resources | first).data.password | b64decode
+         if openrag_os_secret.resources | default([]) | length > 0
+         else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') ~ 'Aa1!' }}
+  no_log: true
+
+- name: Store the OpenSearch admin password
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: opensearch-admin
+        namespace: "{{ openrag_opensearch_namespace }}"
+      stringData:
+        username: admin
+        password: "{{ openrag_opensearch_password }}"
+  no_log: true
+
+- name: Add the OpenSearch Helm repository
+  kubernetes.core.helm_repository:
+    name: opensearch
+    repo_url: "{{ opensearch_chart_repo }}"
+    force_update: true
+
+- name: Deploy the OpenSearch cluster
+  kubernetes.core.helm:
+    kube_context: "{{ ocp_context }}"
+    name: opensearch
+    chart_ref: opensearch/opensearch
+    chart_version: "{{ opensearch_chart_version }}"
+    release_namespace: "{{ openrag_opensearch_namespace }}"
+    wait: true
+    wait_timeout: 15m
+    values:
+      clusterName: opensearch
+      nodeGroup: node
+      # discovery.seed_hosts is built as "<masterService>-headless" and does
+      # NOT derive from clusterName/nodeGroup. Left at its default the nodes
+      # look for opensearch-cluster-master-headless, never resolve it, and
+      # never elect a cluster manager despite all running.
+      masterService: opensearch-node
+      replicas: "{{ opensearch_replicas }}"
+      singleNode: false
+      opensearchJavaOpts: "{{ opensearch_java_opts }}"
+      persistence:
+        enabled: true
+        # The fsgroup-volume initContainer chowns the PVC as root, which
+        # restricted-v2 forbids; OpenShift's fsGroup already handles ownership.
+        enableInitChown: false
+        storageClass: "{{ opensearch_storage_class }}"
+        accessModes: [ReadWriteOnce]
+        size: "{{ opensearch_storage_size }}"
+      podSecurityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      # vm.max_map_count is already 262144 on RHCOS, so neither privileged
+      # path is needed.
+      sysctl:
+        enabled: false
+      sysctlInit:
+        enabled: false
+      # Left enabled: it is what provides TLS on :9200, which OpenRAG
+      # requires. The demo config supplies self-signed certs; the backend
+      # connects with verify_certs=False so that is sufficient in-cluster.
+      securityConfig:
+        enabled: true
+      extraEnvs:
+        - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-admin
+              key: password
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 3Gi
+        limits:
+          memory: 4Gi
+
+# ---------------------------------------------------------------------------
+# Docling (document parsing) and the CPU embedding model. Neither is deployed
+# by the OpenRAG chart.
+# ---------------------------------------------------------------------------
+
+- name: Deploy docling-serve
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: docling-serve
+        namespace: "{{ openrag_namespace }}"
+        labels:
+          app: docling-serve
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: docling-serve
+        template:
+          metadata:
+            labels:
+              app: docling-serve
+          spec:
+            containers:
+              - name: docling-serve
+                image: "{{ openrag_docling_image }}"
+                ports:
+                  - containerPort: 5001
+                env:
+                  # Required for OpenRAG's VLM pipeline against remote models.
+                  - {name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES, value: "true"}
+                  - {name: DOCLING_SERVE_ALLOW_CUSTOM_VLM_CONFIG, value: "true"}
+                  - {name: DOCLING_SERVE_ENABLE_UI, value: "true"}
+                  # Default HF cache is not writable under an arbitrary uid.
+                  - {name: HF_HOME, value: /tmp/hf}
+                resources:
+                  requests: {cpu: 500m, memory: 2Gi}
+                  limits: {memory: 6Gi}
+                volumeMounts:
+                  - {name: scratch, mountPath: /tmp}
+            volumes:
+              - name: scratch
+                emptyDir: {sizeLimit: 8Gi}
+
+- name: Deploy the CPU embedding model
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: text-embeddings
+        namespace: "{{ openrag_namespace }}"
+        labels:
+          app: text-embeddings
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: text-embeddings
+        template:
+          metadata:
+            labels:
+              app: text-embeddings
+          spec:
+            containers:
+              - name: tei
+                image: "{{ openrag_embedding_image }}"
+                args:
+                  - "--model-id={{ openrag_embedding_model_id }}"
+                  - "--port=8080"
+                ports:
+                  - containerPort: 8080
+                env:
+                  - {name: HF_HOME, value: /data}
+                resources:
+                  requests: {cpu: "1", memory: 2Gi}
+                  limits: {cpu: "4", memory: 4Gi}
+                volumeMounts:
+                  - {name: data, mountPath: /data}
+            volumes:
+              - name: data
+                emptyDir: {sizeLimit: 4Gi}
+
+- name: Create services for docling and embeddings
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ openrag_namespace }}"
+      spec:
+        selector:
+          app: "{{ item.name }}"
+        ports:
+          - name: http
+            port: "{{ item.port }}"
+            targetPort: "{{ item.port }}"
+  loop:
+    - {name: docling-serve, port: 5001}
+    - {name: text-embeddings, port: 8080}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Wait for docling and embeddings to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: "{{ item }}"
+  register: openrag_dep
+  until: openrag_dep.resources[0].status.readyReplicas | default(0) > 0
+  retries: 40
+  delay: 15
+  loop:
+    - docling-serve
+    - text-embeddings
+  loop_control:
+    label: "{{ item }}"
+
+# ---------------------------------------------------------------------------
+# OpenRAG itself
+# ---------------------------------------------------------------------------
+
+- name: Check out the OpenRAG chart
+  ansible.builtin.git:
+    repo: "{{ openrag_git_repo }}"
+    dest: "{{ openrag_checkout_dir }}"
+    version: "{{ openrag_git_version }}"
+    depth: 1
+    force: true
+
+# Read straight from the cluster and hand to Helm in memory. The key is never
+# written to a values file on disk.
+- name: Read the LiteLLM key for OpenRAG
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    kind: Secret
+    namespace: "{{ litellm_namespace | default('litellm') }}"
+    label_selectors: []
+  register: openrag_litellm_secrets
+  no_log: true
+
+- name: Extract the LiteLLM master key
+  ansible.builtin.set_fact:
+    openrag_litellm_key: >-
+      {{ (openrag_litellm_secrets.resources
+          | selectattr('data.LITELLM_MASTER_KEY', 'defined')
+          | first).data.LITELLM_MASTER_KEY | b64decode }}
+  no_log: true
+
+- name: Fail when no LiteLLM key was found
+  ansible.builtin.fail:
+    msg: >-
+      No Secret with LITELLM_MASTER_KEY in the litellm namespace. OpenRAG needs
+      it for both chat and embeddings; run the litellm role first.
+  when: openrag_litellm_key | default('') | length == 0
+
+# langflow.auth.superuserPassword defaults to "" and the chart does not
+# generate one, so Langflow aborts on boot with
+#   Missing credentials: username=admin, password=not set
+#   ValueError: Username and password must be set
+# and the backend then sits forever in its wait-for-langflow init container.
+#
+# Generated once and kept in a Secret rather than regenerated per run: the
+# superuser row is written to postgres on first boot, so a new password each
+# time would stop matching.
+- name: Look for an existing Langflow superuser password
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    kind: Secret
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-langflow-superuser
+  register: openrag_lf_secret
+  no_log: true
+
+- name: Generate a Langflow superuser password
+  ansible.builtin.set_fact:
+    openrag_langflow_password: >-
+      {{ (openrag_lf_secret.resources | first).data.password | b64decode
+         if openrag_lf_secret.resources | default([]) | length > 0
+         else lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}
+  no_log: true
+
+- name: Store the Langflow superuser password
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openrag-langflow-superuser
+        namespace: "{{ openrag_namespace }}"
+      stringData:
+        username: admin
+        password: "{{ openrag_langflow_password }}"
+  no_log: true
+
+- name: Deploy OpenRAG
+  kubernetes.core.helm:
+    kube_context: "{{ ocp_context }}"
+    name: openrag
+    chart_ref: "{{ openrag_checkout_dir }}/kubernetes/helm/openrag"
+    release_namespace: "{{ openrag_namespace }}"
+    wait: false
+    values:
+      global:
+        opensearch:
+          host: "opensearch-node.{{ openrag_opensearch_namespace }}.svc.cluster.local"
+          port: 9200
+          scheme: https
+          username: admin
+          password: "{{ openrag_opensearch_password }}"
+          indexName: documents
+        docling:
+          host: "docling-serve.{{ openrag_namespace }}.svc.cluster.local"
+          port: 5001
+          scheme: http
+          verifySsl: false
+      langflow:
+        enabled: true
+        auth:
+          superuser: admin
+          superuserPassword: "{{ openrag_langflow_password }}"
+        persistence:
+          storageClass: "{{ openrag_storage_class }}"
+      postgres:
+        enabled: true
+        persistence:
+          storageClass: "{{ openrag_storage_class }}"
+      backend:
+        enabled: true
+        # NOT an existing class to use - templates/storage/backend-sc.yaml
+        # *creates* a StorageClass with this name, unconditionally and with an
+        # IBM VPC provisioner by default. Naming it ocs-storagecluster-ceph-rbd
+        # collides with ODF's own and Helm refuses the install:
+        #   invalid ownership metadata; missing key app.kubernetes.io/managed-by
+        # There is no switch to skip it, so give it a unique name. Nothing
+        # references it; the PVCs below point at the real ODF classes.
+        storageClassName: openrag-backend-unused
+        persistence:
+          data:
+            storageClass: "{{ openrag_storage_class }}"
+          shared:
+            storageClass: "{{ openrag_shared_storage_class }}"
+      frontend:
+        enabled: true
+      llmProviders:
+        openai:
+          enabled: true
+          apiKey: "{{ openrag_litellm_key }}"
+      appConfig:
+        agent:
+          llmModel: "{{ openrag_chat_model }}"
+          llmProvider: openai
+        knowledge:
+          chunkSize: "{{ openrag_chunk_size }}"
+          chunkOverlap: "{{ openrag_chunk_overlap }}"
+          embeddingModel: "{{ openrag_embedding_model_name }}"
+          embeddingProvider: openai
+          ocr: false
+          tableStructure: true
+      ingress:
+        enabled: true
+        # openshift-default runs the ingress-to-route controller, so these
+        # Ingress objects become Routes. The chart's nginx default matches no
+        # IngressClass here and would simply never be served.
+        className: openshift-default
+        # ingress-to-route creates a plain HTTP route unless told otherwise,
+        # so https to these hosts 503s. This annotation makes it edge-
+        # terminated, served by the cluster wildcard certificate.
+        annotations:
+          route.openshift.io/termination: edge
+        hosts:
+          frontend:
+            host: "{{ openrag_frontend_host | default('openrag.' ~ ocp_apps_domain, true) }}"
+            paths: [{path: /, pathType: Prefix}]
+          backend:
+            host: "{{ openrag_backend_host | default('openrag-api.' ~ ocp_apps_domain, true) }}"
+            paths: [{path: /, pathType: Prefix}]
+          langflow:
+            host: "{{ openrag_langflow_host | default('openrag-langflow.' ~ ocp_apps_domain, true) }}"
+            paths: [{path: /, pathType: Prefix}]
+      # Explicit nulls, not {}: Helm deep-merges maps, so an empty map leaves
+      # the chart's uid/gid 1000 in place and restricted-v2 rejects the pods.
+      # Unlike OpenSearch these images tolerate an arbitrary uid, so no SCC
+      # grant is needed here.
+      podSecurityContext:
+        fsGroup: null
+        runAsNonRoot: true
+      securityContext:
+        runAsUser: null
+        runAsGroup: null
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+  no_log: true
+
+# The chart templates OPENAI_API_KEY but has no value for an OpenAI base URL -
+# it assumes api.openai.com. The backend builds its client as
+# AsyncOpenAI(api_key=...) with no base_url, and the OpenAI SDK falls back to
+# the OPENAI_BASE_URL environment variable, so setting it here redirects the
+# whole thing at LiteLLM. Safe to patch: the chart's own comment notes
+# bootstrap.py loads .env with override=False, so container env wins.
+#
+# Applied after Helm because the chart offers no extraEnv hook; a helm upgrade
+# drops it, which is why this task runs on every pass.
+- name: Point the OpenRAG backend at LiteLLM
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: patched
+    kind: Deployment
+    api_version: apps/v1
+    name: openrag-backend
+    namespace: "{{ openrag_namespace }}"
+    definition:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - name: OPENAI_BASE_URL
+                    value: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+
+- name: Wait for the OpenRAG backend and frontend
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: "{{ item }}"
+  register: openrag_app
+  until: openrag_app.resources[0].status.readyReplicas | default(0) > 0
+  retries: 40
+  delay: 15
+  loop:
+    - openrag-backend
+    - openrag-frontend
+  loop_control:
+    label: "{{ item }}"
+
+- name: Show the OpenRAG URL
+  ansible.builtin.debug:
+    msg: >-
+      OpenRAG is at
+      https://{{ openrag_frontend_host | default('openrag.' ~ ocp_apps_domain, true) }}

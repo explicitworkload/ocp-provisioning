@@ -1,0 +1,44 @@
+---
+openrag_namespace: openrag
+openrag_opensearch_namespace: opensearch
+
+# OpenRAG ships its chart in-repo rather than a Helm repository, so the role
+# checks the source out to build from.
+openrag_git_repo: https://github.com/langflow-ai/openrag.git
+openrag_git_version: main
+openrag_checkout_dir: /tmp/openrag-chart
+
+# --- OpenSearch -------------------------------------------------------------
+# The OpenRAG chart deliberately does NOT deploy OpenSearch, so this role does.
+opensearch_chart_repo: https://opensearch-project.github.io/helm-charts/
+opensearch_chart_version: "3.9.0"
+opensearch_replicas: 3
+opensearch_storage_class: ocs-storagecluster-ceph-rbd
+opensearch_storage_size: 20Gi
+opensearch_java_opts: "-Xmx2g -Xms2g"
+
+# --- Embeddings -------------------------------------------------------------
+# bge-small is 384-dim and runs on CPU, which it has to: the cluster's only
+# GPU is taken by the chat model. Fronted by LiteLLM so OpenRAG sees a single
+# OpenAI-compatible endpoint for both chat and embeddings.
+openrag_embedding_image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+openrag_embedding_model_id: BAAI/bge-small-en-v1.5
+openrag_embedding_model_name: bge-small-en-v1.5
+
+# --- Docling ----------------------------------------------------------------
+openrag_docling_image: quay.io/docling-project/docling-serve:latest
+
+# --- OpenRAG ----------------------------------------------------------------
+openrag_chat_model: qwen3-4b
+openrag_chunk_size: 1000
+openrag_chunk_overlap: 200
+# RWO volumes (backend data, langflow, postgres).
+openrag_storage_class: ocs-storagecluster-ceph-rbd
+# The backend's "shared" volume is ReadWriteMany, which RBD cannot do - it
+# needs CephFS or the PVC never binds.
+openrag_shared_storage_class: ocs-storagecluster-cephfs
+
+# Hostnames; left to the apps domain unless overridden.
+openrag_frontend_host: ""
+openrag_backend_host: ""
+openrag_langflow_host: ""

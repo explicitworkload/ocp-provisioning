@@ -86,6 +86,12 @@ mcp_write_rules:
     resources: [routes]
     verbs: [get, list, watch, create, update, patch, delete]
 
+# OpenRAG — document RAG platform (Langflow + OpenSearch + Docling).
+# OFF by default: it adds a 3-node OpenSearch cluster (~9Gi RAM, 3x20Gi PVCs)
+# plus docling-serve and a CPU embedding model, which is a lot to carry on a
+# cluster that is not using it.
+deploy_openrag: false
+
 # Zero Trust Workload Identity Manager (SPIFFE/SPIRE).
 # Deploys a SPIRE server StatefulSet plus an agent and CSI-driver DaemonSet on
 # every node, so workloads can obtain cryptographic identities (SVIDs) instead

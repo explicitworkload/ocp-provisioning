@@ -129,6 +129,12 @@
     - role: dashboard
       tags: [dashboard]
 
+    # After litellm: OpenRAG reads the LiteLLM key for both chat and
+    # embeddings, and registers its embedding model there.
+    - role: openrag
+      tags: [openrag, rag]
+      when: deploy_openrag | bool
+
     # Last: publishes live DNS records to Cloudflare. Opt-in only, and runs
     # after every Route it might need to publish already exists.
     - role: external_dns

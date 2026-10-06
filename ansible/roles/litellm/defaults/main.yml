@@ -17,3 +17,11 @@ litellm_azure_endpoint: "https://llm-gpt4-lightspeed.cognitiveservices.azure.com
 litellm_azure_api_version: "2024-06-01"
 litellm_azure_model_name: "Mistral-Small-4-119B-2603"
 litellm_azure_credential_name: gpt4
+
+# Embedding model registered with LiteLLM for OpenRAG. The deployment itself
+# lives in the openrag role; these just tell LiteLLM where to find it.
+# bge-small is 384-dim and runs acceptably on CPU, which matters because the
+# cluster's only GPU is taken by the chat model.
+litellm_embedding_model_name: bge-small-en-v1.5
+litellm_embedding_model_id: BAAI/bge-small-en-v1.5
+litellm_embedding_api_base: http://text-embeddings.openrag.svc.cluster.local:8080/v1
