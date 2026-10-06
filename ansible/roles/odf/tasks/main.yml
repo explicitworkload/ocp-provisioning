@@ -315,8 +315,21 @@
         echo WAIT
       fi
   register: nb_verdict
+  # 20 minutes, not 10. The verdict cannot be reached until three things have
+  # happened, and the last of them is slow. Measured on a fresh cluster:
+  #   18:15:54  StorageCluster created, this poll starts
+  #   18:22:16  CNPG primary elected          (T+6m)
+  #   ~18:30+   operator gives up with "account not found"  -> gaveup=1
+  # At 40x15s the window shut at T+10m, with the primary barely three minutes
+  # old and the operator still retrying, so every poll returned WAIT, the
+  # repair was skipped, and the play walked into the backing-store wait with a
+  # stranded NooBaa. Seen on two clusters.
+  #
+  # Nearly free to widen: a healthy cluster exits on the first poll that sees
+  # new >= 1, so the extra budget is only ever spent when NooBaa really is
+  # taking a long time to resolve - which is precisely when waiting is right.
   until: nb_verdict.stdout | default('') | trim != 'WAIT'
-  retries: 40
+  retries: 80
   delay: 15
   changed_when: false
   failed_when: false
