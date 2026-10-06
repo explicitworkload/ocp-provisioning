@@ -245,6 +245,7 @@
           namespace: "{{ mcp_server_namespace }}"
 
 - name: Create MCP server config
+  register: mcp_config
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -256,11 +257,28 @@
         name: openshift-mcp-server-config
         namespace: "{{ mcp_server_namespace }}"
       data:
+        # prometheus_url MUST sit under [toolset_configs.metrics]. At the top
+        # level the TOML parses without complaint and is silently ignored, the
+        # server logs "No prometheus_url configured, using default
+        # url=http://localhost:9090", and every metrics tool fails with
+        # "dial tcp [::1]:9090: connect: connection refused" - nothing listens
+        # on 9090 inside the server's own pod.
+        #
+        # Thanos querier only serves HTTPS, with a certificate from the
+        # OpenShift service CA that is not in the image's trust store, so
+        # ca_file points at the SA-projected copy. The metrics toolset forwards
+        # the *caller's* bearer token, so the caller also needs
+        # cluster-monitoring-view - the dashboard SA has it via the
+        # ops-dashboard-monitoring ClusterRoleBinding.
         config.toml: |
           log_level = 5
           port = "8080"
           read_only = false
           toolsets = ["core", "config", "kubevirt", "tekton", "openshift", "metrics"]
+
+          [toolset_configs.metrics]
+          prometheus_url = "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
+          ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
 - name: Wait for MCPServer CRD
   kubernetes.core.k8s_info:
@@ -305,6 +323,23 @@
         runtime:
           security:
             serviceAccountName: mcp-viewer
+
+# The config is a mounted ConfigMap, read once at startup, and the MCPServer
+# operator does not notice a content change - so without this a re-run that
+# edits config.toml leaves the old settings live until something else happens
+# to restart the pod. Guarded on the ConfigMap actually changing.
+- name: Restart the MCP server to pick up config changes
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: "{{ mcp_server_namespace }}"
+    # Not app.kubernetes.io/name - the operator does not set it. These two are
+    # what the pod actually carries; mcp-server= names this instance.
+    label_selectors:
+      - mcp-server=openshift-mcp-server
+  when: mcp_config.changed
 
 - name: Wait for MCP Server to be ready
   kubernetes.core.k8s_info:
