@@ -492,6 +492,19 @@
                 env:
                   - name: OPENAI_BASE_URL
                     value: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+                  # OpenRAG's readiness gate wants a dedicated coordinating-only
+                  # tier (default expectation: 3). This cluster runs three nodes
+                  # that each hold master+data+ingest, so a query for
+                  # /_nodes/coordinating_only:true returns 0 and the backend
+                  # crashlooped on
+                  #   OpenSearch healthy but cluster has not reached expected
+                  #   node count
+                  # despite the cluster being green. Any node can coordinate;
+                  # the separate tier is a scaling optimisation, not a
+                  # requirement, so only this expectation is relaxed - the
+                  # data and cluster-manager counts are still enforced at 3.
+                  - name: OPENSEARCH_EXPECTED_COORDINATING_NODE_COUNT
+                    value: "0"
 
 - name: Wait for the OpenRAG backend and frontend
   kubernetes.core.k8s_info:
