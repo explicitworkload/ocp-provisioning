@@ -420,12 +420,68 @@
         suffix: .sql
       register: nb_dump
 
+    # NooBaa creates the CNPG schema progressively, so the target is a moving
+    # target for the first few minutes. A repair that started ~3 minutes after
+    # the CNPG pods appeared hit
+    #   ERROR: relation "datablocks" does not exist
+    # because that table had not been created yet; five minutes later the
+    # schema was complete and identical to the source.
+    #
+    # TRUNCATE is a single statement over every name, so one absent table
+    # aborts the whole repair. Wait for the target schema to catch up with the
+    # source instead of racing it. Comparing against the source rather than a
+    # hardcoded count means this stays correct if a build changes the schema.
+    - name: Wait for the CNPG schema to match the StatefulSet database
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          Q="select tablename from pg_tables where schemaname='public' and tablename = any(string_to_array('{{ odf_noobaa_tables | join(',') }}', ',')) order by tablename"
+          old=$($OC exec noobaa-db-pg-0 -- psql -U postgres -d nbcore -t -A -c "$Q" </dev/null)
+          new=$($OC exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "$Q" </dev/null)
+          # Tables in the source that the target still lacks.
+          missing=$(comm -23 <(echo "$old") <(echo "$new") | tr '\n' ' ')
+          echo "MISSING:${missing}"
+          echo "COMMON:$(comm -12 <(echo "$old") <(echo "$new") | tr '\n' ',' | sed 's/,$//')"
+      register: nb_schema
+      until: nb_schema.stdout_lines[0] | trim == 'MISSING:'
+      retries: 30
+      delay: 20
+      changed_when: false
+      failed_when: false
+
+    # Still short after ten minutes means a genuine schema difference rather
+    # than the creation race, and a partial restore would look like success -
+    # "Verify the system landed in CNPG" only counts the systems table.
+    - name: Abort if the CNPG schema never caught up
+      ansible.builtin.fail:
+        msg: >-
+          CNPG is still missing tables the StatefulSet database has
+          ({{ nb_schema.stdout_lines[0] | default('') | replace('MISSING:', '') | trim }}).
+          Restoring now would silently drop them. Repair manually.
+      when: nb_schema.stdout_lines[0] | default('') | trim != 'MISSING:'
+
+    - name: Record the tables to transfer
+      ansible.builtin.set_fact:
+        nb_tables: >-
+          {{ nb_schema.stdout_lines[1] | replace('COMMON:', '') | trim }}
+
+    - name: Abort if the essential NooBaa tables are missing
+      ansible.builtin.fail:
+        msg: >-
+          Expected 'systems' and 'accounts' in both databases, found only:
+          {{ nb_tables | default('(none)', true) }}. Repair manually.
+      when: >-
+        'systems' not in (nb_tables | split(','))
+        or 'accounts' not in (nb_tables | split(','))
+
     - name: Dump the stranded system from the StatefulSet database
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -o pipefail
-          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec noobaa-db-pg-0 -- pg_dump -U postgres -d nbcore --data-only --disable-triggers {{ odf_noobaa_tables | map('regex_replace', '^', '-t public.') | join(' ') }} </dev/null > {{ nb_dump.path | quote }}
+          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec noobaa-db-pg-0 -- pg_dump -U postgres -d nbcore --data-only --disable-triggers {{ nb_tables | split(',') | map('regex_replace', '^', '-t public.') | join(' ') }} </dev/null > {{ nb_dump.path | quote }}
       changed_when: true
 
     - name: Load it into the CNPG primary
@@ -435,7 +491,7 @@
           set -eo pipefail
           OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
           PRIMARY={{ cnpg_primary.resources[0].metadata.name }}
-          $OC exec $PRIMARY -c postgres -- psql -U postgres -d nbcore -c "TRUNCATE {{ odf_noobaa_tables | join(',') }} CASCADE" </dev/null
+          $OC exec $PRIMARY -c postgres -- psql -U postgres -d nbcore -c "TRUNCATE {{ nb_tables }} CASCADE" </dev/null
           $OC exec -i $PRIMARY -c postgres -- psql -U postgres -d nbcore -v ON_ERROR_STOP=1 < {{ nb_dump.path | quote }}
       changed_when: true
 
