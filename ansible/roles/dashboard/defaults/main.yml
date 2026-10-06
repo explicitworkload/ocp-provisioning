@@ -1,8 +1,16 @@
 ---
 dashboard_namespace: dashboard
 dashboard_image_tag: latest
-dashboard_password: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits') }}"
-dashboard_secret_key: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+# Empty means "generate once, then reuse". Previously these were a bare
+# lookup(), which Ansible re-evaluates on every run: each pass wrote a new
+# password into the Secret while the Deployment spec stayed byte-identical,
+# so no rollout happened and the running pod kept serving the OLD password.
+# The only way in was to delete the pod by hand.
+#
+# Set either explicitly to pin a value:
+#   ansible-playbook site.yml -e dashboard_password=...
+dashboard_password: ""
+dashboard_secret_key: ""
 
 # Extra Route on a domain managed by ExternalDNS. Set empty to skip.
 # The cluster's default wildcard cert does not cover this name, so browsers

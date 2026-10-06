@@ -320,6 +320,33 @@
     - dashboard_aws_access_key_id | length == 0
     - (dashboard_aws_secret.resources | default([]) | length) == 0
 
+- name: Look for an existing dashboard auth Secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ dashboard_namespace }}"
+    name: ops-dashboard-auth
+  register: dashboard_auth_secret
+  no_log: true
+
+# Precedence: an explicitly supplied value, else whatever is already in the
+# cluster, else a fresh one. Keeping the existing value is what stops the
+# password rotating out from under a logged-in user on every run.
+- name: Resolve the dashboard password and secret key
+  ansible.builtin.set_fact:
+    dashboard_password_effective: >-
+      {{ dashboard_password if dashboard_password | length > 0
+         else ((dashboard_auth_secret.resources | first).data.password | b64decode
+               if dashboard_auth_secret.resources | default([]) | length > 0
+               else lookup('password', '/dev/null length=16 chars=ascii_letters,digits')) }}
+    dashboard_secret_key_effective: >-
+      {{ dashboard_secret_key if dashboard_secret_key | length > 0
+         else ((dashboard_auth_secret.resources | first).data['secret-key'] | b64decode
+               if dashboard_auth_secret.resources | default([]) | length > 0
+               else lookup('password', '/dev/null length=32 chars=ascii_letters,digits')) }}
+  no_log: true
+
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
@@ -333,8 +360,8 @@
         namespace: "{{ dashboard_namespace }}"
       type: Opaque
       stringData:
-        password: "{{ dashboard_password }}"
-        secret-key: "{{ dashboard_secret_key }}"
+        password: "{{ dashboard_password_effective }}"
+        secret-key: "{{ dashboard_secret_key_effective }}"
 
 - name: Create dashboard Deployment
   kubernetes.core.k8s:
@@ -356,6 +383,13 @@
           metadata:
             labels:
               app: ops-dashboard
+            annotations:
+              # Rolls the pod whenever the credentials change. The Secret is
+              # consumed as env vars, which Kubernetes does NOT refresh in a
+              # running container, and the Deployment spec is otherwise
+              # identical run to run - so without this a changed password
+              # silently never reaches the pod.
+              checksum/auth: "{{ (dashboard_password_effective ~ dashboard_secret_key_effective) | hash('sha256') }}"
           spec:
             containers:
               - name: dashboard

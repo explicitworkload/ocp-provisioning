@@ -240,7 +240,7 @@ All variables are in `group_vars/all.yml`:
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
 | `litellm_admin_email` | `admin@example.com` | Email for the LiteLLM proxy admin user |
-| `dashboard_password` | (random) | Dashboard login password (auto-generated, override at runtime) |
+| `dashboard_password` | (generated once) | Dashboard login password. Generated on first run and then reused from the `ops-dashboard-auth` Secret, so it does not rotate on every run. Override at runtime to pin it. |
 | `litellm_azure_model_name` | `Mistral-Small-4-119B-2603` | Display name for the Azure GPT-4 model in LiteLLM |
 | `external_dns_domain` | `kubernetes.day` | Cloudflare zone that ExternalDNS manages |
 | `deploy_external_dns` | `false` | Opt-in switch — ExternalDNS only deploys when true |
