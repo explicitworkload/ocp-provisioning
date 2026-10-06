@@ -277,12 +277,22 @@
       set -o pipefail
       OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
 
-      # No CNPG cluster: this build does not migrate, nothing to repair.
+      nb_phase=$($OC get noobaa noobaa -o jsonpath='{.status.phase}' 2>/dev/null)
+
+      # "Not present" is not the same as "never will be". On a fresh install the
+      # CNPG cluster does not exist for the first few minutes, and the old
+      # StatefulSet DB is removed only once the migration completes. Returning a
+      # terminal verdict for either case ends the until-loop on its first poll
+      # and skips the repair - which is exactly how a stranded cluster got all
+      # the way to the backing-store wait before failing. Only conclude there is
+      # nothing to repair when NooBaa is genuinely Ready; otherwise keep waiting.
+      absent_verdict() {
+        [ "$nb_phase" = "Ready" ] && echo HEALTHY || echo WAIT
+      }
       primary=$($OC get pod -l cnpg.io/cluster=noobaa-db-pg-cluster,role=primary \
                   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-      [ -z "$primary" ] && { echo NOCNPG; exit 0; }
-      # Old StatefulSet DB already gone: migration finished and was cleaned up.
-      $OC get pod noobaa-db-pg-0 >/dev/null 2>&1 || { echo NOOLD; exit 0; }
+      [ -z "$primary" ] && { absent_verdict; exit 0; }
+      $OC get pod noobaa-db-pg-0 >/dev/null 2>&1 || { absent_verdict; exit 0; }
 
       systems() {
         $OC exec "$1" ${2:+-c "$2"} -- psql -U postgres -d nbcore -t -A \
