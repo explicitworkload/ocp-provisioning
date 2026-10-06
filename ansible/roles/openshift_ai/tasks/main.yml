@@ -26,13 +26,19 @@
   retries: 20
   delay: 15
 
+# v2, not v1. serviceMesh exists only in the v1 schema and was dropped in v2:
+# KServe in RHOAI 3.x uses raw deployment (rawDeploymentServiceConfig below)
+# and no longer routes through a Service Mesh control plane, so the old
+# serviceMesh block is both unnecessary and unexpressible here. Service Mesh 3
+# is still installed by the service_mesh role for Bookinfo and Kiali; this
+# only stops RHOAI claiming ownership of it.
 - name: Create DSCInitialization
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
     apply: true
     definition:
-      apiVersion: dscinitialization.opendatahub.io/v1
+      apiVersion: dscinitialization.opendatahub.io/v2
       kind: DSCInitialization
       metadata:
         name: default-dsci
@@ -40,13 +46,21 @@
         applicationsNamespace: redhat-ods-applications
         monitoring:
           managementState: Managed
-        serviceMesh:
-          managementState: Managed
-          controlPlane:
-            metricsCollection: Istio
-            namespace: istio-system
+          namespace: "{{ rhoai_monitoring_namespace }}"
+          alerting: {}
+          metrics:
+            replicas: 1
+            storage:
+              retention: "{{ rhoai_metrics_retention }}"
+              size: "{{ rhoai_metrics_size }}"
+          traces:
+            sampleRatio: "{{ rhoai_traces_sample_ratio }}"
+            storage:
+              backend: pv
+              retention: "{{ rhoai_traces_retention }}"
         trustedCABundle:
           managementState: Managed
+          customCABundle: ""
 
 - name: Wait for DataScienceCluster CRD
   kubernetes.core.k8s_info:
@@ -82,6 +96,12 @@
               airGapped: false
               managementState: Managed
             rawDeploymentServiceConfig: Headless
+            # Models-as-a-Service is driven from aigateway below, not here;
+            # enabling both makes two controllers fight over the same routes.
+            modelsAsService:
+              managementState: Removed
+            wva:
+              managementState: Removed
           ray:
             managementState: Managed
           trustyai:
@@ -99,10 +119,16 @@
             managementState: Managed
           aigateway:
             managementState: Managed
+            # What publishes LLMInferenceService models on the MaaS gateway at
+            # maas.<apps-domain> instead of a cluster-internal URL only.
+            modelsAsAService:
+              managementState: Managed
+          aipipelines:
+            managementState: Managed
           trainingoperator:
-            managementState: Removed
+            managementState: Managed
           trainer:
-            managementState: Removed
+            managementState: Managed
           sparkoperator:
             managementState: Removed
           feastoperator:
@@ -111,6 +137,9 @@
             managementState: Managed
           llamastackoperator:
             managementState: Removed
+          # Kept deliberately. The reference cluster does NOT run this, and so
+          # has no MCPServer CRD at all - removing it here would delete the CRD
+          # out from under the openshift-mcp-server this role installs below.
           mcplifecycleoperator:
             managementState: Managed
 
@@ -137,14 +166,54 @@
         namespace: redhat-ods-applications
       spec:
         dashboardConfig:
+          # Flags below mirror a fully-configured RHOAI 3.5.1 reference
+          # cluster. Note the mixed polarity: "disableX: false" turns a
+          # feature ON, while the positively-named flags turn one on with
+          # true. They are not interchangeable.
+          agentConfigManagement: true
+          agentOps: true
+          agentsCatalog: true
           aiAssetCustomEndpoints: true
+          automl: true
+          autorag: true
+          connectionTest: true
+          deploymentWizardYAMLViewer: true
+          disableDistributedWorkloads: false
           disableKServe: false
+          disableKServeMetrics: false
+          # Kueue is Removed in the DSC above, so leave its UI hidden -
+          # showing it would offer queues that cannot be created.
+          disableKueue: true
           disableLLMd: false
+          disableLMEval: false
+          disableModelCatalog: false
+          disableModelRegistry: false
+          disablePerformanceMetrics: false
           disableTracking: false
+          disableTrustyBiasMetrics: false
+          externalModels: true
+          externalVectorStores: true
+          featureStoreAdmin: true
           genAiStudio: true
+          genAiTracing: true
+          globalProjectPrompts: true
+          gpuaas: true
+          guardrails: true
+          llmGatewayField: true
+          llmdTemplates: true
+          mcpCatalog: true
+          mcpRegistry: true
           modelAsService: true
           observabilityDashboard: true
+          projectRBAC: true
+          promptManagement: true
+          roleManagement: true
+          toolCalling: true
+          trainingJobs: true
           vLLMDeploymentOnMaaS: true
+        groupsConfig:
+          adminGroups: "{{ rhoai_admin_groups }}"
+          allowedGroups: "{{ rhoai_allowed_groups }}"
         genAiStudioConfig:
           aiAssetCustomEndpoints:
             clusterDomains:
@@ -167,7 +236,37 @@
           - vllm-gaudi-runtime
         templateOrder: []
 
-- name: Add GPU accelerator to default hardware profile
+# rhods-admins is also RHOAI's own out-of-box default, so naming it here is
+# not a change of behaviour - but an empty group means nobody reaches the
+# admin UI, and that is silent. Warn rather than fail: cluster-admins still
+# get in, and a fresh cluster legitimately has the group empty until users
+# are added.
+- name: Check the RHOAI admin group has members
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: user.openshift.io/v1
+    kind: Group
+    name: "{{ rhoai_admin_groups }}"
+  register: rhoai_admin_group
+  when: rhoai_admin_groups | length > 0
+
+- name: Warn when the RHOAI admin group is empty
+  ansible.builtin.debug:
+    msg: >-
+      Group '{{ rhoai_admin_groups }}' has no members, so no one will have the
+      OpenShift AI dashboard admin UI. Add users with:
+      oc adm groups add-users {{ rhoai_admin_groups }} <user>
+  when:
+    - rhoai_admin_groups | length > 0
+    - rhoai_admin_group.resources | default([]) | length > 0
+    - rhoai_admin_group.resources[0].users | default([]) | length == 0
+
+# Two profiles rather than one. Previously GPU was bolted onto
+# default-profile, which offered an accelerator to every workbench and
+# notebook and let CPU-only pods land a GPU request they never use - on a
+# two-GPU cluster that is enough to block model serving entirely.
+# default-profile is now CPU/memory only, and GPU work selects gpu-profile.
+- name: Create the default (CPU-only) hardware profile
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -178,6 +277,13 @@
       metadata:
         name: default-profile
         namespace: redhat-ods-applications
+        annotations:
+          opendatahub.io/display-name: default-profile
+          opendatahub.io/description: >-
+            This profile offers 2 CPUs and 4 GiB of memory. You can customize
+            these resources up to 4 CPUs and 8 GiB of memory.
+          opendatahub.io/disabled: "false"
+          opendatahub.io/dashboard-feature-visibility: "[]"
       spec:
         identifiers:
           - displayName: CPU
@@ -192,13 +298,54 @@
             defaultCount: 4Gi
             minCount: 2Gi
             maxCount: 8Gi
+
+# scheduling.node is what keeps these pods off CPU workers and lets them
+# through the nvidia.com/gpu taint; without it the pod requests a GPU and
+# then sits Pending on a node that has none.
+- name: Create the GPU hardware profile
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: infrastructure.opendatahub.io/v1
+      kind: HardwareProfile
+      metadata:
+        name: gpu-profile
+        namespace: redhat-ods-applications
+        annotations:
+          opendatahub.io/display-name: gpu-profile
+          opendatahub.io/disabled: "false"
+          opendatahub.io/dashboard-feature-visibility: "[]"
+      spec:
+        identifiers:
+          - displayName: CPU
+            identifier: cpu
+            resourceType: CPU
+            defaultCount: "1"
+            minCount: 1
+            maxCount: "8"
+          - displayName: Memory
+            identifier: memory
+            resourceType: Memory
+            defaultCount: 12Gi
+            minCount: 1Gi
+            maxCount: 16Gi
           - displayName: GPU
             identifier: nvidia.com/gpu
             resourceType: Accelerator
             defaultCount: 1
             minCount: 1
-            maxCount: 2
-  ignore_errors: true
+            maxCount: "{{ rhoai_gpu_profile_max }}"
+        scheduling:
+          type: Node
+          node:
+            nodeSelector:
+              nvidia.com/gpu.present: "true"
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
 
 # --- MCP Server for OpenShift ---
 

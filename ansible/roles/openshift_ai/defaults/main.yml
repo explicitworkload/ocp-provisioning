@@ -1,3 +1,21 @@
 ---
+# DSCInitialization monitoring. Mirrors a fully-configured RHOAI 3.5.1
+# reference cluster; the metrics/traces blocks are only honoured on the v2
+# DSCI schema.
+rhoai_monitoring_namespace: redhat-ods-monitoring
+rhoai_metrics_retention: 90d
+rhoai_metrics_size: 5Gi
+rhoai_traces_sample_ratio: "0.1"
+rhoai_traces_retention: 2160h   # 90 days
+
+# Dashboard access. adminGroups must be a group that exists, or nobody gets
+# the admin UI; the reference cluster uses a dedicated rhods-admins group.
+rhoai_admin_groups: rhods-admins
+rhoai_allowed_groups: "system:authenticated"
+
+# Ceiling on the GPU hardware profile. The reference cluster allows 4; keep
+# it at or below the GPUs on a single node, since one pod cannot span nodes.
+rhoai_gpu_profile_max: 2
+
 mcp_server_namespace: openshift-mcp-server
 mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"
