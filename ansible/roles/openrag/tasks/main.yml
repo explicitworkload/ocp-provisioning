@@ -506,6 +506,37 @@
                   - name: OPENSEARCH_EXPECTED_COORDINATING_NODE_COUNT
                     value: "0"
 
+# The chart sets OPENRAG_BACKEND_HOST but not OPENRAG_BACKEND_PORT, and the
+# frontend builds http://$HOST:$PORT/... from both. Under docker-compose PORT
+# is 8000; on Kubernetes the kubelet's legacy service links inject
+#   OPENRAG_BACKEND_PORT=tcp://172.30.x.x:8000
+# because the Service happens to be named openrag-backend, producing
+#   http://openrag-backend:tcp://172.30.157.128:8000/docling/health
+#   ERR_INVALID_URL
+# Every server-side call then fails and page loads crawl. An explicitly
+# declared env var takes precedence over service links, so setting it is
+# enough; enableServiceLinks is left alone so nothing else changes.
+#
+# Re-applied each run for the same reason as the backend patch: a helm
+# upgrade rewrites the Deployment.
+- name: Give the OpenRAG frontend the real backend port
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: patched
+    kind: Deployment
+    api_version: apps/v1
+    name: openrag-frontend
+    namespace: "{{ openrag_namespace }}"
+    definition:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: frontend
+                env:
+                  - name: OPENRAG_BACKEND_PORT
+                    value: "8000"
+
 - name: Wait for the OpenRAG backend and frontend
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
