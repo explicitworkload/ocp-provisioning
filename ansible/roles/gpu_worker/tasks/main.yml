@@ -24,6 +24,16 @@
     worker_ami: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.ami.id }}"
     worker_security_groups: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.securityGroups }}"
     worker_region: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.placement.region }}"
+    # Derived like the region, not hardcoded. The AZ also builds the subnet
+    # filter "<infra>-subnet-private-<az>", so an AZ belonging to some other
+    # cluster matches no subnet at all: every Machine sits Failed and the
+    # readiness wait below burns 60x30s = 30 minutes before aborting the play
+    # with no diagnosis - ahead of odf, openshift_ai, model_serving and the
+    # rest. Set gpu_availability_zone explicitly to pin a zone (e.g. one with
+    # GPU capacity); leave it empty to follow the cluster's own workers.
+    gpu_az_effective: >-
+      {{ gpu_availability_zone if gpu_availability_zone | default('') | length > 0
+         else machinesets.resources[0].spec.template.spec.providerSpec.value.placement.availabilityZone }}
 
 - name: Create GPU MachineSets
   kubernetes.core.k8s:

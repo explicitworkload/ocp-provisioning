@@ -539,7 +539,15 @@
     pv_bs.resources[0].status is defined and
     pv_bs.resources[0].status.phase is defined and
     pv_bs.resources[0].status.phase == 'Ready'
-  retries: 30
+  # 15 minutes, not 7.5. This is the first genuinely slow wait after the
+  # StorageCluster is created, and on a healthy cluster nothing ahead of it
+  # blocks for long: the detection above exits the moment CNPG holds the
+  # system, and the post-repair NooBaa wait is skipped when not stranded. It
+  # must therefore cover ocs-operator reconciling, noobaa-core and the CNPG
+  # cluster coming up, and only then the 3-replica pv-pool binding 3x50Gi and
+  # registering its agents. The detection rewrite removed two failed_when:false
+  # polls that used to absorb ~6 minutes of that; this restores the headroom.
+  retries: 60
   delay: 15
 
 - name: Wait for default BucketClass

@@ -1,7 +1,7 @@
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
 metadata:
-  name: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
+  name: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}
   namespace: openshift-machine-api
   labels:
     machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
@@ -10,14 +10,14 @@ spec:
   selector:
     matchLabels:
       machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
-      machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
+      machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}
   template:
     metadata:
       labels:
         machine.openshift.io/cluster-api-cluster: {{ cluster_infra_id }}
         machine.openshift.io/cluster-api-machine-role: worker
         machine.openshift.io/cluster-api-machine-type: worker
-        machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_availability_zone }}
+        machine.openshift.io/cluster-api-machineset: {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}
     spec:
       metadata:
         labels:
@@ -42,14 +42,14 @@ spec:
             id: {{ cluster_infra_id }}-worker-profile
           instanceType: {{ item.instance_type }}
           placement:
-            availabilityZone: {{ gpu_availability_zone }}
+            availabilityZone: {{ gpu_az_effective }}
             region: {{ worker_region }}
           securityGroups: {{ worker_security_groups | to_json }}
           subnet:
             filters:
               - name: "tag:Name"
                 values:
-                  - "{{ cluster_infra_id }}-subnet-private-{{ gpu_availability_zone }}"
+                  - "{{ cluster_infra_id }}-subnet-private-{{ gpu_az_effective }}"
           tags:
             - name: "kubernetes.io/cluster/{{ cluster_infra_id }}"
               value: owned

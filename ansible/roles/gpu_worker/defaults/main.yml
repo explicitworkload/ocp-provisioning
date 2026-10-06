@@ -1,5 +1,6 @@
 ---
-gpu_availability_zone: us-east-2a
+# Empty = follow the cluster's own worker MachineSets. Set a zone to pin one.
+gpu_availability_zone: ""
 gpu_volume_size: 120
 gpu_machinesets:
   - instance_type: g4dn.4xlarge
