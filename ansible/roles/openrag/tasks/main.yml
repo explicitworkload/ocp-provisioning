@@ -127,6 +127,21 @@
     wait: true
     wait_timeout: 15m
     values:
+      # NOT opensearchproject/opensearch. OpenRAG creates its documents index
+      # with the jvector k-NN engine, hardcoded at
+      # src/utils/embedding_fields.py:158 with no setting to change it, and
+      # stock OpenSearch 3.9.0 - knn plugin 3.9.0.0 and all - rejects it:
+      #   mapper_parsing_exception: Invalid engine: jvector
+      # There is no cluster setting that enables it either. OpenRAG's own
+      # docker-compose uses langflowai/openrag-opensearch, which is the same
+      # OpenSearch with the engine bundled, so the chart gets pointed at that.
+      #
+      # Onboarding is where this surfaces: every other step passes - security
+      # config, roles, green cluster - and then init_index fails and the whole
+      # POST returns 500, leaving the UI on the setup wizard with no clue why.
+      image:
+        repository: "{{ opensearch_image_repository }}"
+        tag: "{{ opensearch_image_tag }}"
       clusterName: opensearch
       nodeGroup: node
       # discovery.seed_hosts is built as "<masterService>-headless" and does
@@ -339,6 +354,7 @@
 # raw template error and the friendly message below could never be reached.
 # Mapping first means the Undefined reaches default() instead of an attribute
 # lookup, and the empty value falls through to the check.
+  tags: [openrag-config]
 - name: Extract the LiteLLM master key
   ansible.builtin.set_fact:
     openrag_litellm_key: >-
@@ -348,6 +364,7 @@
          | first | default('', true)
          | b64decode }}
   no_log: true
+  tags: [openrag-config]
 
 - name: Fail when no LiteLLM key was found
   ansible.builtin.fail:
@@ -365,6 +382,7 @@
 # Generated once and kept in a Secret rather than regenerated per run: the
 # superuser row is written to postgres on first boot, so a new password each
 # time would stop matching.
+  tags: [openrag-config]
 - name: Look for an existing Langflow superuser password
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
@@ -522,7 +540,7 @@
               - name: backend
                 env:
                   - name: OPENAI_BASE_URL
-                    value: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+                    value: "{{ openrag_litellm_base_url }}"
                   # OpenRAG's readiness gate wants a dedicated coordinating-only
                   # tier (default expectation: 3). This cluster runs three nodes
                   # that each hold master+data+ingest, so a query for
@@ -585,8 +603,111 @@
   loop_control:
     label: "{{ item }}"
 
+# Without this the first page is the setup wizard, even though the chart was
+# handed the right models. The chart's openrag-app-config ConfigMap is a seed
+# and is not mounted on the backend at all - WorkspaceConfigService reads
+# config DB-first, out of postgres - so the running app's view of the models
+# is whatever onboarding wrote, and `edited: false` is what puts the wizard in
+# front of everything. POST /onboarding is the app's own supported path for
+# setting that; writing the flag into postgres by hand would skip the flow and
+# knowledge-filter setup it also does.
+#
+# No token: the backend reports no_auth_mode with run_mode oss, and /users/me
+# is an anonymous principal holding roles [admin] and config:write. Over the
+# openrag-api Route rather than the service, because the control host is
+# outside the cluster. If auth is ever switched on, this needs a bearer token
+# and the task will start returning 401/403 rather than failing quietly.
+- name: Find the OpenRAG API route
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ openrag_namespace }}"
+  register: openrag_routes
+  tags: [openrag-config]
+
+# [.] rather than \. - a backslash escape does not survive a folded scalar
+# into the regex (it does survive a double-quoted one), and '^openrag' without
+# the dot would match openrag-api too, picking the API route as the UI host.
+# The chart names these routes openrag-<5 chars>, so the host is all there is
+# to match on.
+- name: Record the OpenRAG hosts
+  ansible.builtin.set_fact:
+    openrag_api_host: >-
+      {{ openrag_routes.resources | map(attribute='spec.host')
+         | select('match', '^openrag-api[.]') | first | default('', true) }}
+    openrag_ui_host: >-
+      {{ openrag_routes.resources | map(attribute='spec.host')
+         | select('match', '^openrag[.]') | first | default('', true) }}
+  tags: [openrag-config]
+
+- name: Fail when the OpenRAG API route is missing
+  ansible.builtin.fail:
+    msg: >-
+      No Route in {{ openrag_namespace }} with a host starting "openrag-api.",
+      so onboarding cannot be completed and the UI will open on the setup
+      wizard. Found: {{ openrag_routes.resources | map(attribute='spec.host') | list }}
+  when: openrag_api_host | length == 0
+  tags: [openrag-config]
+
+- name: Check whether OpenRAG onboarding is already complete
+  ansible.builtin.uri:
+    url: "https://{{ openrag_api_host }}/onboarding-status"
+    validate_certs: false
+    status_code: 200
+  register: openrag_onboarded
+  until: openrag_onboarded.status == 200
+  retries: 20
+  delay: 15
+  tags: [openrag-config]
+
+# provider rhoai, not openai. OpenRAG ships a Red Hat OpenShift AI provider
+# (enhancements/providers/redhat/openshift_ai.py) that takes an api_base and
+# routes through LiteLLM's hosted_vllm key. The plain openai provider cannot
+# be used here: its validator, provider_validation.py:1004, is hardcoded to
+# GET https://api.openai.com/v1/models and ignores OPENAI_BASE_URL entirely,
+# so onboarding with a LiteLLM key is rejected with "Incorrect API key
+# provided" no matter what the gateway is. rhoai is deliberately absent from
+# _NATIVELY_VALIDATED_PROVIDERS and so validates through a real LiteLLM call
+# that does honour api_base.
+#
+# Both endpoints point at LiteLLM rather than at KServe and the embedding
+# service directly, which the provider would also support: it keeps one
+# gateway in front of chat, RAG and Dev Spaces, and needs no ServiceAccount
+# token or service-CA trust because the hop is plain in-cluster HTTP.
+- name: Complete OpenRAG onboarding with the cluster's own models
+  ansible.builtin.uri:
+    url: "https://{{ openrag_api_host }}/onboarding"
+    method: POST
+    body_format: json
+    body:
+      llm_provider: rhoai
+      llm_model: "{{ openrag_chat_model }}"
+      embedding_provider: rhoai
+      embedding_model: "{{ openrag_embedding_model_name }}"
+      provider_credentials:
+        rhoai:
+          api_base: "{{ openrag_litellm_base_url }}"
+          embedding_api_base: "{{ openrag_litellm_base_url }}"
+          api_key: "{{ openrag_litellm_key }}"
+    validate_certs: false
+    status_code: [200, 201]
+    timeout: 120
+  register: openrag_onboarding_post
+  no_log: true
+  when: not (openrag_onboarded.json.onboarded | default(false) | bool)
+  tags: [openrag-config]
+
+# Reports what actually happened, not what was intended - the first version
+# of this printed "onboarding completed" off the same condition that had just
+# caused the POST to be skipped.
 - name: Show the OpenRAG URL
   ansible.builtin.debug:
     msg: >-
       OpenRAG is at
-      https://{{ openrag_frontend_host | default('openrag.' ~ ocp_apps_domain, true) }}
+      https://{{ openrag_ui_host | default('openrag.' ~ ocp_apps_domain, true) }}
+      {{ '- onboarding was already complete'
+         if (openrag_onboarding_post is skipped)
+         else '- onboarding completed with ' ~ openrag_chat_model ~ ' and '
+              ~ openrag_embedding_model_name }}
+  tags: [openrag-config]

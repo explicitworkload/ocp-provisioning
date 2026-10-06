@@ -12,6 +12,11 @@ openrag_checkout_dir: /tmp/openrag-chart
 # The OpenRAG chart deliberately does NOT deploy OpenSearch, so this role does.
 opensearch_chart_repo: https://opensearch-project.github.io/helm-charts/
 opensearch_chart_version: "3.9.0"
+# OpenRAG's OpenSearch build, not the stock one - it carries the jvector k-NN
+# engine that OpenRAG's index mapping requires. Keep the tag in step with the
+# OpenRAG release; mismatched pairs are not something upstream tests.
+opensearch_image_repository: docker.io/langflowai/openrag-opensearch
+opensearch_image_tag: "0.8.0"
 opensearch_replicas: 3
 opensearch_storage_class: ocs-storagecluster-ceph-rbd
 opensearch_storage_size: 20Gi
@@ -42,3 +47,10 @@ openrag_shared_storage_class: ocs-storagecluster-cephfs
 openrag_frontend_host: ""
 openrag_backend_host: ""
 openrag_langflow_host: ""
+
+# One gateway in front of chat and embeddings. Used both for the backend's
+# OPENAI_BASE_URL and for the rhoai provider's api_base at onboarding, which
+# have to agree - the first decides where queries go, the second is what the
+# stored provider credential says, and a mismatch validates against one
+# endpoint while serving from another.
+openrag_litellm_base_url: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
