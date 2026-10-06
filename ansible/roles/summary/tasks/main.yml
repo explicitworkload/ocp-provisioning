@@ -1,0 +1,84 @@
+---
+- name: Read every Route on the cluster
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+  register: summary_routes
+
+# no_log on the read, not on the report. The registered value holds the base64
+# of every field in these Secrets and -v would print all of it; the report
+# below prints only the one or two fields each entry names.
+- name: Read the credential Secrets
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ item.ns }}"
+    name: "{{ item.name }}"
+  loop: "{{ summary_credentials }}"
+  loop_control:
+    label: "{{ item.ns }}/{{ item.name }}"
+  register: summary_secret_reads
+  no_log: true
+
+- name: Start with empty report sections
+  ansible.builtin.set_fact:
+    summary_link_lines: []
+    summary_cred_lines: []
+
+# Accumulated with an Ansible loop rather than a Jinja one. A Jinja loop has
+# to emit newlines as literal text, and the {%- -%} trimming needed to keep
+# the template readable swallows exactly those newlines - the first version of
+# this printed every entry concatenated onto a single line.
+- name: Collect the links
+  ansible.builtin.set_fact:
+    summary_link_lines: >-
+      {{ summary_link_lines + ['%-18s'|format(item.label) ~ 'https://' ~ hosts[0]] }}
+  vars:
+    hosts: >-
+      {{ summary_routes.resources
+         | selectattr('metadata.namespace', 'equalto', item.ns)
+         | map(attribute='spec.host')
+         | select('match', item.match)
+         | list }}
+  loop: "{{ summary_links }}"
+  loop_control:
+    label: "{{ item.label }}"
+  when: hosts | length > 0
+
+- name: Collect the credentials
+  ansible.builtin.set_fact:
+    summary_cred_lines: >-
+      {{ summary_cred_lines
+         + ['%-18s'|format(item.item.label) ~ who ~ (data[item.item.pass] | b64decode)] }}
+  vars:
+    data: "{{ (item.resources | default([{}]))[0].data | default({}) }}"
+    who: >-
+      {{ ((data[item.item.user] | b64decode) ~ '  /  ')
+         if (item.item.user | default('')) in data and (item.item.user | default(''))
+         else (((item.item.user_literal ~ '  /  ') if item.item.user_literal is defined else '')) }}
+  loop: "{{ summary_secret_reads.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - item.resources | default([]) | length > 0
+    - item.item.pass in ((item.resources | default([{}]))[0].data | default({}))
+  no_log: true
+
+- name: Show the deployment summary
+  ansible.builtin.debug:
+    msg: "{{ header + summary_link_lines + divider + summary_cred_lines + footer }}"
+  vars:
+    header:
+      - "═══════════════════════════════════════════════════════════════════"
+      - "  {{ ocp_cluster_name | default('cluster') }}   {{ ocp_api_url | default('') }}"
+      - "═══════════════════════════════════════════════════════════════════"
+      - "LINKS"
+    divider:
+      - ""
+      - "CREDENTIALS   (generated per cluster; none of this is in the repo)"
+    footer:
+      - ""
+      - "Reprint any time with:  ./run.sh --tags summary"
+      - "═══════════════════════════════════════════════════════════════════"

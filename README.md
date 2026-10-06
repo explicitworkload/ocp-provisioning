@@ -82,6 +82,16 @@ oc login ...
 ./run.sh
 ```
 
+The run ends by printing every URL it created and every credential it
+generated — Ops Dashboard, LiteLLM UI and master key, OpenSearch, Langflow,
+the MLflow and LiteLLM databases, the NooBaa console. All of it is read back
+from the cluster, so nothing is stored in the repo and you can reprint it
+later without re-running anything:
+
+```bash
+./run.sh --tags summary
+```
+
 Set `ocp_context` in `group_vars/all.yml` only to pin a specific context —
 worth doing when several clusters are in reach of the same kubeconfig. For a
 destructive re-run, `ocp_expected_api` aborts before touching anything unless

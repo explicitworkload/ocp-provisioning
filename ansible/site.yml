@@ -196,3 +196,9 @@
     - role: external_dns
       tags: [external-dns, dns]
       when: deploy_external_dns | bool
+
+    # Prints the URLs and generated credentials. Reads them back from the
+    # cluster rather than from facts, so --tags summary reprints against an
+    # existing cluster and anything not deployed is simply left out.
+    - role: summary
+      tags: [summary]

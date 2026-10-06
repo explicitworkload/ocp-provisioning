@@ -1,0 +1,37 @@
+---
+# Everything here is read back from the cluster at the end of a run, never
+# from Ansible facts - so `--tags summary` reprints the whole thing against an
+# already-provisioned cluster without re-running anything, and a role that was
+# skipped shows as "not deployed" instead of breaking the report.
+
+# Links. Selected by namespace, then optionally narrowed by a regex on the
+# host, because some charts generate a random Route name (OpenRAG ships
+# openrag-<5 chars> and openrag-api-<5 chars>, so the name is useless).
+summary_links:
+  - {label: "Ops Dashboard",     ns: dashboard,                      match: "^dashboard\\."}
+  - {label: "LiteLLM",           ns: litellm,                        match: "^litellm"}
+  - {label: "OpenRAG",           ns: openrag,                        match: "^openrag\\."}
+  - {label: "OpenRAG API",       ns: openrag,                        match: "^openrag-api\\."}
+  - {label: "Kiali",             ns: istio-system,                   match: "^kiali"}
+  - {label: "RHOAI",             ns: openshift-ingress,              match: "^rh-ai\\."}
+  - {label: "Dev Spaces",        ns: openshift-devspaces,            match: "^devspaces\\."}
+  - {label: "Quay registry",     ns: quay-enterprise,                match: "^registry-quay-quay"}
+  - {label: "NooBaa console",    ns: openshift-storage,              match: "^noobaa-mgmt"}
+  - {label: "Gatus",             ns: gatus,                          match: "^gatus\\."}
+  - {label: "MCP server",        ns: mcp-servers,                    match: "^openshift-mcp-server"}
+  - {label: "Model (qwen3-4b)",  ns: qwen3-4b,                       match: "^qwen3-4b"}
+  - {label: "Model catalog",     ns: rhoai-model-registries,         match: "^model-catalog\\."}
+  - {label: "OpenShift console", ns: openshift-console,              match: "^console-openshift"}
+
+# Credentials. user/pass are KEY NAMES inside the Secret's data; user may be
+# omitted where the login takes a password only, and may instead be given as
+# user_literal when the username is fixed in config rather than stored.
+summary_credentials:
+  - {label: "Ops Dashboard",   ns: dashboard,               name: ops-dashboard-auth,        pass: password}
+  - {label: "LiteLLM UI",      ns: litellm,                 name: litellm-proxy-credentials, pass: UI_PASSWORD, user_literal: admin}
+  - {label: "LiteLLM key",     ns: litellm,                 name: litellm-proxy-credentials, pass: LITELLM_MASTER_KEY}
+  - {label: "LiteLLM DB",      ns: litellm,                 name: litellm-db-credentials,    pass: POSTGRES_PASSWORD, user: POSTGRES_USER}
+  - {label: "OpenSearch",      ns: opensearch,              name: opensearch-admin,          pass: password, user: username}
+  - {label: "Langflow",        ns: openrag,                 name: openrag-langflow,          pass: superuser-password, user: superuser}
+  - {label: "MLflow DB",       ns: redhat-ods-applications, name: mlflow-db-credentials,     pass: POSTGRES_PASSWORD, user: POSTGRES_USER}
+  - {label: "NooBaa console",  ns: openshift-storage,       name: noobaa-admin,              pass: password, user: email}
