@@ -299,6 +299,15 @@
     - odf_fix_noobaa_cnpg | bool
     - not noobaa_stranded_early | bool
 
+# Poll rather than read once. The "account not found" message only appears
+# after the operator has repointed core at CNPG, which is minutes after the
+# backing store wait above gives up — a single read landed in that gap, saw a
+# NooBaa that was merely "Configuring", skipped the repair, and left the
+# StorageCluster in NoobaaInitializing until its own wait timed out.
+#
+# Exit as soon as NooBaa is either genuinely Ready or definitely stranded.
+# failed_when is false because running out of retries here just means neither
+# verdict arrived; the repair stays unrun and the later waits report it.
 - name: Read NooBaa after settling
   kubernetes.core.k8s_info:
     context: "{{ ocp_context }}"
@@ -307,6 +316,18 @@
     namespace: "{{ odf_namespace }}"
     name: noobaa
   register: nb_cr
+  until: >-
+    nb_cr.resources | default([]) | length > 0 and (
+      nb_cr.resources[0].status.phase | default('') == 'Ready'
+      or 'account not found' in (
+           nb_cr.resources[0].status.conditions | default([])
+           | selectattr('type', 'equalto', 'Available')
+           | map(attribute='message') | join(' ')
+         )
+    )
+  retries: 24
+  delay: 15
+  failed_when: false
   when: odf_fix_noobaa_cnpg | bool
 
 - name: Record whether NooBaa is stranded
