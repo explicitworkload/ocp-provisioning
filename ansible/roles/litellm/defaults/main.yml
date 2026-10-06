@@ -4,7 +4,16 @@ litellm_image: "ghcr.io/berriai/litellm:main-latest"
 litellm_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
 litellm_db_storage: 5Gi
 litellm_db_user: litellm
-litellm_db_password: litellm-db-pass
+# Empty = generated on first run and then reused from the
+# litellm-db-credentials Secret. Never commit a value here: this repo is
+# public, and the password is also baked into the database's data directory.
+litellm_db_password: ""
+
+# Databases still using this literal - which was committed to this repo until
+# it was rotated out - are re-passworded in place on the next run. Removing
+# this line stops that migration ever running, so leave it until every cluster
+# built from an older commit has been re-run.
+litellm_db_legacy_password: "litellm-db-pass"
 litellm_db_name: litellm
 
 litellm_master_key: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"

@@ -83,7 +83,90 @@
           requests:
             storage: "{{ litellm_db_storage }}"
 
+# --- Database password resolution and in-place rotation --------------------
+# litellm_db_password used to be a literal committed to this public repo. The
+# database cannot simply be recreated with a new one: LiteLLM_VerificationToken
+# holds the virtual keys the dashboard and Dev Spaces workspaces authenticate
+# with, and LiteLLM_CredentialsTable holds the reusable Azure credential.
+# Dropping the volume would invalidate all of it. So re-password the running
+# database instead and keep its contents.
+
+- name: Look for the existing LiteLLM database credentials
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    kind: Secret
+    namespace: "{{ litellm_namespace }}"
+    name: litellm-db-credentials
+  register: litellm_db_secret
+  no_log: true
+
+- name: Read the password currently in the Secret
+  ansible.builtin.set_fact:
+    litellm_db_current: >-
+      {{ (litellm_db_secret.resources | first).data.POSTGRES_PASSWORD | b64decode
+         if litellm_db_secret.resources | default([]) | length > 0 else '' }}
+  no_log: true
+
+# Precedence: an explicit value, else whatever is already deployed, else a
+# fresh one. The legacy literal is deliberately NOT reused - matching it is
+# what triggers rotation. Alphanumeric because the value goes straight into a
+# postgresql:// DSN, where characters needing percent-encoding become a silent
+# connection failure.
+- name: Resolve the LiteLLM database password
+  ansible.builtin.set_fact:
+    litellm_db_password_effective: >-
+      {{ litellm_db_password if litellm_db_password | default('') | length > 0
+         else (litellm_db_current
+               if (litellm_db_current | length > 0
+                   and litellm_db_current != litellm_db_legacy_password)
+               else lookup('password', '/dev/null length=24 chars=ascii_letters,digits')) }}
+    litellm_db_rotate: "{{ litellm_db_current == litellm_db_legacy_password }}"
+  no_log: true
+
+- name: Report the credential rotation
+  ansible.builtin.debug:
+    msg: >-
+      The LiteLLM database is still using the password that was committed to
+      this repo. Re-passwording it in place and keeping its contents; LiteLLM
+      will be restarted to pick up the new DSN.
+  when: litellm_db_rotate | bool
+
+- name: Find the running LiteLLM database pod
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    label_selectors:
+      - app=litellm-db
+    field_selectors:
+      - status.phase=Running
+  register: litellm_db_pod
+  when: litellm_db_rotate | bool
+
+# ALTER USER before the Secret is rewritten, not after. The postgres image
+# takes its password from the Secret at pod start, so if the Secret changed
+# first and the pod restarted in the gap, the container would come up
+# expecting a password the database does not have and fail its readiness
+# probe. Doing it this way the two only ever disagree while this task runs.
+- name: Re-password the LiteLLM database in place
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -eo pipefail
+      oc --context {{ ocp_context | quote }} -n {{ litellm_namespace }} \
+        exec {{ litellm_db_pod.resources[0].metadata.name | quote }} -- \
+        psql -U postgres -d {{ litellm_db_name | quote }} \
+        -c "ALTER USER {{ litellm_db_user }} WITH PASSWORD '{{ litellm_db_password_effective }}'" </dev/null
+  when:
+    - litellm_db_rotate | bool
+    - litellm_db_pod.resources | default([]) | length > 0
+  no_log: true
+  changed_when: true
+
 - name: Create LiteLLM database credentials secret
+  register: litellm_db_cred
+  no_log: true
   kubernetes.core.k8s:
     context: "{{ ocp_context }}"
     state: present
@@ -97,9 +180,9 @@
       type: Opaque
       stringData:
         POSTGRES_USER: "{{ litellm_db_user }}"
-        POSTGRES_PASSWORD: "{{ litellm_db_password }}"
+        POSTGRES_PASSWORD: "{{ litellm_db_password_effective }}"
         POSTGRES_DB: "{{ litellm_db_name }}"
-        DATABASE_URL: "postgresql://{{ litellm_db_user }}:{{ litellm_db_password }}@litellm-db:5432/{{ litellm_db_name }}"
+        DATABASE_URL: "postgresql://{{ litellm_db_user }}:{{ litellm_db_password_effective }}@litellm-db:5432/{{ litellm_db_name }}"
 
 - name: Deploy LiteLLM PostgreSQL
   kubernetes.core.k8s:
@@ -414,7 +497,11 @@
     namespace: "{{ litellm_namespace }}"
     label_selectors:
       - app=litellm
-  when: litellm_config.changed
+  # Also on a credential change: DATABASE_URL reaches the proxy as an env var
+  # from litellm-db-credentials, and Kubernetes does not refresh env in a
+  # running container - after a rotation the old pod keeps using the password
+  # the database no longer has.
+  when: litellm_config.changed or litellm_db_cred.changed | default(false)
 
 - name: Wait for LiteLLM proxy to be ready
   kubernetes.core.k8s_info:
