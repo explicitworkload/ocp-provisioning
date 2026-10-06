@@ -14,6 +14,22 @@ ocp_context: ""
 #   ./run.sh -e ocp_expected_api=sandbox1234
 ocp_expected_api: ""
 
+# What shell tasks must interpolate instead of "--context {{ ocp_context }}".
+#
+# `| quote` on an empty string renders the two characters '' - and bash does
+# not strip quotes from the result of a parameter expansion, so
+#     OC="oc --context '' -n openshift-storage"; $OC get ...
+# word-splits into five argv entries and oc is handed a context literally
+# named '', failing every call with: error: context "''" does not exist.
+# Tasks that redirect stderr to /dev/null then read that as "nothing found"
+# rather than as an error, which is how it stays invisible.
+#
+# So the flag has to disappear entirely when nothing is pinned, not become an
+# empty argument. Module tasks use "{{ ocp_context or omit }}" for the same
+# reason; this is the shell equivalent.
+ocp_context_arg: >-
+  {{ ('--context ' ~ (ocp_context | quote)) if ocp_context | length > 0 else '' }}
+
 # GPU Worker configuration
 # Empty = derived from the cluster's worker MachineSets, so pointing the
 # playbook at a cluster in another region just works. Set to pin a zone.

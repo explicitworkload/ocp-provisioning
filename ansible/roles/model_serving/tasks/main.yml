@@ -321,7 +321,7 @@
 - name: Install pgvector extension
   ansible.builtin.command:
     cmd: >-
-      oc --context {{ ocp_context | quote }}
+      oc {{ ocp_context_arg }}
       exec deployment/genai-pgvector -n {{ model_namespace }}
       -- psql -U postgres -d vectordb -c "CREATE EXTENSION IF NOT EXISTS vector;"
   changed_when: false
@@ -331,7 +331,7 @@
 - name: Wait for vLLM CUDA ServingRuntime template
   ansible.builtin.command:
     cmd: >-
-      oc --context {{ ocp_context | quote }}
+      oc {{ ocp_context_arg }}
       get template vllm-cuda-runtime-template
       -n redhat-ods-applications
   register: vllm_template_check
@@ -343,7 +343,7 @@
 - name: Instantiate vLLM CUDA ServingRuntime from RHOAI template
   ansible.builtin.command:
     cmd: >-
-      oc --context {{ ocp_context | quote }}
+      oc {{ ocp_context_arg }}
       process vllm-cuda-runtime-template
       -n redhat-ods-applications
       -o yaml
@@ -361,7 +361,7 @@
 - name: Label ServingRuntime with template name
   ansible.builtin.command:
     cmd: >-
-      oc --context {{ ocp_context | quote }}
+      oc {{ ocp_context_arg }}
       label servingruntime vllm-cuda-runtime
       -n {{ model_namespace }}
       opendatahub.io/template-name=vllm-cuda-runtime-template
@@ -371,7 +371,7 @@
 - name: Annotate ServingRuntime for dashboard recognition
   ansible.builtin.command:
     cmd: >-
-      oc --context {{ ocp_context | quote }}
+      oc {{ ocp_context_arg }}
       annotate servingruntime vllm-cuda-runtime
       -n {{ model_namespace }}
       opendatahub.io/apiProtocol=REST

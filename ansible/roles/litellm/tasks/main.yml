@@ -154,7 +154,7 @@
     executable: /bin/bash
     cmd: |
       set -eo pipefail
-      oc --context {{ ocp_context | quote }} -n {{ litellm_namespace }} \
+      oc {{ ocp_context_arg }} -n {{ litellm_namespace }} \
         exec {{ litellm_db_pod.resources[0].metadata.name | quote }} -- \
         psql -U postgres -d {{ litellm_db_name | quote }} \
         -c "ALTER USER {{ litellm_db_user }} WITH PASSWORD '{{ litellm_db_password_effective }}'" </dev/null

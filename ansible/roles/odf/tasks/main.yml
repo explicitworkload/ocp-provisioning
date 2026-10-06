@@ -275,7 +275,7 @@
     executable: /bin/bash
     cmd: |
       set -o pipefail
-      OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+      OC="oc {{ ocp_context_arg }} -n {{ odf_namespace }}"
 
       nb_phase=$($OC get noobaa noobaa -o jsonpath='{.status.phase}' 2>/dev/null)
 
@@ -353,7 +353,7 @@
         executable: /bin/bash
         cmd: |
           set -o pipefail
-          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          OC="oc {{ ocp_context_arg }} -n {{ odf_namespace }}"
           old=$($OC exec noobaa-db-pg-0 -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null)
           new=$($OC exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null)
           echo "$old $new"
@@ -419,7 +419,7 @@
         executable: /bin/bash
         cmd: |
           set -o pipefail
-          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          OC="oc {{ ocp_context_arg }} -n {{ odf_namespace }}"
           Q="select tablename from pg_tables where schemaname='public' and tablename = any(string_to_array('{{ odf_noobaa_tables | join(',') }}', ',')) order by tablename"
           old=$($OC exec noobaa-db-pg-0 -- psql -U postgres -d nbcore -t -A -c "$Q" </dev/null)
           new=$($OC exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "$Q" </dev/null)
@@ -464,7 +464,7 @@
         executable: /bin/bash
         cmd: |
           set -o pipefail
-          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec noobaa-db-pg-0 -- pg_dump -U postgres -d nbcore --data-only --disable-triggers {{ nb_tables | split(',') | map('regex_replace', '^', '-t public.') | join(' ') }} </dev/null > {{ nb_dump.path | quote }}
+          oc {{ ocp_context_arg }} -n {{ odf_namespace }} exec noobaa-db-pg-0 -- pg_dump -U postgres -d nbcore --data-only --disable-triggers {{ nb_tables | split(',') | map('regex_replace', '^', '-t public.') | join(' ') }} </dev/null > {{ nb_dump.path | quote }}
       changed_when: true
 
     - name: Load it into the CNPG primary
@@ -472,7 +472,7 @@
         executable: /bin/bash
         cmd: |
           set -eo pipefail
-          OC="oc --context {{ ocp_context | quote }} -n {{ odf_namespace }}"
+          OC="oc {{ ocp_context_arg }} -n {{ odf_namespace }}"
           PRIMARY={{ cnpg_primary.resources[0].metadata.name }}
           $OC exec $PRIMARY -c postgres -- psql -U postgres -d nbcore -c "TRUNCATE {{ nb_tables }} CASCADE" </dev/null
           $OC exec -i $PRIMARY -c postgres -- psql -U postgres -d nbcore -v ON_ERROR_STOP=1 < {{ nb_dump.path | quote }}
@@ -482,7 +482,7 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          oc --context {{ ocp_context | quote }} -n {{ odf_namespace }} exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null
+          oc {{ ocp_context_arg }} -n {{ odf_namespace }} exec {{ cnpg_primary.resources[0].metadata.name }} -c postgres -- psql -U postgres -d nbcore -t -A -c "select count(*) from systems" </dev/null
       register: nb_verify
       changed_when: false
       failed_when: nb_verify.stdout | trim != '1'
