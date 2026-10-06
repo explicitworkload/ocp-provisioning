@@ -64,11 +64,22 @@
           enabled: true
         toolkit:
           enabled: true
+        # WITH_WORKLOAD=true makes the plugin validator run a real CUDA
+        # workload pod and wait for it to complete before it will report the
+        # GPU ready. On a freshly provisioned node that pod cannot be
+        # scheduled yet - the device plugin has not advertised nvidia.com/gpu,
+        # because the validator it is waiting on has not passed - so it sits
+        # Pending, validation never completes, and ClusterPolicy stays
+        # notReady indefinitely rather than failing.
+        #
+        # false keeps the toolkit and driver validations, which are the ones
+        # that catch a genuinely broken install, and drops only the workload
+        # round-trip. The upstream default is false for this reason.
         validator:
           plugin:
             env:
               - name: WITH_WORKLOAD
-                value: "true"
+                value: "false"
         sandboxDevicePlugin:
           enabled: false
         vfioManager:

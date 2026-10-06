@@ -53,11 +53,18 @@
             storage:
               retention: "{{ rhoai_metrics_retention }}"
               size: "{{ rhoai_metrics_size }}"
-          traces:
-            sampleRatio: "{{ rhoai_traces_sample_ratio }}"
-            storage:
-              backend: pv
-              retention: "{{ rhoai_traces_retention }}"
+          # No traces key, deliberately. A traces block makes the RHOAI
+          # monitoring stack stand up a TempoStack and an
+          # OpenTelemetryCollector, which need the Tempo and OpenTelemetry
+          # operators - and nothing in roles/operators subscribes to either,
+          # so those CRs are never reconciled and monitoring degrades.
+          # Omitted rather than set to {}, because an empty map reads as
+          # "traces, with defaults" and would enable the very thing being
+          # switched off - the way alerting above means default alerting.
+          # Metrics need neither operator and stay on. To re-enable,
+          # subscribe both operators first, then restore the sampleRatio and
+          # pv-backed storage block; the rhoai_traces_* defaults are still in
+          # defaults/main.yml.
         trustedCABundle:
           managementState: Managed
           customCABundle: ""
@@ -119,10 +126,20 @@
             managementState: Managed
           aigateway:
             managementState: Managed
-            # What publishes LLMInferenceService models on the MaaS gateway at
+            # Publishes LLMInferenceService models on the MaaS gateway at
             # maas.<apps-domain> instead of a cluster-internal URL only.
+            #
+            # Removed because that gateway does not exist. It expects a
+            # Gateway named maas-default-gateway, and nothing in this repo
+            # creates one - grep for "kind: Gateway" returns nothing. Managed
+            # here leaves the component reconciling against a missing
+            # reference instead of failing, so models never publish and the
+            # cause is not obvious. aigateway itself stays Managed; only the
+            # MaaS publishing path is off. To enable, create the Gateway and
+            # its listener/TLS first, then flip this back along with
+            # modelAsService and vLLMDeploymentOnMaaS below.
             modelsAsAService:
-              managementState: Managed
+              managementState: Removed
           aipipelines:
             managementState: Managed
           trainingoperator:
@@ -203,14 +220,17 @@
           llmdTemplates: true
           mcpCatalog: true
           mcpRegistry: true
-          modelAsService: true
+          # Both off to match modelsAsAService: Removed above. Left on, the
+          # dashboard offers a Models-as-a-Service page and a "deploy on
+          # MaaS" option for a component that is not running.
+          modelAsService: false
           observabilityDashboard: true
           projectRBAC: true
           promptManagement: true
           roleManagement: true
           toolCalling: true
           trainingJobs: true
-          vLLMDeploymentOnMaaS: true
+          vLLMDeploymentOnMaaS: false
         groupsConfig:
           adminGroups: "{{ rhoai_admin_groups }}"
           allowedGroups: "{{ rhoai_allowed_groups }}"

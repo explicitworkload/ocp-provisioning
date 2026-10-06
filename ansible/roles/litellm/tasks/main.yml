@@ -314,6 +314,40 @@
     name: azure-api-keys
   register: azure_secret
 
+# azure-api-keys comes from the Lightspeed Operator, via the OLSConfig that
+# configures its Azure OpenAI provider - so on a cluster running Lightspeed it
+# is simply there, which is why this has worked every time so far.
+#
+# This playbook does not install that operator though: roles/operators
+# subscribes fourteen operators and lightspeed-operator is not among them, so
+# a cluster built from this repo alone has no openshift-lightspeed namespace
+# at all. There k8s_info returns an empty resources list rather than failing,
+# and the Azure tasks below walked straight into resources[0] and aborted the
+# role with "list object has no element 0" - taking the Dev Spaces, dashboard
+# and OpenRAG roles that run after it down too, none of which need Azure.
+#
+# So this gates Azure on Lightspeed being present, instead of assuming it.
+# Checking the keys and not just the Secret, because a half-populated Secret
+# fails later and further away, inside the credential POST.
+- name: Record whether Azure credentials are available
+  ansible.builtin.set_fact:
+    litellm_azure_available: >-
+      {{ (azure_secret.resources | default([]) | length > 0)
+         and (['client_id', 'tenant_id', 'client_secret']
+              | difference(azure_secret.resources[0].data | default({}) | list)
+              | length == 0) }}
+
+- name: Report the Azure model as disabled
+  ansible.builtin.debug:
+    msg: >-
+      Secret azure-api-keys not found (or incomplete) in openshift-lightspeed,
+      so {{ litellm_azure_model_name }} is being left out of the LiteLLM model
+      list and its reusable credential is not created. {{ model_name }} is
+      unaffected and still reaches the Gen AI playground. This usually means
+      the Lightspeed Operator is not installed or its OLSConfig has not
+      reconciled yet - install it and re-run to pick the Azure model up.
+  when: not (litellm_azure_available | bool)
+
 # --- LiteLLM Proxy ---
 
 - name: Create LiteLLM config
@@ -342,10 +376,12 @@
               # rather than targeting /v1/chat/completions deliberately.
               model_info:
                 mode: chat
+          {% if litellm_azure_available | bool %}
             - model_name: {{ litellm_azure_model_name }}
               litellm_params:
                 model: azure/gpt-4
                 litellm_credential_name: {{ litellm_azure_credential_name }}
+          {% endif %}
             # CPU-served embeddings for OpenRAG, fronted here so RAG and chat
             # share one OpenAI-compatible endpoint. Deployed by the openrag
             # role; LiteLLM resolves the host per request, so this entry is
@@ -575,6 +611,7 @@
     validate_certs: false
     status_code: [200, 201]
   when: >-
+    litellm_azure_available | bool and
     litellm_creds.json.credentials |
     selectattr('credential_name', 'equalto', litellm_azure_credential_name) |
     list | length == 0
@@ -670,7 +707,10 @@
               config:
                 base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
                 allowed_models:
+                - {{ model_name }}
+          {% if litellm_azure_available | bool %}
                 - {{ litellm_azure_model_name }}
+          {% endif %}
                 custom_gen_ai:
                   api_key:
                     secretRef:
@@ -679,7 +719,14 @@
           registered_resources:
             models:
             - provider_id: endpoint-1
+              model_id: {{ model_name }}
+              model_type: llm
+              metadata:
+                display_name: {{ model_name }}
+          {% if litellm_azure_available | bool %}
+            - provider_id: endpoint-1
               model_id: {{ litellm_azure_model_name }}
               model_type: llm
               metadata:
                 display_name: {{ litellm_azure_model_name }}
+          {% endif %}
