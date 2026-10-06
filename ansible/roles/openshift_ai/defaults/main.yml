@@ -19,3 +19,30 @@ rhoai_gpu_profile_max: 2
 
 mcp_server_namespace: openshift-mcp-server
 mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"
+
+# --- RHOAI 3.5 feature CRs -------------------------------------------------
+# Enabling a component in the DSC registers its CRD and lights up the
+# dashboard menu, but creates no instance - so the menu opens onto nothing.
+# These are the operand CRs that actually back those menus.
+rhoai_feature_namespace: redhat-ods-applications
+
+# MLflow experiment tracking. sqlite is self-contained and needs no external
+# database; point mlflow_backend_store_uri at a postgres URL for anything
+# beyond a demo, since sqlite does not survive a pod move.
+deploy_mlflow_server: true
+mlflow_backend_store_uri: "sqlite:////mlflow/mlflow.db"
+mlflow_storage_size: 10Gi
+
+# Console observability plugins (needs cluster-observability-operator).
+deploy_observability_uiplugins: true
+
+# TrustyAI evaluation hub.
+deploy_evalhub: true
+evalhub_providers: [lm-evaluation-harness, garak, guidellm, lighteval]
+evalhub_collections: [leaderboard-v2, safety-and-fairness-v1]
+
+# Kuadrant, the policy engine behind the MaaS gateway (Red Hat Connectivity
+# Link). The gateway already exists; this is what enforces rate limits and
+# auth policy on it.
+deploy_kuadrant: true
+kuadrant_namespace: kuadrant-system

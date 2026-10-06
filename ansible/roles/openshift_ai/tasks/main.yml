@@ -347,6 +347,150 @@
                 operator: Exists
                 effect: NoSchedule
 
+# ---------------------------------------------------------------------------
+# RHOAI 3.5 feature operands
+#
+# The DSC above turns components ON, which registers their CRDs and reveals
+# the matching dashboard menus. It does not create any instance, so without
+# these the menus open onto nothing - MLflow in particular shows an empty
+# page rather than a tracking server.
+#
+# Each is gated on its CRD existing rather than on a component being Managed:
+# the CRD is the thing these objects actually need, and gating that way keeps
+# the role inert on a cluster where the component was deliberately disabled.
+# ---------------------------------------------------------------------------
+
+- name: Look for the RHOAI feature CRDs
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: rhoai_feature_crds
+  loop:
+    - mlflows.mlflow.opendatahub.io
+    - uiplugins.observability.openshift.io
+    - evalhubs.trustyai.opendatahub.io
+    - kuadrants.kuadrant.io
+  loop_control:
+    label: "{{ item }}"
+
+- name: Record which feature CRDs are available
+  ansible.builtin.set_fact:
+    rhoai_crd_present: >-
+      {{ dict(rhoai_feature_crds.results
+              | map(attribute='item') | list
+              | zip(rhoai_feature_crds.results
+                    | map(attribute='resources') | map('length') | map('int') | list)) }}
+
+# sqlite by default: self-contained, no external database to stand up. The
+# reference script prefers an existing postgres Deployment and falls back to
+# sqlite when there is none - there is none here, so this matches its fallback
+# path. Override mlflow_backend_store_uri with a postgres URL for real use.
+- name: Create the MLflow tracking server
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: mlflow.opendatahub.io/v1
+      kind: MLflow
+      # Cluster-scoped, despite the operand pods landing in
+      # redhat-ods-applications - a namespace here is silently ignored.
+      metadata:
+        name: mlflow
+      spec:
+        serveArtifacts: true
+        artifactsDestination: "file:///mlflow/artifacts"
+        backendStoreUri: "{{ mlflow_backend_store_uri }}"
+        storage:
+          size: "{{ mlflow_storage_size }}"
+  when:
+    - deploy_mlflow_server | bool
+    - rhoai_crd_present['mlflows.mlflow.opendatahub.io'] | default(0) | int > 0
+
+# Cluster-scoped. Adds the Dashboards and Monitoring panels to the OpenShift
+# console; the Monitoring one carries the Perses dashboards the RHOAI
+# observability menu links to.
+- name: Create the console observability UI plugins
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: observability.openshift.io/v1alpha1
+      kind: UIPlugin
+      metadata:
+        name: "{{ item.name }}"
+      spec: "{{ item.spec }}"
+  loop:
+    - name: dashboards
+      spec:
+        type: Dashboards
+    - name: monitoring
+      spec:
+        type: Monitoring
+        monitoring:
+          perses:
+            enabled: true
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - deploy_observability_uiplugins | bool
+    - rhoai_crd_present['uiplugins.observability.openshift.io'] | default(0) | int > 0
+
+- name: Create the TrustyAI evaluation hub
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: trustyai.opendatahub.io/v1alpha1
+      kind: EvalHub
+      metadata:
+        name: evalhub
+        namespace: "{{ rhoai_feature_namespace }}"
+      spec:
+        replicas: 1
+        database:
+          type: sqlite
+        providers: "{{ evalhub_providers }}"
+        collections: "{{ evalhub_collections }}"
+  when:
+    - deploy_evalhub | bool
+    - rhoai_crd_present['evalhubs.trustyai.opendatahub.io'] | default(0) | int > 0
+
+# Kuadrant watches its own namespace, which the RHCL operator does not create.
+- name: Create the Kuadrant namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ kuadrant_namespace }}"
+  when:
+    - deploy_kuadrant | bool
+    - rhoai_crd_present['kuadrants.kuadrant.io'] | default(0) | int > 0
+
+- name: Create the Kuadrant control plane
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: kuadrant.io/v1beta1
+      kind: Kuadrant
+      metadata:
+        name: kuadrant
+        namespace: "{{ kuadrant_namespace }}"
+      spec: {}
+  when:
+    - deploy_kuadrant | bool
+    - rhoai_crd_present['kuadrants.kuadrant.io'] | default(0) | int > 0
+
 # --- MCP Server for OpenShift ---
 
 - name: Create MCP server namespace
