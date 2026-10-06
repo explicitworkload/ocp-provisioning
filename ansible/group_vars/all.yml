@@ -53,6 +53,16 @@ deploy_quay_registry: true
 dashboard_aws_access_key_id: ""
 dashboard_aws_secret_access_key: ""
 
+# Zero Trust Workload Identity Manager (SPIFFE/SPIRE).
+# Deploys a SPIRE server StatefulSet plus an agent and CSI-driver DaemonSet on
+# every node, so workloads can obtain cryptographic identities (SVIDs) instead
+# of long-lived secrets.
+#
+# The trust domain defaults to the cluster's apps domain and is IMMUTABLE once
+# the CR is created - see roles/ztwim/defaults/main.yml to override before the
+# first run.
+deploy_ztwim: true
+
 # Console plugins to enable
 console_plugins:
 - pipelines-console-plugin

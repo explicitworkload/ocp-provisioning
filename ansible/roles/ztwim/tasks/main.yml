@@ -1,0 +1,162 @@
+---
+# The operator's CSV label key is truncated at the 63-character limit
+# ("...zero-trust-workl"), so match on the CSV name instead - that is stable.
+- name: Wait for Zero Trust Workload Identity Manager CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: "{{ ztwim_namespace }}"
+  register: ztwim_csvs
+  until: >-
+    ztwim_csvs.resources | default([])
+    | selectattr('metadata.name', 'match', '^zero-trust-workload-identity-manager\\.')
+    | selectattr('status.phase', 'defined')
+    | selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: 30
+  delay: 20
+
+- name: Wait for the SPIRE operand CRDs
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}.operator.openshift.io"
+  register: ztwim_crds
+  until: ztwim_crds.resources | default([]) | length > 0
+  retries: 20
+  delay: 15
+  loop:
+    - zerotrustworkloadidentitymanagers
+    - spireservers
+    - spireagents
+    - spiffecsidrivers
+    - spireoidcdiscoveryproviders
+  loop_control:
+    label: "{{ item }}"
+
+# Cluster-scoped and always named "cluster". This CR holds the trust domain
+# for the whole install; the operand CRs below inherit it rather than
+# restating it, and the operator sets an owner reference from this CR onto
+# each operand, so deleting it tears the whole stack down.
+- name: Create the ZeroTrustWorkloadIdentityManager CR
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: ZeroTrustWorkloadIdentityManager
+      metadata:
+        name: cluster
+      spec:
+        trustDomain: "{{ ztwim_trust_domain }}"
+        clusterName: "{{ ztwim_cluster_name }}"
+        bundleConfigMap: "{{ ztwim_bundle_configmap }}"
+
+- name: Deploy the SPIRE Server
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: SpireServer
+      metadata:
+        name: cluster
+      spec:
+        jwtIssuer: "{{ ztwim_jwt_issuer }}"
+        logLevel: "{{ ztwim_log_level }}"
+        caSubject:
+          commonName: "{{ ztwim_ca_common_name }}"
+          organization: "{{ ztwim_ca_organization }}"
+          country: "{{ ztwim_ca_country }}"
+        datastore:
+          databaseType: "{{ ztwim_datastore_type }}"
+          connectionString: "{{ ztwim_datastore_connection }}"
+        persistence:
+          accessMode: "{{ ztwim_persistence_access_mode }}"
+          size: "{{ ztwim_persistence_size }}"
+          storageClass: "{{ ztwim_storage_class }}"
+
+# The agents attest to the server, so there is nothing for them to join until
+# the server is actually serving.
+- name: Wait for the SPIRE Server to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: apps/v1
+    kind: StatefulSet
+    namespace: "{{ ztwim_namespace }}"
+    name: spire-server
+  register: ztwim_server_sts
+  until: >-
+    ztwim_server_sts.resources | default([]) | length > 0 and
+    ztwim_server_sts.resources[0].status.readyReplicas | default(0) > 0
+  retries: 40
+  delay: 15
+
+- name: Deploy the SPIRE Agent
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: SpireAgent
+      metadata:
+        name: cluster
+      spec:
+        logLevel: "{{ ztwim_log_level }}"
+        nodeAttestor:
+          k8sPSATEnabled: "true"
+        workloadAttestors:
+          k8sEnabled: "true"
+          workloadAttestorsVerification:
+            type: auto
+
+- name: Deploy the SPIFFE CSI driver
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: SpiffeCSIDriver
+      metadata:
+        name: cluster
+      spec:
+        agentSocketPath: /run/spire/agent-sockets
+        pluginName: csi.spiffe.io
+
+# Serves the JWKS that lets external parties (cloud IAM, for instance)
+# validate SPIFFE JWT-SVIDs without talking to the SPIRE server.
+- name: Deploy the SPIRE OIDC Discovery Provider
+  kubernetes.core.k8s:
+    context: "{{ ocp_context }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operator.openshift.io/v1alpha1
+      kind: SpireOIDCDiscoveryProvider
+      metadata:
+        name: cluster
+      spec:
+        jwtIssuer: "{{ ztwim_jwt_issuer }}"
+        logLevel: "{{ ztwim_log_level }}"
+        managedRoute: "true"
+        csiDriverName: csi.spiffe.io
+
+- name: Wait for all SPIRE operands to report ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context }}"
+    api_version: operator.openshift.io/v1alpha1
+    kind: ZeroTrustWorkloadIdentityManager
+    name: cluster
+  register: ztwim_cr
+  until: >-
+    ztwim_cr.resources | default([])
+    | map(attribute='status.conditions') | flatten
+    | selectattr('type', 'equalto', 'Ready')
+    | selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 40
+  delay: 15

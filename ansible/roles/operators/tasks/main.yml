@@ -17,6 +17,7 @@
     - openshift-pipelines
     - quay-enterprise
     - openshift-gitops-operator
+    - zero-trust-workload-identity-manager
   loop_control:
     label: "{{ item }}"
 
@@ -54,6 +55,11 @@
       spec: {}
     - name: openshift-gitops-operatorgroup
       namespace: openshift-gitops-operator
+      spec: {}
+    # Empty spec = AllNamespaces. SPIRE issues identities cluster-wide, so
+    # scoping the operator to its own namespace would defeat the point.
+    - name: zero-trust-workload-identity-manager
+      namespace: zero-trust-workload-identity-manager
       spec: {}
   loop_control:
     label: "{{ item.name }}"
@@ -123,6 +129,10 @@
     - name: kiali-ossm
       namespace: openshift-operators
       channel: stable
+      source: redhat-operators
+    - name: openshift-zero-trust-workload-identity-manager
+      namespace: zero-trust-workload-identity-manager
+      channel: stable-v1
       source: redhat-operators
   loop_control:
     label: "{{ item.name }}"

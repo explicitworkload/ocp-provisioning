@@ -6,7 +6,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 
 ## What gets installed
 
-### Operators (13 subscriptions)
+### Operators (14 subscriptions)
 
 | Operator | Namespace | Channel |
 |----------|-----------|---------|
@@ -23,6 +23,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 | Service Mesh 3 (Sail) | openshift-operators | stable |
 | Kiali (OSSM) | openshift-operators | stable |
 | Dev Spaces | openshift-operators | stable |
+| Zero Trust Workload Identity Manager | zero-trust-workload-identity-manager | stable-v1 |
 
 ### Service Mesh 3
 
@@ -130,6 +131,47 @@ The **Kubernetes extension** (`ms-kubernetes-tools.vscode-kubernetes-tools`), pl
 When `deploy_external_dns` is true, a second Route `devspaces28.kubernetes.day` is created alongside the apps-domain URL.
 
 > **Sign-in uses the apps-domain URL.** Dev Spaces ties its OAuth redirects to `status.cheURL`, so logging in via the custom hostname redirects back to `devspaces.<apps-domain>`. To make the custom name the canonical one instead, set `spec.networking.hostname` on the `CheCluster` — that moves the URL rather than adding a second one.
+
+### Zero Trust Workload Identity Manager (SPIFFE/SPIRE)
+
+Red Hat's SPIRE distribution, giving workloads short-lived cryptographic identities (SVIDs) instead of long-lived secrets. The role creates four cluster-scoped CRs, all named `cluster`, in `zero-trust-workload-identity-manager`:
+
+| CR | What it runs |
+|----|--------------|
+| `ZeroTrustWorkloadIdentityManager` | holds `trustDomain` / `clusterName`; owns the three below |
+| `SpireServer` | `spire-server` StatefulSet — the CA that issues SVIDs |
+| `SpireAgent` | DaemonSet attesting workloads on every node |
+| `SpiffeCSIDriver` | DaemonSet delivering SVIDs via an ephemeral CSI volume |
+| `SpireOIDCDiscoveryProvider` | publishes JWKS at `oidc-discovery.<apps-domain>` |
+
+Defaults live in `roles/ztwim/defaults/main.yml`. Set `deploy_ztwim: false` to skip it.
+
+The trust domain defaults to the cluster's apps domain, so SPIFFE IDs look like `spiffe://apps.ocp.<id>.sandbox<n>.opentlc.com/ns/<namespace>/sa/<serviceaccount>`.
+
+> **`trustDomain` is immutable.** So are `clusterName`, `bundleConfigMap` and the `persistence` block. The webhook rejects edits, so changing any of them means deleting the `ZeroTrustWorkloadIdentityManager` CR — which cascades to every operand via owner references — and re-running. Decide before the first run.
+
+Verify the OIDC endpoint:
+
+```bash
+curl -s https://oidc-discovery.$(oc get ingress.config/cluster -o jsonpath='{.spec.domain}')/.well-known/openid-configuration | jq .issuer
+```
+
+That `issuer` must match `ztwim_jwt_issuer` exactly, or relying parties reject the JWT-SVIDs.
+
+To hand a workload an identity, create a `ClusterSPIFFEID` selecting its ServiceAccount, then mount the CSI volume:
+
+```yaml
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: my-app
+spec:
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}"
+  workloadSelectorTemplates:
+    - "k8s:ns:my-namespace"
+```
+
+> **sqlite3 is the default datastore**, on a 2Gi PVC from the cluster default StorageClass. That matches the operator's own default and is fine for a demo, but production should set `ztwim_datastore_type: postgres` with an external database.
 
 ### Gatus
 
@@ -323,6 +365,7 @@ ansible-playbook site.yml --tags dashboard          # Operations dashboard
 ansible-playbook site.yml --tags gatus              # Gatus health monitoring
 ansible-playbook site.yml --tags external-dns       # External DNS + Cloudflare
 ansible-playbook site.yml --tags devspaces          # OpenShift Dev Spaces
+ansible-playbook site.yml --tags ztwim              # SPIFFE/SPIRE workload identity
 ```
 
 ## Playbook structure
@@ -336,7 +379,7 @@ ansible/
 ├── inventory/hosts.yml
 ├── group_vars/all.yml
 └── roles/
-    ├── operators/              # Namespaces, OperatorGroups, Subscriptions (12 operators)
+    ├── operators/              # Namespaces, OperatorGroups, Subscriptions (14 operators)
     ├── service_mesh/           # Istio, IstioCNI, Kiali, OSSMConsole, monitoring
     ├── network_observability/  # FlowCollector with eBPF agent
     ├── gpu_worker/             # GPU MachineSet (auto-discovers cluster config)
@@ -352,6 +395,7 @@ ansible/
     ├── dashboard/              # Operations dashboard (BuildConfig from Git)
     ├── external_dns/           # Upstream ExternalDNS -> Cloudflare (opt-in)
     ├── devspaces/              # Dev Spaces operator + CheCluster
+    ├── ztwim/                  # SPIFFE/SPIRE workload identity (server, agent, CSI, OIDC)
     └── gatus/                  # Gatus health monitoring
 ```
 

@@ -1,0 +1,38 @@
+---
+ztwim_namespace: zero-trust-workload-identity-manager
+
+# SPIFFE trust domain. Red Hat recommends matching the cluster's application
+# base domain, which keeps SPIFFE IDs unique per cluster and makes the OIDC
+# issuer URL below resolve to a real Route.
+#
+# IMMUTABLE once the CR exists: the webhook rejects a change, so switching it
+# means deleting ZeroTrustWorkloadIdentityManager and every operand first.
+# Because the default is derived from the cluster domain, a rebuilt cluster
+# gets a new trust domain - which is what you want, since the old SPIRE CA is
+# gone with it.
+ztwim_trust_domain: "{{ ocp_apps_domain }}"
+ztwim_cluster_name: "{{ ocp_cluster_name }}"
+ztwim_bundle_configmap: spire-bundle
+
+# OIDC discovery endpoint, published as a Route by the operator because
+# managedRoute is true. SpireServer and SpireOIDCDiscoveryProvider must carry
+# the identical value - a mismatch issues JWTs whose "iss" claim no relying
+# party will accept.
+ztwim_jwt_issuer: "https://oidc-discovery.{{ ocp_apps_domain }}"
+
+# sqlite3 on a PVC is the operator's own default and is fine for a demo
+# cluster. Production should point this at PostgreSQL instead; the CRD also
+# accepts postgres, mysql, aws_postgresql and aws_mysql.
+ztwim_datastore_type: sqlite3
+ztwim_datastore_connection: /run/spire/data/datastore.sqlite3
+
+ztwim_persistence_size: 2Gi
+ztwim_persistence_access_mode: ReadWriteOnce
+# Empty means the cluster default StorageClass. Also immutable.
+ztwim_storage_class: ""
+
+ztwim_ca_common_name: SPIRE Server CA
+ztwim_ca_organization: Red Hat
+ztwim_ca_country: US
+
+ztwim_log_level: info

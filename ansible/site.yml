@@ -97,6 +97,10 @@
     - role: openshift_ai
       tags: [openshift-ai]
 
+    - role: ztwim
+      tags: [ztwim, spire, zero-trust]
+      when: deploy_ztwim | bool
+
     - role: console_plugins
       tags: [console]
 
