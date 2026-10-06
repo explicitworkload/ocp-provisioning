@@ -1,7 +1,7 @@
 ---
 - name: Wait for Network Observability Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: openshift-operators
@@ -17,7 +17,7 @@
 
 - name: Create FlowCollector
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -44,7 +44,7 @@
 
 - name: Wait for FlowCollector to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: flows.netobserv.io/v1beta2
     kind: FlowCollector
     name: cluster

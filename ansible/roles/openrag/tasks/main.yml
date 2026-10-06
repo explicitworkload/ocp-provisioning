@@ -1,7 +1,7 @@
 ---
 - name: Create the OpenRAG and OpenSearch namespaces
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -27,7 +27,7 @@
 # permits root, so it is not used. Namespace-scoped RoleBinding, not cluster.
 - name: Allow OpenSearch to run as uid 1000 via the nonroot-v2 SCC
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -57,7 +57,7 @@
 # is strong, hence the appended character classes.
 - name: Look for an existing OpenSearch admin password
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     kind: Secret
     namespace: "{{ openrag_opensearch_namespace }}"
     name: opensearch-admin
@@ -74,7 +74,7 @@
 
 - name: Store the OpenSearch admin password
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -96,7 +96,7 @@
 
 - name: Deploy the OpenSearch cluster
   kubernetes.core.helm:
-    kube_context: "{{ ocp_context }}"
+    kube_context: "{{ ocp_context or omit }}"
     name: opensearch
     chart_ref: opensearch/opensearch
     chart_version: "{{ opensearch_chart_version }}"
@@ -162,7 +162,7 @@
 
 - name: Deploy docling-serve
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -206,7 +206,7 @@
 
 - name: Deploy the CPU embedding model
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -248,7 +248,7 @@
 
 - name: Create services for docling and embeddings
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -272,7 +272,7 @@
 
 - name: Wait for docling and embeddings to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ openrag_namespace }}"
@@ -303,7 +303,7 @@
 # written to a values file on disk.
 - name: Read the LiteLLM key for OpenRAG
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     kind: Secret
     namespace: "{{ litellm_namespace | default('litellm') }}"
     label_selectors: []
@@ -336,7 +336,7 @@
 # time would stop matching.
 - name: Look for an existing Langflow superuser password
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     kind: Secret
     namespace: "{{ openrag_namespace }}"
     name: openrag-langflow-superuser
@@ -353,7 +353,7 @@
 
 - name: Store the Langflow superuser password
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -369,7 +369,7 @@
 
 - name: Deploy OpenRAG
   kubernetes.core.helm:
-    kube_context: "{{ ocp_context }}"
+    kube_context: "{{ ocp_context or omit }}"
     name: openrag
     chart_ref: "{{ openrag_checkout_dir }}/kubernetes/helm/openrag"
     release_namespace: "{{ openrag_namespace }}"
@@ -477,7 +477,7 @@
 # drops it, which is why this task runs on every pass.
 - name: Point the OpenRAG backend at LiteLLM
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: patched
     kind: Deployment
     api_version: apps/v1
@@ -521,7 +521,7 @@
 # upgrade rewrites the Deployment.
 - name: Give the OpenRAG frontend the real backend port
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: patched
     kind: Deployment
     api_version: apps/v1
@@ -539,7 +539,7 @@
 
 - name: Wait for the OpenRAG backend and frontend
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ openrag_namespace }}"

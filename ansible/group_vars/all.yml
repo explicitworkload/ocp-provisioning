@@ -1,6 +1,18 @@
 ---
-# OpenShift cluster context
-ocp_context: "default/api-ocp-x5s8w-sandbox759-opentlc-com:6443/admin"
+# OpenShift cluster context.
+# Empty = whatever `oc config current-context` points at, so a rebuilt sandbox
+# needs no commit here. Pinning a name is still supported and is worth doing
+# when more than one cluster is in reach of the same kubeconfig.
+ocp_context: ""
+
+# Seatbelt for the empty default above. When set, the target cluster's
+# apiServerURL must contain this substring or the run aborts before it changes
+# anything. Unset means no check - just the banner the preflight prints.
+# Worth setting for a destructive re-run: this playbook creates MachineSets,
+# installs cluster-wide operators and rotates database passwords, so a run
+# against the wrong context costs more than a run that simply fails.
+#   ./run.sh -e ocp_expected_api=sandbox1234
+ocp_expected_api: ""
 
 # GPU Worker configuration
 # Empty = derived from the cluster's worker MachineSets, so pointing the
@@ -69,24 +81,24 @@ dashboard_aws_secret_access_key: ""
 # The MCP server itself still runs read_only = false; this ClusterRole, not
 # that flag, is what actually bounds the blast radius.
 mcp_write_rules:
-  - apiGroups: [""]
-    resources: [pods, pods/log, services, configmaps, persistentvolumeclaims]
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: ["apps"]
-    resources:
-      - deployments
-      - deployments/scale
-      - statefulsets
-      - statefulsets/scale
-      - daemonsets
-      - replicasets
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: ["batch"]
-    resources: [jobs, cronjobs]
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: ["route.openshift.io"]
-    resources: [routes]
-    verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [ "" ]
+  resources: [ pods, pods/log, services, configmaps, persistentvolumeclaims ]
+  verbs: [ get, list, watch, create, update, patch, delete ]
+- apiGroups: [ "apps" ]
+  resources:
+  - deployments
+  - deployments/scale
+  - statefulsets
+  - statefulsets/scale
+  - daemonsets
+  - replicasets
+  verbs: [ get, list, watch, create, update, patch, delete ]
+- apiGroups: [ "batch" ]
+  resources: [ jobs, cronjobs ]
+  verbs: [ get, list, watch, create, update, patch, delete ]
+- apiGroups: [ "route.openshift.io" ]
+  resources: [ routes ]
+  verbs: [ get, list, watch, create, update, patch, delete ]
 
 # OpenRAG — document RAG platform (Langflow + OpenSearch + Docling).
 # OFF by default: it adds a 3-node OpenSearch cluster (~9Gi RAM, 3x20Gi PVCs)

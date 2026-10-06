@@ -1,7 +1,7 @@
 ---
 - name: Wait for OpenShift AI Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: redhat-ods-operator
@@ -17,7 +17,7 @@
 
 - name: Wait for DSCInitialization CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: dscinitializations.dscinitialization.opendatahub.io
@@ -34,7 +34,7 @@
 # only stops RHOAI claiming ownership of it.
 - name: Create DSCInitialization
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -64,7 +64,7 @@
 
 - name: Wait for DataScienceCluster CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: datascienceclusters.datasciencecluster.opendatahub.io
@@ -75,7 +75,7 @@
 
 - name: Create DataScienceCluster
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -145,7 +145,7 @@
 
 - name: Wait for OdhDashboardConfig CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: odhdashboardconfigs.opendatahub.io
@@ -156,7 +156,7 @@
 
 - name: Configure OdhDashboardConfig
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     definition:
       apiVersion: opendatahub.io/v1alpha
@@ -243,7 +243,7 @@
 # are added.
 - name: Check the RHOAI admin group has members
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: user.openshift.io/v1
     kind: Group
     name: "{{ rhoai_admin_groups }}"
@@ -268,7 +268,7 @@
 # default-profile is now CPU/memory only, and GPU work selects gpu-profile.
 - name: Create the default (CPU-only) hardware profile
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -304,7 +304,7 @@
 # then sits Pending on a node that has none.
 - name: Create the GPU hardware profile
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -362,7 +362,7 @@
 
 - name: Look for the RHOAI feature CRDs
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: "{{ item }}"
@@ -390,7 +390,7 @@
 
 - name: Look for an existing MLflow database password
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     kind: Secret
     namespace: "{{ rhoai_feature_namespace }}"
     name: mlflow-db-credentials
@@ -420,7 +420,7 @@
 # serves no TLS.
 - name: Create the MLflow database credentials
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -443,7 +443,7 @@
 
 - name: Create the MLflow database PVC
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -465,7 +465,7 @@
 # would deadlock with the new pod waiting for a volume the old one still holds.
 - name: Deploy the MLflow database
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -524,7 +524,7 @@
 
 - name: Create the MLflow database Service
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -550,7 +550,7 @@
 # leaves MLflow stuck, so wait here rather than race it.
 - name: Wait for the MLflow database to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ rhoai_feature_namespace }}"
@@ -570,7 +570,7 @@
 # instead, since there is no Secret to point at.
 - name: Create the MLflow tracking server
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -601,7 +601,7 @@
 # observability menu links to.
 - name: Create the console observability UI plugins
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -628,7 +628,7 @@
 
 - name: Create the TrustyAI evaluation hub
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -650,7 +650,7 @@
 # Kuadrant watches its own namespace, which the RHCL operator does not create.
 - name: Create the Kuadrant namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -664,7 +664,7 @@
 
 - name: Create the Kuadrant control plane
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -682,7 +682,7 @@
 
 - name: Create MCP server namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -699,7 +699,7 @@
 
 - name: Create MCP server ServiceAccount
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -715,7 +715,7 @@
 # exist yet — which RBAC permits, and which silently grants nothing.
 - name: Create the MCP workload-write ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -733,7 +733,7 @@
 # patched — apply would fail with "cannot change roleRef".
 - name: Remove the old cluster-edit binding for mcp-viewer
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: absent
     api_version: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -741,7 +741,7 @@
 
 - name: Bind MCP server ServiceAccount to read and workload-write
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -766,7 +766,7 @@
 - name: Create MCP server config
   register: mcp_config
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -801,7 +801,7 @@
 
 - name: Wait for MCPServer CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: mcpservers.mcp.x-k8s.io
@@ -812,7 +812,7 @@
 
 - name: Create OpenShift MCP Server
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -849,7 +849,7 @@
 # to restart the pod. Guarded on the ConfigMap actually changing.
 - name: Restart the MCP server to pick up config changes
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: absent
     api_version: v1
     kind: Pod
@@ -862,7 +862,7 @@
 
 - name: Wait for MCP Server to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: mcp.x-k8s.io/v1alpha1
     kind: MCPServer
     namespace: "{{ mcp_server_namespace }}"
@@ -881,7 +881,7 @@
 
 - name: Expose MCP Server via route
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -901,7 +901,7 @@
 
 - name: Register MCP Server for GenAI Studio playground
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:

@@ -1,7 +1,7 @@
 ---
 - name: Create gatus namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -69,7 +69,7 @@
 
 - name: Create Gatus ConfigMap
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -83,7 +83,7 @@
 
 - name: Create Gatus Deployment
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -136,7 +136,7 @@
 
 - name: Create Gatus Service
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -155,7 +155,7 @@
 
 - name: Create Gatus Route
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -176,7 +176,7 @@
 
 - name: Wait for Gatus to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ gatus_namespace }}"

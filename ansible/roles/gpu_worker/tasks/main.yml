@@ -1,7 +1,7 @@
 ---
 - name: Get cluster infrastructure details
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: config.openshift.io/v1
     kind: Infrastructure
     name: cluster
@@ -13,7 +13,7 @@
 
 - name: Get existing worker MachineSets
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: machine.openshift.io/v1beta1
     kind: MachineSet
     namespace: openshift-machine-api
@@ -37,7 +37,7 @@
 
 - name: Create GPU MachineSets
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
@@ -47,7 +47,7 @@
 
 - name: Wait for GPU machines to be provisioned
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: machine.openshift.io/v1beta1
     kind: MachineSet
     namespace: openshift-machine-api
@@ -64,7 +64,7 @@
 
 - name: Gather GPU nodes
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Node
     label_selectors:
@@ -73,7 +73,7 @@
 
 - name: Label existing GPU nodes with gpu role
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -93,7 +93,7 @@
 
 - name: Create GPU MachineConfigPool
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:

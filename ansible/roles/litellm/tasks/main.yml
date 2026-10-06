@@ -1,7 +1,7 @@
 ---
 - name: Get cluster ingress domain
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: config.openshift.io/v1
     kind: Ingress
     name: cluster
@@ -15,7 +15,7 @@
 
 - name: Create LiteLLM namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -28,7 +28,7 @@
 
 - name: Check for existing LiteLLM proxy secret
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ litellm_namespace }}"
@@ -49,7 +49,7 @@
 
 - name: Store LiteLLM proxy credentials
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -67,7 +67,7 @@
 
 - name: Create LiteLLM database PVC
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -93,7 +93,7 @@
 
 - name: Look for the existing LiteLLM database credentials
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     kind: Secret
     namespace: "{{ litellm_namespace }}"
     name: litellm-db-credentials
@@ -133,7 +133,7 @@
 
 - name: Find the running LiteLLM database pod
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Pod
     namespace: "{{ litellm_namespace }}"
@@ -168,7 +168,7 @@
   register: litellm_db_cred
   no_log: true
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -186,7 +186,7 @@
 
 - name: Deploy LiteLLM PostgreSQL
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -247,7 +247,7 @@
 
 - name: Create LiteLLM database Service
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -267,7 +267,7 @@
 
 - name: Wait for LiteLLM database to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ litellm_namespace }}"
@@ -283,7 +283,7 @@
 
 - name: Fetch Qwen3 SA token
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ model_namespace }}"
@@ -292,7 +292,7 @@
 
 - name: Create LiteLLM API key secret
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -307,7 +307,7 @@
 
 - name: Fetch Azure credentials from openshift-lightspeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: openshift-lightspeed
@@ -319,7 +319,7 @@
 - name: Create LiteLLM config
   register: litellm_config
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -372,7 +372,7 @@
 
 - name: Deploy LiteLLM proxy
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -445,7 +445,7 @@
 
 - name: Create LiteLLM Service
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -466,7 +466,7 @@
 
 - name: Expose LiteLLM via Route
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -490,7 +490,7 @@
 # actually changing so repeat runs do not restart the proxy.
 - name: Restart LiteLLM to pick up config changes
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: absent
     api_version: v1
     kind: Pod
@@ -505,7 +505,7 @@
 
 - name: Wait for LiteLLM proxy to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ litellm_namespace }}"
@@ -521,7 +521,7 @@
 
 - name: Get LiteLLM route host
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: route.openshift.io/v1
     kind: Route
     namespace: "{{ litellm_namespace }}"
@@ -611,7 +611,7 @@
 
 - name: Check for existing LiteLLM virtual key secret
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ model_namespace }}"
@@ -636,7 +636,7 @@
 
 - name: Store LiteLLM virtual key in model namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -652,7 +652,7 @@
 
 - name: Create AI Asset Endpoint for LiteLLM models
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:

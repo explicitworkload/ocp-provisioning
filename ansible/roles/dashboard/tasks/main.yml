@@ -1,7 +1,7 @@
 ---
 - name: Create dashboard namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -12,7 +12,7 @@
 
 - name: Create dashboard ImageStream
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -24,7 +24,7 @@
 
 - name: Create dashboard BuildConfig
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -52,7 +52,7 @@
 
 - name: Wait for dashboard build to complete
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: build.openshift.io/v1
     kind: Build
     namespace: "{{ dashboard_namespace }}"
@@ -68,7 +68,7 @@
 
 - name: Create RBAC for dashboard to manage Istio resources
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -83,7 +83,7 @@
 
 - name: Create RBAC for dashboard to manage platform resources
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -110,7 +110,7 @@
 
 - name: Create RBAC for dashboard to discover MCP servers
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -125,7 +125,7 @@
 
 - name: Bind dashboard SA to mesh ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -144,7 +144,7 @@
 
 - name: Bind dashboard SA to platform ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -166,7 +166,7 @@
 # cluster-monitoring-view grants read-only access to prometheuses/api.
 - name: Bind dashboard SA to cluster-monitoring-view
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -185,7 +185,7 @@
 
 - name: Bind dashboard SA to MCP ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -212,7 +212,7 @@
 # group_vars list; applying it here too keeps --tags dashboard self-contained.
 - name: Create the MCP workload-write ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -224,7 +224,7 @@
 
 - name: Bind dashboard SA to read and workload-write
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -248,7 +248,7 @@
 
 - name: Fetch LiteLLM API key from litellm namespace
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: litellm
@@ -258,7 +258,7 @@
 
 - name: Create dashboard AI Secret with LiteLLM key
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -280,7 +280,7 @@
 
 - name: Create dashboard AWS Secret for EC2 stop/start
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -300,7 +300,7 @@
 # actually in the cluster rather than only on the variable.
 - name: Check for an existing dashboard AWS Secret
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ dashboard_namespace }}"
@@ -322,7 +322,7 @@
 
 - name: Look for an existing dashboard auth Secret
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ dashboard_namespace }}"
@@ -349,7 +349,7 @@
 
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -365,7 +365,7 @@
 
 - name: Create dashboard Deployment
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -450,7 +450,7 @@
 
 - name: Create dashboard Service
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -469,7 +469,7 @@
 
 - name: Create dashboard Route
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -490,7 +490,7 @@
 
 - name: Create dashboard Route on the custom domain
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -515,7 +515,7 @@
 
 - name: Wait for dashboard to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ dashboard_namespace }}"

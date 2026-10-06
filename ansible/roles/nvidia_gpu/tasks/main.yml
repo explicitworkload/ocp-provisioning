@@ -1,7 +1,7 @@
 ---
 - name: Wait for NVIDIA GPU Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: nvidia-gpu-operator
@@ -17,7 +17,7 @@
 
 - name: Wait for ClusterPolicy CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: clusterpolicies.nvidia.com
@@ -28,7 +28,7 @@
 
 - name: Create NVIDIA ClusterPolicy
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:

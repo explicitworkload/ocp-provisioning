@@ -1,7 +1,7 @@
 ---
 - name: Get current console operator config
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operator.openshift.io/v1
     kind: Console
     name: cluster
@@ -13,7 +13,7 @@
 
 - name: Enable console plugins
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     kind: Console

@@ -1,7 +1,7 @@
 ---
 - name: Create openshift-storage namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -14,7 +14,7 @@
 
 - name: Create ODF OperatorGroup
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -29,7 +29,7 @@
 
 - name: Create ODF Operator Subscription
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -47,7 +47,7 @@
 
 - name: Wait for ODF Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: "{{ odf_namespace }}"
@@ -72,7 +72,7 @@
 # role, so filtering on worker alone places an OSD on the control plane.
 - name: Get eligible worker nodes for ODF
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Node
     label_selectors:
@@ -100,7 +100,7 @@
 
 - name: Label worker nodes for ODF storage
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -116,7 +116,7 @@
 
 - name: Wait for StorageCluster CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: storageclusters.ocs.openshift.io
@@ -127,7 +127,7 @@
 
 - name: Create OCS StorageCluster
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -162,7 +162,7 @@
 
 - name: Wait for NooBaa CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: noobaas.noobaa.io
@@ -173,7 +173,7 @@
 
 - name: Configure NooBaa to use manual default backing store
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     definition:
       apiVersion: noobaa.io/v1alpha1
@@ -190,7 +190,7 @@
 
 - name: Wait for BackingStore CRD
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     name: backingstores.noobaa.io
@@ -201,7 +201,7 @@
 
 - name: Create PV pool backing store for NooBaa
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -331,7 +331,7 @@
   block:
     - name: Find the CNPG primary pod
       kubernetes.core.k8s_info:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         api_version: v1
         kind: Pod
         namespace: "{{ odf_namespace }}"
@@ -370,7 +370,7 @@
 
     - name: Scale down the NooBaa writers
       kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         state: patched
         kind: "{{ item.kind }}"
         api_version: apps/v1
@@ -387,7 +387,7 @@
 
     - name: Wait for noobaa-core to stop
       kubernetes.core.k8s_info:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         api_version: v1
         kind: Pod
         namespace: "{{ odf_namespace }}"
@@ -496,7 +496,7 @@
 
     - name: Scale the NooBaa writers back up
       kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         state: patched
         kind: "{{ item.kind }}"
         api_version: apps/v1
@@ -513,7 +513,7 @@
 
 - name: Wait for NooBaa to become ready after repair
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: noobaa.io/v1alpha1
     kind: NooBaa
     namespace: "{{ odf_namespace }}"
@@ -528,7 +528,7 @@
 
 - name: Wait for PV backing store to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: noobaa.io/v1alpha1
     kind: BackingStore
     namespace: "{{ odf_namespace }}"
@@ -552,7 +552,7 @@
 
 - name: Wait for default BucketClass
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: noobaa.io/v1alpha1
     kind: BucketClass
     namespace: "{{ odf_namespace }}"
@@ -564,7 +564,7 @@
 
 - name: Update default BucketClass to use PV backing store
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -581,7 +581,7 @@
 
 - name: Wait for StorageCluster to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: ocs.openshift.io/v1
     kind: StorageCluster
     namespace: "{{ odf_namespace }}"

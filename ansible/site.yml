@@ -5,9 +5,79 @@
   gather_facts: false
 
   pre_tasks:
+    # Everything down to the banner is read-only, and runs before the first
+    # task that changes the cluster. ocp_context defaults to empty, meaning
+    # follow the current kubeconfig context, so what this play is pointed at
+    # can change without anyone editing the repo - say the sandbox was
+    # rebuilt, or `oc login` was last run somewhere else. Name the target out
+    # loud before touching it rather than finding out from the wreckage.
+    - name: Resolve the kubeconfig context when none is pinned
+      ansible.builtin.command:
+        cmd: oc config current-context
+      register: current_context
+      changed_when: false
+      when: ocp_context | length == 0
+      tags: [always]
+
+    - name: Record the context this run will use
+      ansible.builtin.set_fact:
+        ocp_context_resolved: >-
+          {{ ocp_context if ocp_context | length > 0
+             else current_context.stdout | trim }}
+      tags: [always]
+
+    - name: Get cluster infrastructure
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+      register: cluster_infra
+      tags: [always]
+
+    - name: Set cluster name fact
+      ansible.builtin.set_fact:
+        ocp_cluster_name: "{{ cluster_infra.resources[0].status.infrastructureName }}"
+        ocp_api_url: "{{ cluster_infra.resources[0].status.apiServerURL }}"
+      tags: [always]
+
+    - name: Count cluster nodes
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: Node
+      register: cluster_nodes
+      tags: [always]
+
+    - name: Refuse to run against an unexpected cluster
+      ansible.builtin.fail:
+        msg: >-
+          ocp_expected_api is "{{ ocp_expected_api }}", but this run targets
+          {{ ocp_api_url }} via context {{ ocp_context_resolved }}. Refusing
+          before anything is changed. Switch context, correct the expectation,
+          or clear ocp_expected_api if this really is the intended cluster.
+      when:
+        - ocp_expected_api | default('') | length > 0
+        - ocp_expected_api not in ocp_api_url
+      tags: [always]
+
+    - name: Show the cluster about to be modified
+      ansible.builtin.debug:
+        msg:
+          - "context : {{ ocp_context_resolved }}"
+          - "pinned  : {{ 'yes, by ocp_context' if ocp_context | length > 0
+                          else 'no - following the current kubeconfig context' }}"
+          - "api     : {{ ocp_api_url }}"
+          - "infra   : {{ ocp_cluster_name }}"
+          - "nodes   : {{ cluster_nodes.resources | length }}"
+          - "guard   : {{ ocp_expected_api if ocp_expected_api | default('') | length > 0
+                          else 'none - set ocp_expected_api to hard-fail on the wrong cluster' }}"
+      tags: [always]
+
+    # First task that writes to the cluster. Nothing above it mutates.
     - name: Set OAuth access token max age to 90 days
       kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         state: present
         definition:
           apiVersion: config.openshift.io/v1
@@ -21,7 +91,7 @@
 
     - name: Get cluster ingress domain
       kubernetes.core.k8s_info:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         api_version: config.openshift.io/v1
         kind: Ingress
         name: cluster
@@ -31,20 +101,6 @@
     - name: Set cluster apps domain
       ansible.builtin.set_fact:
         ocp_apps_domain: "{{ cluster_ingress.resources[0].spec.domain }}"
-      tags: [always]
-
-    - name: Get cluster infrastructure
-      kubernetes.core.k8s_info:
-        context: "{{ ocp_context }}"
-        api_version: config.openshift.io/v1
-        kind: Infrastructure
-        name: cluster
-      register: cluster_infra
-      tags: [always]
-
-    - name: Set cluster name fact
-      ansible.builtin.set_fact:
-        ocp_cluster_name: "{{ cluster_infra.resources[0].status.infrastructureName }}"
       tags: [always]
 
     # Two digits appended to the public hostnames. Derived from the cluster's
@@ -59,7 +115,7 @@
 
     - name: Enable user workload monitoring
       kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         state: present
         definition:
           apiVersion: v1

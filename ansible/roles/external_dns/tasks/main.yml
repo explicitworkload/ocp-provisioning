@@ -1,7 +1,7 @@
 ---
 - name: Create ExternalDNS namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -12,7 +12,7 @@
 
 - name: Create ExternalDNS ServiceAccount
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -24,7 +24,7 @@
 
 - name: Create ExternalDNS ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -45,7 +45,7 @@
 
 - name: Bind ExternalDNS ServiceAccount to ClusterRole
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -66,7 +66,7 @@
 # with `oc create secret`. Either is enough to deploy.
 - name: Check for an existing Cloudflare credentials Secret
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: v1
     kind: Secret
     namespace: "{{ external_dns_namespace }}"
@@ -92,7 +92,7 @@
 
 - name: Create Cloudflare credentials Secret
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -112,7 +112,7 @@
   block:
     - name: Create ExternalDNS Deployment
       kubernetes.core.k8s:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         state: present
         apply: true
         definition:
@@ -177,7 +177,7 @@
 
     - name: Wait for ExternalDNS to be ready
       kubernetes.core.k8s_info:
-        context: "{{ ocp_context }}"
+        context: "{{ ocp_context or omit }}"
         api_version: apps/v1
         kind: Deployment
         namespace: "{{ external_dns_namespace }}"

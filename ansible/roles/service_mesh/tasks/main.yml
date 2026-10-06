@@ -1,7 +1,7 @@
 ---
 - name: Wait for Service Mesh Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: openshift-operators
@@ -17,7 +17,7 @@
 
 - name: Create istio-system namespace
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -28,7 +28,7 @@
 
 - name: Create IstioCNI
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -42,7 +42,7 @@
 
 - name: Wait for IstioCNI to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: sailoperator.io/v1
     kind: IstioCNI
     name: default
@@ -59,7 +59,7 @@
 
 - name: Create Istio control plane
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -73,7 +73,7 @@
 
 - name: Wait for Istio control plane to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: sailoperator.io/v1
     kind: Istio
     name: default
@@ -90,7 +90,7 @@
 
 - name: Wait for Kiali Operator CSV to succeed
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: openshift-operators
@@ -106,7 +106,7 @@
 
 - name: Create Kiali instance
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     # Without apply, this is a merge patch: fields removed from the manifest
     # survive on the live object. Dropping a bad networking override here
@@ -160,7 +160,7 @@
 
 - name: Create OSSMConsole for OpenShift Console integration
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -176,7 +176,7 @@
 
 - name: Grant Kiali SA cluster-monitoring-view role
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -195,7 +195,7 @@
 
 - name: Create PodMonitor for Istio sidecar proxies
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -218,7 +218,7 @@
 
 - name: Create ServiceMonitor for istiod
   kubernetes.core.k8s:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
@@ -237,7 +237,7 @@
 
 - name: Wait for Kiali to be ready
   kubernetes.core.k8s_info:
-    context: "{{ ocp_context }}"
+    context: "{{ ocp_context or omit }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ service_mesh_namespace }}"
