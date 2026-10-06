@@ -52,6 +52,18 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), node resiliency testing (stop/start the backing EC2 instance, or destroy a Machine and let its MachineSet rebuild it), AI Assistant (chat with MCP server tool use), embedded health monitor, floating task log with toast notifications, and sustained traffic generator
 - Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
 
+### Prerequisites
+
+| Tool | Needed for | Install |
+|------|------------|---------|
+| `oc` | everything | [OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html) |
+| `python3` | everything | system package |
+| `helm` | the `openrag` role **only** | `brew install helm` |
+
+`helm` is worth installing up front if you plan to use `deploy_openrag=true`:
+it is the one tool a single role needs, so a host without it runs the other
+eighteen roles to completion and only then fails.
+
 ### Quick Start
 
 ```bash
@@ -61,11 +73,22 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install ansible kubernetes
 
-# Edit group_vars/all.yml and set ocp_context to your cluster context
-# Find it with: oc config current-context
+# Point oc at the target cluster. The playbook follows whatever
+# `oc config current-context` returns, and opens by printing the context,
+# API URL, infrastructure name and node count before it changes anything.
+oc login ...
 
 # Run
 ./run.sh
+```
+
+Set `ocp_context` in `group_vars/all.yml` only to pin a specific context —
+worth doing when several clusters are in reach of the same kubeconfig. For a
+destructive re-run, `ocp_expected_api` aborts before touching anything unless
+the target's API URL contains the string you give it:
+
+```bash
+./run.sh -e ocp_expected_api=sandbox1234
 ```
 
 **Optional extras**, both off by default and never requiring secrets in the repo:
@@ -83,6 +106,12 @@ read -rs AWS_KEY; read -rs AWS_SECRET
 ansible-playbook site.yml --tags dashboard \
   -e dashboard_aws_access_key_id="$AWS_KEY" \
   -e dashboard_aws_secret_access_key="$AWS_SECRET"
+
+# OpenRAG: OpenSearch, docling, text-embeddings-inference and the OpenRAG
+# chart. Needs helm on this host. Self-contained, so it can be run on its own
+# against a cluster where the litellm role has already completed - it reads
+# the LiteLLM key from the cluster rather than inheriting it.
+./run.sh --tags openrag -e deploy_openrag=true
 ```
 
 See [ansible/README.md](ansible/README.md) for full variable reference, tags, Cloudflare and TLS notes, node resiliency testing, and Quay S3 configuration.
