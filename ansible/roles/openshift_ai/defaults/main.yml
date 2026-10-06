@@ -17,7 +17,13 @@ rhoai_allowed_groups: "system:authenticated"
 # it at or below the GPUs on a single node, since one pod cannot span nodes.
 rhoai_gpu_profile_max: 2
 
-mcp_server_namespace: openshift-mcp-server
+# NOT an openshift-* name. The RHOAI dashboard filters every Project selector
+# through isAvailableProject() (packages/k8s-core/src/projectUtils.ts), which
+# rejects any namespace starting with "openshift-" or "kube-", plus default,
+# system, openshift and the dashboard's own namespace. That is a prefix test on
+# the name, so no label can override it: an MCPServer in openshift-mcp-server
+# can never be listed under AI hub > MCP servers > Deployments.
+mcp_server_namespace: mcp-servers
 mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"
 
 # --- RHOAI 3.5 feature CRs -------------------------------------------------

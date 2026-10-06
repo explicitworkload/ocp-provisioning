@@ -690,6 +690,12 @@
       kind: Namespace
       metadata:
         name: "{{ mcp_server_namespace }}"
+        labels:
+          # Surfaces it as a Data Science Project, which is how the dashboard
+          # presents the namespace in its selectors and project list.
+          opendatahub.io/dashboard: "true"
+        annotations:
+          openshift.io/display-name: MCP Servers
 
 - name: Create MCP server ServiceAccount
   kubernetes.core.k8s:

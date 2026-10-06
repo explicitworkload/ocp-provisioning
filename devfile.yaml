@@ -77,9 +77,14 @@ commands:
           # toolset calls with its own mcp-viewer ServiceAccount. Sending the
           # workspace token instead would bake a ~1h projected token into this
           # file and break once kubelet rotated it.
+          # Second label is the namespace, and must track
+          # mcp_server_namespace in roles/openshift_ai/defaults/main.yml.
+          # Dev Spaces reads this file straight from git, so Ansible cannot
+          # template it - a namespace change has to be made here by hand or
+          # the agent loses its cluster tools with no error worth noticing.
           - name: openshift
             type: streamable-http
-            url: http://openshift-mcp-server.openshift-mcp-server.svc.cluster.local:8080/mcp
+            url: http://openshift-mcp-server.mcp-servers.svc.cluster.local:8080/mcp
         EOF
         chmod 600 "$HOME/.continue/config.yaml"
         echo "Continue configured against $LITELLM_BASE_URL"
