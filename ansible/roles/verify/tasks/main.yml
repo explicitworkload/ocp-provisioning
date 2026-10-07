@@ -1,0 +1,189 @@
+---
+# Collects every failure and reports once at the end, rather than aborting on
+# the first. A run that is wrong in four places should tell you all four, not
+# make you fix and re-run four times - these runs cost 40 minutes.
+- name: Start with no failures
+  ansible.builtin.set_fact:
+    verify_failures: []
+
+# ---------------------------------------------------------------------------
+# Cluster operators
+# ---------------------------------------------------------------------------
+- name: Read the cluster operators
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+  register: verify_cos
+  failed_when: false
+
+- name: Record degraded cluster operators
+  ansible.builtin.set_fact:
+    verify_failures: >-
+      {{ verify_failures + ['ClusterOperator ' ~ item.metadata.name ~ ' is Degraded'] }}
+  loop: "{{ verify_cos.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when: >-
+    item.status.conditions | default([])
+    | selectattr('type', 'equalto', 'Degraded')
+    | selectattr('status', 'equalto', 'True') | list | length > 0
+
+# ---------------------------------------------------------------------------
+# Custom resources
+# ---------------------------------------------------------------------------
+# failed_when: false throughout - a missing CRD must become a reported failure,
+# not an aborted play. That is the whole point of this role.
+- name: Read each expected resource
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: "{{ item.api_version }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ item.namespace | default(omit) }}"
+    name: "{{ item.name | default(omit) }}"
+  loop: "{{ verify_resources }}"
+  loop_control:
+    label: "{{ item.label }}"
+  when: item.gate | default(true) | bool
+  register: verify_res_reads
+  failed_when: false
+
+- name: Record resource failures
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [reason] }}"
+  vars:
+    spec: "{{ item.item }}"
+    res: "{{ (item.resources | default([]))[0] | default({}) }}"
+    phase: "{{ res.status.phase | default('<none>') }}"
+    cond: >-
+      {{ (res.status.conditions | default([])
+          | selectattr('type', 'equalto', spec.condition | default(''))
+          | map(attribute='status') | first | default('<none>', true)) }}
+    reason: >-
+      {{ spec.label ~ ': ' ~ (
+           'not found'
+             if (item.resources | default([]) | length) == 0
+           else ('phase is ' ~ phase ~ ', expected ' ~ (spec.expect | default('')))
+             if spec.check == 'phase'
+           else ('condition ' ~ (spec.condition | default('')) ~ ' is ' ~ cond
+                 ~ ', expected ' ~ (spec.expect | default('')))
+         ) }}
+  loop: "{{ verify_res_reads.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not (item.skipped | default(false))
+    - >-
+      (item.resources | default([]) | length) == 0
+      or (item.item.check == 'phase'
+          and ((item.resources[0].status.phase | default('')) != item.item.expect))
+      or (item.item.check == 'condition'
+          and ((item.resources[0].status.conditions | default([])
+                | selectattr('type', 'equalto', item.item.condition)
+                | map(attribute='status') | first | default('')) != item.item.expect))
+
+# ---------------------------------------------------------------------------
+# Workloads
+# ---------------------------------------------------------------------------
+# Deployment first, then StatefulSet under the same name - the roles use both
+# and which one a component is varies by chart.
+- name: Read each expected workload
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: "{{ wl_kind }}"
+    namespace: "{{ item.0.ns }}"
+    name: "{{ item.0.name }}"
+  vars:
+    wl_kind: "{{ item.1 }}"
+  loop: "{{ verify_workloads | product(['Deployment', 'StatefulSet']) | list }}"
+  loop_control:
+    label: "{{ item.0.label }} ({{ item.1 }})"
+  when: item.0.gate | default(true) | bool
+  register: verify_wl_reads
+  failed_when: false
+
+- name: Record workload failures
+  ansible.builtin.set_fact:
+    verify_failures: >-
+      {{ verify_failures + [item.item.0.label ~ ': no ready replica ('
+         ~ item.item.0.ns ~ '/' ~ item.item.0.name ~ ')'] }}
+  loop: "{{ verify_wl_reads.results }}"
+  loop_control:
+    label: "{{ item.item.0.label }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.item.1 == 'Deployment'
+    - >-
+      ((verify_wl_reads.results
+        | selectattr('item.0.name', 'equalto', item.item.0.name)
+        | selectattr('item.0.ns', 'equalto', item.item.0.ns)
+        | map(attribute='resources') | map('default', [], true) | sum(start=[])
+        | map(attribute='status.readyReplicas') | map('default', 0, true)
+        | select('gt', 0) | list | length) == 0)
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+- name: Call each expected endpoint
+  ansible.builtin.uri:
+    url: "{{ item.url }}"
+    validate_certs: false
+    status_code: [200, 201, 302]
+    return_content: true
+    timeout: 20
+  loop: "{{ verify_endpoints }}"
+  loop_control:
+    label: "{{ item.label }}"
+  when: item.gate | default(true) | bool
+  register: verify_ep_reads
+  failed_when: false
+
+- name: Record endpoint failures
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [reason] }}"
+  vars:
+    reason: >-
+      {{ item.item.label ~ ': ' ~ (
+           ('unreachable or HTTP ' ~ (item.status | default('error') | string))
+             if (item.status | default(0)) not in [200, 201, 302]
+           else ('answered but body lacks ' ~ (item.item.contains | default('')))
+         ) ~ ' - ' ~ item.item.url }}
+  loop: "{{ verify_ep_reads.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not (item.skipped | default(false))
+    - >-
+      (item.status | default(0)) not in [200, 201, 302]
+      or (item.item.contains is defined
+          and item.item.contains not in (item.content | default('')))
+
+# ---------------------------------------------------------------------------
+# Verdict
+# ---------------------------------------------------------------------------
+- name: Report that verification passed
+  ansible.builtin.debug:
+    msg: >-
+      Verification passed - {{ verify_resources | length }} resources,
+      {{ verify_workloads | length }} workloads and
+      {{ verify_endpoints | length }} endpoints checked, allowing for whatever
+      this run was configured to skip.
+  when: verify_failures | length == 0
+
+- name: Report everything that is wrong
+  ansible.builtin.debug:
+    msg: "{{ ['VERIFICATION FAILED - ' ~ (verify_failures | length) ~ ' problem(s):'] + verify_failures }}"
+  when: verify_failures | length > 0
+
+# Separate from the report above so the list is printed in full before the
+# play stops, rather than being truncated into a failure message.
+- name: Fail the play
+  ansible.builtin.fail:
+    msg: >-
+      {{ verify_failures | length }} component(s) did not reach a working
+      state. See the list above. Set verify_fail_on_error=false to report
+      without failing.
+  when:
+    - verify_failures | length > 0
+    - verify_fail_on_error | bool

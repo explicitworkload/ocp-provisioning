@@ -92,6 +92,23 @@ later without re-running anything:
 ./run.sh --tags summary
 ```
 
+The run then ends by *asserting* that state, rather than trusting a green
+`PLAY RECAP`. 56 of this playbook's tasks are `until:` loops waiting on
+operators to converge; seven swallow their expiry and seven more are one-shot
+probes feeding a `when:`, so a run could previously finish successfully having
+silently skipped work. The `verify` role checks every expected custom
+resource, workload and HTTP endpoint, collects *all* the failures, and reports
+them together:
+
+```bash
+./run.sh --tags verify                         # check an existing cluster
+./run.sh --tags verify -e verify_fail_on_error=false   # report, do not fail
+```
+
+Each check is gated on the same variable that decided whether the component
+was deployed, so a run with `deploy_openrag=false` does not report OpenRAG as
+broken.
+
 Set `ocp_context` in `group_vars/all.yml` only to pin a specific context —
 worth doing when several clusters are in reach of the same kubeconfig. For a
 destructive re-run, `ocp_expected_api` aborts before touching anything unless

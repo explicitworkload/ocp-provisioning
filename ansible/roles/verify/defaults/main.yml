@@ -1,0 +1,137 @@
+---
+# What "the run succeeded" is supposed to mean.
+#
+# The playbook is 330 tasks of which 56 are until: loops, each encoding a guess
+# about how long some operator takes. Several of those can expire or conclude
+# early without failing the play - seven swallow their expiry with
+# failed_when: false, seven more are one-shot probes feeding a when: - so a
+# green PLAY RECAP has never been evidence that the cluster works. This role is
+# that evidence.
+#
+# Every check is gated on the same variable that decides whether the thing was
+# deployed at all, so a run with deploy_openrag=false does not report OpenRAG
+# as broken; it does not report on it.
+
+# Fail the play when a check fails. Set false to report and carry on, which is
+# useful when inspecting a cluster you already know is partly broken.
+verify_fail_on_error: true
+
+# --- Custom resources ------------------------------------------------------
+# check: phase     -> status.phase == expect
+#        condition -> status.conditions[type==type].status == expect
+#        exists    -> the resource is simply present
+verify_resources:
+  - label: "ODF StorageCluster"
+    gate: true
+    api_version: ocs.openshift.io/v1
+    kind: StorageCluster
+    namespace: openshift-storage
+    name: ocs-storagecluster
+    check: phase
+    expect: Ready
+
+  - label: "NooBaa"
+    gate: true
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: openshift-storage
+    name: noobaa
+    check: phase
+    expect: Ready
+
+  - label: "NooBaa PV backing store"
+    gate: true
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    namespace: openshift-storage
+    name: noobaa-pv-backing-store
+    check: phase
+    expect: Ready
+
+  # The one that would have caught the stranded-NooBaa runs: a BucketClass
+  # stuck Rejected is the visible end of that whole failure.
+  - label: "Default BucketClass"
+    gate: true
+    api_version: noobaa.io/v1alpha1
+    kind: BucketClass
+    namespace: openshift-storage
+    name: noobaa-default-bucket-class
+    check: phase
+    expect: Ready
+
+  - label: "RHOAI DataScienceCluster"
+    gate: true
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: default-dsc
+    check: condition
+    condition: Ready
+    expect: "True"
+
+  - label: "NodeFeatureDiscovery"
+    gate: true
+    api_version: nfd.openshift.io/v1
+    kind: NodeFeatureDiscovery
+    namespace: openshift-nfd
+    name: nfd-instance
+    check: exists
+
+  - label: "NVIDIA ClusterPolicy"
+    gate: true
+    api_version: nvidia.com/v1
+    kind: ClusterPolicy
+    name: gpu-cluster-policy
+    check: phase
+    expect: ready
+
+  # Silently skipped today when its CRD has not appeared yet, leaving an
+  # orphaned PostgreSQL behind and a green PLAY RECAP.
+  - label: "MLflow tracking server"
+    gate: "{{ deploy_mlflow_server | default(true) }}"
+    api_version: components.platform.opendatahub.io/v1alpha1
+    kind: MLflow
+    name: default-mlflow
+    check: exists
+
+  - label: "MCP server"
+    gate: true
+    api_version: mcp.x-k8s.io/v1alpha1
+    kind: MCPServer
+    namespace: "{{ mcp_server_namespace | default('mcp-servers') }}"
+    name: openshift-mcp-server
+    check: exists
+
+  - label: "Dev Spaces CheCluster"
+    gate: true
+    api_version: org.eclipse.che/v2
+    kind: CheCluster
+    namespace: "{{ devspaces_namespace | default('openshift-devspaces') }}"
+    name: devspaces
+    check: exists
+
+# --- Deployments and StatefulSets that must have a ready replica -----------
+verify_workloads:
+  - {label: "LiteLLM proxy",      gate: true, ns: "{{ litellm_namespace | default('litellm') }}", name: litellm}
+  - {label: "Ops Dashboard",      gate: true, ns: "{{ dashboard_namespace | default('dashboard') }}", name: ops-dashboard}
+  - {label: "MCP server",         gate: true, ns: "{{ mcp_server_namespace | default('mcp-servers') }}", name: openshift-mcp-server}
+  - {label: "OpenRAG backend",    gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: openrag-backend}
+  - {label: "OpenRAG frontend",   gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: openrag-frontend}
+  - {label: "OpenRAG langflow",   gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: openrag-langflow}
+  - {label: "Docling",            gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: docling-serve}
+  - {label: "Text embeddings",    gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: text-embeddings}
+  - {label: "MLflow PostgreSQL",  gate: "{{ deploy_mlflow_server | default(true) }}", ns: "{{ rhoai_feature_namespace | default('redhat-ods-applications') }}", name: mlflow-db}
+
+# --- HTTP endpoints that must actually answer ------------------------------
+# Reachability, not just "a Route object exists". `contains` is optional and
+# checks the body, which is how OpenRAG's onboarding state gets verified.
+verify_endpoints:
+  - label: "OpenRAG onboarding"
+    gate: "{{ deploy_openrag | default(false) }}"
+    url: "https://openrag-api.{{ ocp_apps_domain }}/onboarding-status"
+    contains: '"onboarded":true'
+  - label: "Ops Dashboard"
+    gate: true
+    url: "https://dashboard.{{ ocp_apps_domain }}/"
+  - label: "LiteLLM"
+    gate: true
+    url: "https://litellm-{{ litellm_namespace | default('litellm') }}.{{ ocp_apps_domain }}/health/liveliness"

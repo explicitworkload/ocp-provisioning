@@ -202,3 +202,12 @@
     # existing cluster and anything not deployed is simply left out.
     - role: summary
       tags: [summary]
+
+    # After summary, not before: when verification fails this is exactly when
+    # the URLs and passwords are wanted, and a failing role stops the play.
+    #
+    # 56 of this playbook's tasks are until: loops, seven of which swallow
+    # their expiry and seven more are one-shot probes feeding a when:, so a
+    # green PLAY RECAP has never meant the cluster works. This asserts it.
+    - role: verify
+      tags: [verify]
