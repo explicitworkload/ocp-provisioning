@@ -5,11 +5,31 @@
 # Defaults to site.yml, the full cluster build. Override for the experiments,
 # which deploy one thing and must not be reached by a bare ./run.sh:
 #
+#     ./run.sh odf-experiment.yml
 #     PLAYBOOK=odf-experiment.yml ./run.sh
+#
+# Note there is no --tags form for the experiments: they are separate
+# playbooks, not roles inside site.yml, because odf and odf_experiment both
+# manage ocs-storagecluster with incompatible specs and a single playbook
+# holding both would fight itself. `./run.sh --tags odf-experiment` matches
+# only site.yml's always-tagged pre_tasks and deploys nothing.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# First argument wins if it names a playbook here, so the natural form works:
+#   ./run.sh odf-experiment.yml -e foo=bar
+# Everything after it passes through to ansible-playbook untouched.
+#
+# Anything ending .yml is taken as the playbook whether or not it exists, so a
+# typo reports the available playbooks instead of being passed through as a
+# second positional and dying inside ansible-playbook with "the playbook:
+# not-a-playbook.yml could not be found".
 PLAYBOOK="${PLAYBOOK:-site.yml}"
+if [[ $# -gt 0 && "$1" == *.yml ]]; then
+  PLAYBOOK="$1"
+  shift
+fi
+
 if [[ ! -f "$PLAYBOOK" ]]; then
   echo "No such playbook: $PLAYBOOK" >&2
   echo "Available:" >&2
