@@ -279,15 +279,42 @@
 
       nb_phase=$($OC get noobaa noobaa -o jsonpath='{.status.phase}' 2>/dev/null)
 
+      # Does this build migrate to CNPG at all? The Cluster CR is created well
+      # before any of its pods - measured at 03:52:34 against a first pod at
+      # 03:54:11 - so its presence is the earliest reliable signal that a
+      # primary is on its way and that NooBaa is going to be repointed.
+      cnpg_cr=$($OC get clusters.postgresql.cnpg.noobaa.io noobaa-db-pg-cluster \
+                  -o name 2>/dev/null)
+
       # "Not present" is not the same as "never will be". On a fresh install the
       # CNPG cluster does not exist for the first few minutes, and the old
       # StatefulSet DB is removed only once the migration completes. Returning a
-      # terminal verdict for either case ends the until-loop on its first poll
-      # and skips the repair - which is exactly how a stranded cluster got all
-      # the way to the backing-store wait before failing. Only conclude there is
-      # nothing to repair when NooBaa is genuinely Ready; otherwise keep waiting.
+      # terminal verdict for either case ends the until-loop and skips the
+      # repair.
+      #
+      # Ready alone is not enough to conclude that, because NooBaa is Ready
+      # BEFORE the migration as well as after it. Measured on a cluster that
+      # then stranded:
+      #   03:52:34  CNPG Cluster CR created
+      #   03:54:11  first CNPG pod, not yet labelled role=primary
+      #   ~03:55:00 poll 6: no primary -> Ready -> HEALTHY, loop exits
+      #   03:55:42  "account not found" appears, nobody watching
+      # The repair was skipped and the play ran on for another 50 minutes
+      # before failing at the StorageCluster wait.
+      #
+      # So the CR is the discriminator: while it exists but has produced no
+      # primary yet, a Ready is the pre-migration one and the only safe answer
+      # is to keep waiting. With no CR at all - a build that does not do this,
+      # or one where it is fixed - Ready still means genuinely nothing to do,
+      # which keeps the whole block inert where it should be.
       absent_verdict() {
-        [ "$nb_phase" = "Ready" ] && echo HEALTHY || echo WAIT
+        if [ -n "$cnpg_cr" ]; then
+          echo WAIT
+        elif [ "$nb_phase" = "Ready" ]; then
+          echo HEALTHY
+        else
+          echo WAIT
+        fi
       }
       primary=$($OC get pod -l cnpg.io/cluster=noobaa-db-pg-cluster,role=primary \
                   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
