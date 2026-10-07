@@ -1,17 +1,19 @@
 ---
-# EXPERIMENT: ODF 4.22.5 with the Multicloud Object Gateway only.
+# EXPERIMENT: ODF 4.22.5, full - Ceph with OSDs, RBD, CephFS, and NooBaa
+# object storage backed by the Ceph object store. One terabyte of gp3 behind
+# all of it, as 3 x 342Gi OSDs, one per availability zone.
 #
-# Separate from site.yml on purpose. This is not a trimmed cluster build - it
-# deploys one thing, asserts that Ceph did NOT come with it, and stops. Run it
-# against a fresh cluster:
+# Separate from site.yml on purpose. This deploys storage and nothing else,
+# then asserts that all three access modes actually arrived. Run it against a
+# fresh cluster:
 #
 #     oc login ...
-#     ansible-playbook mcg.yml
+#     ansible-playbook odf-experiment.yml
 #
 # or pin the target so a drifting kubeconfig cannot send it elsewhere:
 #
-#     ansible-playbook mcg.yml -e ocp_expected_api=sandbox1234
-- name: ODF 4.22.5, Multicloud Object Gateway only
+#     ansible-playbook odf-experiment.yml -e ocp_expected_api=sandbox1234
+- name: ODF 4.22.5 with Ceph, OSDs, RBD, CephFS and NooBaa
   hosts: localhost
   connection: local
   gather_facts: false
@@ -79,8 +81,8 @@
           - "api     : {{ ocp_api_url }}"
           - "infra   : {{ ocp_cluster_name }}"
           - "nodes   : {{ cluster_nodes.resources | length }}"
-          - "about to install ODF {{ odf_mcg_starting_csv | default('4.22.5') }}, MCG only, no Ceph"
+          - "about to install ODF {{ odf_exp_starting_csv }}: Ceph, {{ odf_exp_osd_count }} x {{ odf_exp_osd_size }} OSDs, RBD, CephFS, NooBaa"
 
   roles:
-    - role: odf_mcg
-      tags: [mcg, odf]
+    - role: odf_experiment
+      tags: [odf]

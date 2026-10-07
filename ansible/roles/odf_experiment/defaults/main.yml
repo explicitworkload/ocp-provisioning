@@ -1,0 +1,42 @@
+---
+# ODF 4.22.5, full: Ceph with OSDs, RBD, CephFS, and NooBaa object storage
+# backed by the Ceph object store. One terabyte of gp3 behind all of it.
+odf_exp_namespace: openshift-storage
+
+# Pinned rather than floating. stable-4.22 resolves to 4.22.5-rhodf today, but
+# this is an experiment against a specific build - the MCG CNPG migration bug
+# is version-scoped to it - so the version is named and not inferred.
+odf_exp_channel: stable-4.22
+odf_exp_starting_csv: odf-operator.v4.22.5-rhodf
+odf_exp_catalog_source: redhat-operators
+
+# --- the terabyte ----------------------------------------------------------
+# 3 x 342Gi = 1026Gi raw, which is 1.00 TiB.
+#
+# Three and not four because the failure domain is the zone and this cluster
+# spans three of them: count 3 puts exactly one OSD in each, which is what a
+# 3-replica Ceph wants. 4 x 256Gi hits 1024Gi more neatly but lands 2/1/1
+# across the zones, leaving CRUSH to weight around the imbalance. Fewer than
+# three OSDs cannot satisfy 3-way replication at all.
+#
+# Ceph replicates 3x, so usable capacity is about 342Gi, not a terabyte. The
+# terabyte is what gets provisioned and billed.
+odf_exp_osd_count: 3
+odf_exp_osd_size: 342Gi
+odf_exp_storage_class: gp3-csi
+
+# Per-OSD pod resources. ODF's own minimum is 1 CPU / 5Gi.
+odf_exp_osd_cpu_request: "1"
+odf_exp_osd_cpu_limit: "2"
+odf_exp_osd_memory: 5Gi
+
+# --- what must exist at the end -------------------------------------------
+# The inverse of the MCG-only experiment this started as: there, Ceph
+# appearing was the failure. Here its absence is, along with any of the three
+# access modes being missing. A StorageCluster can report Ready with RGW
+# still absent, so object is checked separately from block and file.
+odf_exp_assert_ceph: true
+odf_exp_expected_storage_classes:
+  - ocs-storagecluster-ceph-rbd        # block
+  - ocs-storagecluster-cephfs          # file
+  - openshift-storage.noobaa.io        # object, via NooBaa

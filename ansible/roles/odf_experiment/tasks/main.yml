@@ -1,0 +1,275 @@
+---
+- name: Create the openshift-storage namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ odf_exp_namespace }}"
+        labels:
+          openshift.io/cluster-monitoring: "true"
+
+- name: Create the ODF OperatorGroup
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: openshift-storage-operatorgroup
+        namespace: "{{ odf_exp_namespace }}"
+      spec:
+        targetNamespaces:
+          - "{{ odf_exp_namespace }}"
+
+# startingCSV pins the install to 4.22.5-rhodf rather than whatever the
+# channel resolves to on the day.
+- name: Create the ODF Operator Subscription
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: odf-operator
+        namespace: "{{ odf_exp_namespace }}"
+      spec:
+        channel: "{{ odf_exp_channel }}"
+        name: odf-operator
+        source: "{{ odf_exp_catalog_source }}"
+        sourceNamespace: openshift-marketplace
+        installPlanApproval: Automatic
+        startingCSV: "{{ odf_exp_starting_csv }}"
+
+- name: Wait for the ODF Operator CSV to succeed
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: "{{ odf_exp_namespace }}"
+    name: "{{ odf_exp_starting_csv }}"
+  register: odf_exp_csv
+  until: >-
+    odf_exp_csv.resources | length > 0 and
+    odf_exp_csv.resources[0].status.phase | default('') == 'Succeeded'
+  retries: 60
+  delay: 20
+
+# ---------------------------------------------------------------------------
+# Nodes
+# ---------------------------------------------------------------------------
+# Ceph needs labelled nodes to place OSDs on; MCG-only did not. Excludes GPU
+# and control-plane nodes, matching the production role rather than inventing
+# a second policy.
+- name: Get eligible worker nodes
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/worker"
+      - "!node-role.kubernetes.io/gpu"
+      - "!node-role.kubernetes.io/master"
+      - "!node-role.kubernetes.io/control-plane"
+  register: odf_exp_workers
+
+- name: Select the storage nodes
+  ansible.builtin.set_fact:
+    odf_exp_nodes: >-
+      {{ odf_exp_workers.resources | map(attribute='metadata.name') | sort | list }}
+
+- name: Fail when there are too few nodes for 3-way replication
+  ansible.builtin.fail:
+    msg: >-
+      Found {{ odf_exp_nodes | length }} eligible worker(s)
+      ({{ odf_exp_nodes | join(', ') | default('none', true) }}), and
+      {{ odf_exp_osd_count }} OSDs are configured. Ceph replicates 3x across
+      the failure domain, so this needs at least 3 non-GPU, non-control-plane
+      workers. Add workers, or drop odf_exp_osd_count and accept a degraded
+      cluster deliberately.
+  when: odf_exp_nodes | length < 3
+
+- name: Label the storage nodes
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          cluster.ocs.openshift.io/openshift-storage: ""
+  loop: "{{ odf_exp_nodes }}"
+  loop_control:
+    label: "{{ item }}"
+
+# ---------------------------------------------------------------------------
+# StorageCluster
+# ---------------------------------------------------------------------------
+- name: Wait for the StorageCluster CRD
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: storageclusters.ocs.openshift.io
+  register: odf_exp_sc_crd
+  until: odf_exp_sc_crd.resources | length > 0
+  retries: 60
+  delay: 15
+
+# Full deployment: storageDeviceSets present and no multiCloudGateway
+# override, so ocs-operator builds Ceph, the RBD and CephFS pools, the RGW
+# object store, and points NooBaa's default backing store at RGW. Object,
+# block and file then all share these OSDs - there is no separate pv-pool.
+#
+# portable: true keeps the OSDs on PVCs rather than pinned local disks, so an
+# OSD can reschedule to another node and its EBS volume follows.
+- name: Create the StorageCluster
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: ocs.openshift.io/v1
+      kind: StorageCluster
+      metadata:
+        name: ocs-storagecluster
+        namespace: "{{ odf_exp_namespace }}"
+      spec:
+        managedResources:
+          cephObjectStores:
+            reconcileStrategy: manage
+        storageDeviceSets:
+          - name: ocs-deviceset
+            count: "{{ odf_exp_osd_count | int }}"
+            replica: 1
+            portable: true
+            dataPVCTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                volumeMode: Block
+                storageClassName: "{{ odf_exp_storage_class }}"
+                resources:
+                  requests:
+                    storage: "{{ odf_exp_osd_size }}"
+            resources:
+              requests:
+                cpu: "{{ odf_exp_osd_cpu_request }}"
+                memory: "{{ odf_exp_osd_memory }}"
+              limits:
+                cpu: "{{ odf_exp_osd_cpu_limit }}"
+                memory: "{{ odf_exp_osd_memory }}"
+
+# NooBaa still migrates its database to CNPG whether or not Ceph exists, so
+# the same 4.22.5 bug applies. Shared with the odf role rather than copied.
+- name: Repair NooBaa if the CNPG migration stranded it
+  ansible.builtin.include_role:
+    name: odf
+    tasks_from: noobaa_cnpg_repair
+  when: odf_fix_noobaa_cnpg | bool
+
+- name: Wait for NooBaa to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: "{{ odf_exp_namespace }}"
+    name: noobaa
+  register: odf_exp_nb
+  until: >-
+    odf_exp_nb.resources | length > 0 and
+    odf_exp_nb.resources[0].status.phase | default('') == 'Ready'
+  retries: 60
+  delay: 15
+
+- name: Wait for the StorageCluster to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: ocs.openshift.io/v1
+    kind: StorageCluster
+    namespace: "{{ odf_exp_namespace }}"
+    name: ocs-storagecluster
+  register: odf_exp_sc
+  until: >-
+    odf_exp_sc.resources | length > 0 and
+    odf_exp_sc.resources[0].status.phase | default('') == 'Ready'
+  retries: 60
+  delay: 30
+
+# ---------------------------------------------------------------------------
+# Assertions - the experiment's actual result
+# ---------------------------------------------------------------------------
+- name: Read the Ceph cluster
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: ceph.rook.io/v1
+    kind: CephCluster
+    namespace: "{{ odf_exp_namespace }}"
+  register: odf_exp_ceph
+  failed_when: false
+
+- name: Read the OSD device-set PVCs
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: PersistentVolumeClaim
+    namespace: "{{ odf_exp_namespace }}"
+  register: odf_exp_pvcs
+
+- name: Read the storage classes
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+  register: odf_exp_scs
+
+- name: Collect anything missing
+  ansible.builtin.set_fact:
+    odf_exp_problems: >-
+      {{ (([] if (odf_exp_ceph.resources | default([]) | length) > 0
+            else ['no CephCluster - Ceph was not deployed'])
+          + ([] if ceph_health in ['HEALTH_OK', 'HEALTH_WARN']
+            else ['CephCluster health is ' ~ (ceph_health | default('unknown'))])
+          + ([] if (osd_pvcs | length) == (odf_exp_osd_count | int)
+            else [(osd_pvcs | length | string) ~ ' OSD device-set PVC(s), expected '
+                  ~ (odf_exp_osd_count | string)])
+          + (odf_exp_expected_storage_classes
+             | difference(odf_exp_scs.resources | default([])
+                          | map(attribute='metadata.name') | list)
+             | map('regex_replace', '^', 'missing storage class ') | list)) }}
+  vars:
+    osd_pvcs: >-
+      {{ odf_exp_pvcs.resources | default([]) | map(attribute='metadata.name')
+         | select('match', '^ocs-deviceset') | list }}
+    ceph_health: >-
+      {{ (odf_exp_ceph.resources | default([{}]))[0].status.ceph.health | default('unknown') }}
+
+- name: Fail when the deployment is incomplete
+  ansible.builtin.fail:
+    msg: "{{ ['ODF did not come up complete:'] + odf_exp_problems }}"
+  when:
+    - odf_exp_assert_ceph | bool
+    - odf_exp_problems | length > 0
+
+- name: Report what was built
+  ansible.builtin.debug:
+    msg:
+      - "ODF {{ odf_exp_sc.resources[0].status.version | default('?') }} is ready in {{ odf_exp_namespace }}"
+      - "Ceph health     : {{ (odf_exp_ceph.resources | default([{}]))[0].status.ceph.health | default('?') }}"
+      - "OSDs            : {{ odf_exp_osd_count }} x {{ odf_exp_osd_size }} = {{ (odf_exp_osd_count | int) * (odf_exp_osd_size | regex_replace('Gi$', '') | int) }}Gi raw gp3"
+      - "usable          : ~{{ ((odf_exp_osd_count | int) * (odf_exp_osd_size | regex_replace('Gi$', '') | int) / 3) | round | int }}Gi after 3x replication"
+      - "storage nodes   : {{ odf_exp_nodes | join(', ') }}"
+      - "block           : ocs-storagecluster-ceph-rbd"
+      - "file            : ocs-storagecluster-cephfs"
+      - "object          : openshift-storage.noobaa.io, backed by the Ceph object store"
+      - "S3 endpoint     : https://s3-{{ odf_exp_namespace }}.{{ ocp_apps_domain }}"
