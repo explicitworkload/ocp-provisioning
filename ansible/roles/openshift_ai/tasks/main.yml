@@ -144,8 +144,26 @@
             managementState: Managed
           trainingoperator:
             managementState: Managed
+          # Kubeflow Trainer v2, and the one thing keeping the whole
+          # DataScienceCluster out of Ready. It needs the JobSet operator:
+          #   controller=trainer conditionType=DependenciesAvailable
+          #   message="JobSet operator not installed, please install it first"
+          # Nothing in roles/operators subscribes to it, and there is no
+          # jobset packagemanifest in any catalog on these clusters, so it is
+          # not a subscription away either. Managed here leaves the operator
+          # re-reconciling every 30s forever and the DSC reporting
+          #   Ready=False: Some components are not ready: trainer
+          # while every other component is fine.
+          #
+          # trainingoperator above is the v1 Training Operator, is Ready, and
+          # is unaffected. To enable v2: get JobSet into a catalog, subscribe
+          # it, then flip this back.
+          #
+          # The DSC condition only says "pre-conditions not met, see status
+          # conditions for details" and never names JobSet - that came from
+          # the rhods-operator log.
           trainer:
-            managementState: Managed
+            managementState: Removed
           sparkoperator:
             managementState: Removed
           feastoperator:
