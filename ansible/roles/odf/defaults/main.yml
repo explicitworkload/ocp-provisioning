@@ -61,3 +61,58 @@ odf_noobaa_tables:
 odf_noobaa_pv_pool_volumes: 3
 odf_noobaa_pv_pool_size: 50Gi
 
+
+# --- Resource requests -----------------------------------------------------
+# ODF's defaults are sized for production throughput and are wildly larger
+# than what it actually uses when idle. Measured on a 3-worker sandbox:
+#
+#     requested in openshift-storage : 21124m
+#     actually used                  :   547m      (39x over-request)
+#     node CPU reported by the scheduler : 93-99%
+#     node CPU actually in use           :  4-7%
+#
+# The scheduler counts requests, not usage, so three m5a.2xlarge storage
+# workers (7500m each, 22500m total) are declared full and noobaa-core -
+# which wants 999m + 200m - sits Pending forever. The StorageCluster then
+# never leaves NoobaaInitializing and the run dies thirty minutes later.
+#
+# Requests are lowered; limits are left generous, so nothing is throttled
+# below what it needs and a pod can still burst. This is the right trade for
+# a lab: the cost is that under genuine sustained load these pods have weaker
+# scheduling guarantees and can be starved by noisier neighbours. On hardware
+# sized for production, set odf_component_resources and odf_osd_resources to
+# {} to get ODF's own defaults back.
+odf_component_resources:
+  mon:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}
+  mgr:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}
+  # The single biggest consumer at its default: 2 CephFS MDS at 2050m each
+  # is 4100m of the 22500m available, to use about 70m.
+  mds:
+    requests: {cpu: "500m", memory: "2Gi"}
+    limits: {cpu: "4", memory: "8Gi"}
+  rgw:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}
+  noobaa-core:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}
+  noobaa-db:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}
+
+# OSDs do real work once data is flowing, so they keep more than the rest.
+odf_osd_resources:
+  requests: {cpu: "500m", memory: "2Gi"}
+  limits: {cpu: "2", memory: "5Gi"}
+
+# NooBaa's S3 endpoints autoscale. The default floor requests 999m each.
+odf_endpoint_spec:
+  minCount: 1
+  maxCount: 2
+  resources:
+    requests: {cpu: "250m", memory: "1Gi"}
+    limits: {cpu: "2", memory: "4Gi"}

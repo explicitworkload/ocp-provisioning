@@ -136,29 +136,23 @@
       metadata:
         name: ocs-storagecluster
         namespace: "{{ odf_namespace }}"
-      spec:
-        storageDeviceSets:
-          - name: ocs-deviceset
-            count: "{{ odf_nodes | length }}"
-            replica: "{{ odf_device_set_replica }}"
-            dataPVCTemplate:
-              spec:
-                accessModes:
-                  - ReadWriteOnce
-                resources:
-                  requests:
-                    storage: "{{ odf_storage_size }}"
-                storageClassName: "{{ odf_storage_class }}"
-                volumeMode: Block
-            resources:
-              requests:
-                cpu: "1"
-                memory: 5Gi
-              limits:
-                cpu: "2"
-                memory: 5Gi
-            portable: true
-            placement: {}
+      spec: >-
+        {{ {'storageDeviceSets': [{
+               'name': 'ocs-deviceset',
+               'count': odf_nodes | length,
+               'replica': odf_device_set_replica,
+               'portable': true,
+               'placement': {},
+               'dataPVCTemplate': {'spec': {
+                   'accessModes': ['ReadWriteOnce'],
+                   'resources': {'requests': {'storage': odf_storage_size}},
+                   'storageClassName': odf_storage_class,
+                   'volumeMode': 'Block'}},
+               'resources': odf_osd_resources}]}
+           | combine({'resources': odf_component_resources}
+                     if odf_component_resources else {})
+           | combine({'multiCloudGateway': {'endpoints': odf_endpoint_spec}}
+                     if odf_endpoint_spec else {}) }}
 
 - name: Wait for NooBaa CRD
   kubernetes.core.k8s_info:
