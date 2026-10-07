@@ -1,8 +1,21 @@
 #!/bin/bash
-# Wrapper script to run the Ansible playbook.
+# Wrapper script to run an Ansible playbook.
 # Uses 'script' to provide blocking IO that Ansible requires.
+#
+# Defaults to site.yml, the full cluster build. Override for the experiments,
+# which deploy one thing and must not be reached by a bare ./run.sh:
+#
+#     PLAYBOOK=odf-experiment.yml ./run.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+
+PLAYBOOK="${PLAYBOOK:-site.yml}"
+if [[ ! -f "$PLAYBOOK" ]]; then
+  echo "No such playbook: $PLAYBOOK" >&2
+  echo "Available:" >&2
+  ls -1 ./*.yml 2>/dev/null | grep -vE 'requirements\.yml' | sed 's|^\./|  |' >&2
+  exit 1
+fi
 
 # Activate the project venv if present, so the script works from any shell
 # rather than only an already-activated one.
@@ -36,7 +49,7 @@ ansible-galaxy collection install -r requirements.yml 2>/dev/null || true
 # failed run reports success on Linux. printf %q quotes each argument so the
 # shell re-parse cannot mangle values containing spaces or metacharacters.
 if [[ "$(uname)" == "Darwin" ]]; then
-  script -q /dev/null ansible-playbook site.yml "$@"
+  script -q /dev/null ansible-playbook "$PLAYBOOK" "$@"
 else
   # Build the argument suffix only when there is something to quote: bash's
   # printf emits '' for a %q with no corresponding argument, so a bare
@@ -46,5 +59,5 @@ else
   if (( $# )); then
     extra=" $(printf '%q ' "$@")"
   fi
-  script -qe -c "ansible-playbook site.yml$extra" /dev/null
+  script -qe -c "ansible-playbook $(printf %q "$PLAYBOOK")$extra" /dev/null
 fi
