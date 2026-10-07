@@ -1,0 +1,33 @@
+---
+# ODF 4.22.5 with the Multicloud Object Gateway ONLY - no Ceph, no OSDs, no
+# RBD or CephFS storage classes. The StorageCluster carries no
+# storageDeviceSets and sets multiCloudGateway.reconcileStrategy: standalone,
+# which is what tells ocs-operator to skip the Ceph cluster entirely.
+odf_mcg_namespace: openshift-storage
+
+# Pinned rather than floating. stable-4.22 resolves to 4.22.5-rhodf today, but
+# this is an experiment against a specific build - the MCG CNPG migration bug
+# is version-scoped to it - so the version is named and not inferred.
+odf_mcg_channel: stable-4.22
+odf_mcg_starting_csv: odf-operator.v4.22.5-rhodf
+odf_mcg_catalog_source: redhat-operators
+
+# NooBaa's own postgres. Small; this is metadata, not object data.
+odf_mcg_db_storage_class: gp3-csi
+
+# --- the 1 TB of object capacity ------------------------------------------
+# Provisioned as PVCs through the AWS EBS CSI driver, which creates one gp3
+# volume per pool pod and attaches it to whichever worker that pod lands on.
+# Nothing is declared on the MachineSets, so no worker is replaced.
+#
+# 4 x 256Gi = 1024Gi raw. NooBaa replicates across the pool's agents, so
+# usable object capacity is a fraction of that, not the whole terabyte.
+# Scaling numVolumes UP is supported; NooBaa does not support scaling it down.
+odf_mcg_storage_class: gp3-csi
+odf_mcg_pv_pool_volumes: 4
+odf_mcg_pv_pool_size: 256Gi
+
+# Fail the run if a CephCluster or OSD device set appears. The entire point of
+# this experiment is that neither should, and a silent full deployment would
+# look like success while costing 1.5 TB of OSDs nobody asked for.
+odf_mcg_assert_no_ceph: true

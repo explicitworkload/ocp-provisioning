@@ -1,0 +1,86 @@
+---
+# EXPERIMENT: ODF 4.22.5 with the Multicloud Object Gateway only.
+#
+# Separate from site.yml on purpose. This is not a trimmed cluster build - it
+# deploys one thing, asserts that Ceph did NOT come with it, and stops. Run it
+# against a fresh cluster:
+#
+#     oc login ...
+#     ansible-playbook mcg.yml
+#
+# or pin the target so a drifting kubeconfig cannot send it elsewhere:
+#
+#     ansible-playbook mcg.yml -e ocp_expected_api=sandbox1234
+- name: ODF 4.22.5, Multicloud Object Gateway only
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    # Same read-only preflight as site.yml, and for the same reason:
+    # ocp_context defaults to empty, so what this targets can change without
+    # anyone editing the repo. Name the cluster before touching it.
+    - name: Resolve the kubeconfig context when none is pinned
+      ansible.builtin.command:
+        cmd: oc config current-context
+      register: current_context
+      changed_when: false
+      when: ocp_context | length == 0
+
+    - name: Record the context this run will use
+      ansible.builtin.set_fact:
+        ocp_context_resolved: >-
+          {{ ocp_context if ocp_context | length > 0
+             else current_context.stdout | trim }}
+
+    - name: Get cluster infrastructure
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+      register: cluster_infra
+
+    - name: Get cluster ingress domain
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: cluster_ingress
+
+    - name: Set cluster facts
+      ansible.builtin.set_fact:
+        ocp_cluster_name: "{{ cluster_infra.resources[0].status.infrastructureName }}"
+        ocp_api_url: "{{ cluster_infra.resources[0].status.apiServerURL }}"
+        ocp_apps_domain: "{{ cluster_ingress.resources[0].spec.domain }}"
+
+    - name: Count cluster nodes
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: Node
+      register: cluster_nodes
+
+    - name: Refuse to run against an unexpected cluster
+      ansible.builtin.fail:
+        msg: >-
+          ocp_expected_api is "{{ ocp_expected_api }}", but this run targets
+          {{ ocp_api_url }} via context {{ ocp_context_resolved }}. Refusing
+          before anything is changed.
+      when:
+        - ocp_expected_api | default('') | length > 0
+        - ocp_expected_api not in ocp_api_url
+
+    - name: Show the cluster about to be modified
+      ansible.builtin.debug:
+        msg:
+          - "context : {{ ocp_context_resolved }}"
+          - "api     : {{ ocp_api_url }}"
+          - "infra   : {{ ocp_cluster_name }}"
+          - "nodes   : {{ cluster_nodes.resources | length }}"
+          - "about to install ODF {{ odf_mcg_starting_csv | default('4.22.5') }}, MCG only, no Ceph"
+
+  roles:
+    - role: odf_mcg
+      tags: [mcg, odf]
