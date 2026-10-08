@@ -214,6 +214,39 @@
           mode: openshift-network
         managementState: Managed
 
+# The netobserv operator lives in openshift-operators but has to read the
+# LokiStack's TLS secrets, which the Loki Operator creates here. Without
+# these it reconciles most of the way and then reports
+#   Ready=False: 6 ready components, 2 with failure, 1 degraded
+#   secrets "loki-query-frontend-http" is forbidden
+# while the console still draws flows, so the UI looks healthy and only the
+# FlowCollector's own status says otherwise. The operator names these exact
+# ClusterRoles in its error message; they ship with it.
+- name: Let the netobserv operator read the LokiStack certificates
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ netobserv_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: "{{ item.role }}"
+      subjects:
+        - kind: ServiceAccount
+          name: netobserv-controller-manager
+          namespace: openshift-operators
+  loop:
+    - {name: secret-watcher, role: netobserv-secret-watcher}
+    - {name: secret-creator, role: netobserv-secret-creator}
+  loop_control:
+    label: "{{ item.name }} -> {{ item.role }}"
+
 - name: Wait for the LokiStack to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
