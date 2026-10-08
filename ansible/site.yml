@@ -132,6 +132,18 @@
     - role: operators
       tags: [operators]
 
+    # Right after the operators. ODF publishes ocs-storagecluster-ceph-rbd
+    # and -cephfs and backs NooBaa, which quay, openrag, opensearch and
+    # netobserv's Loki all consume - so everything that needs storage can
+    # simply assume it exists rather than each role ordering around it.
+    #
+    # Before gpu_worker is fine: the odf role excludes GPU nodes by the
+    # node-role.kubernetes.io/gpu label, and the GPU MachineSet stamps that
+    # at birth. Either the GPU node does not exist yet or it is already
+    # labelled, so the device-set count comes out the same either way.
+    - role: odf
+      tags: [odf]
+
     - role: service_mesh
       tags: [service-mesh]
 
@@ -140,9 +152,6 @@
 
     - role: nfd
       tags: [nfd, gpu]
-
-    - role: odf
-      tags: [odf]
 
     # After odf, not before. Its Loki stores flow records in a NooBaa bucket
     # claimed through an ObjectBucketClaim, and that CRD arrives with ODF.
