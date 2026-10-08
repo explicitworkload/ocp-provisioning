@@ -98,10 +98,36 @@
       gaveup=0
       case "$msg" in *"account not found"*) gaveup=1 ;; esac
 
-      echo "old=${old:-?} new=${new:-?} gaveup=$gaveup" >&2
+      # The three signals above are all true during a perfectly normal
+      # migration as well. NooBaa repoints core at CNPG before it has finished
+      # copying, so the operator reports "account not found" for a while, and
+      # CNPG legitimately has no system row yet. sandbox127 was declared
+      # stranded in exactly that window, with CNPG healthy, 2/2 instances, and
+      # the schema half built.
+      #
+      # So require the schema to be finished as well. A target still missing
+      # tables the source has is a migration in progress, whatever the
+      # operator is complaining about meanwhile. If it never finishes, the
+      # poll runs out of retries and reaches no verdict, which leaves the
+      # repair unrun and the StorageCluster wait to report it - the same
+      # fallback as every other inconclusive case here.
+      Q="select tablename from pg_tables where schemaname='public' and tablename = any(string_to_array('{{ odf_noobaa_tables | join(',') }}', ',')) order by tablename"
+      tables() {
+        $OC exec "$1" ${2:+-c "$2"} -- psql -U postgres -d nbcore -t -A -c "$Q" </dev/null 2>/dev/null
+      }
+      src=$(tables noobaa-db-pg-0)
+      tgt=$(tables "$primary" postgres)
+      missing=$(comm -23 <(echo "$src") <(echo "$tgt") | tr '\n' ' ')
+      # An unreadable source reads as an empty list, and an empty list is
+      # indistinguishable from "nothing missing" - which would declare
+      # STRANDED on a psql failure. Force a wait instead.
+      [ -z "$src" ] && missing='(source unreadable)'
+
+      echo "old=${old:-?} new=${new:-?} gaveup=$gaveup missing=${missing:-none}" >&2
       if [ "${new:-0}" -ge 1 ] 2>/dev/null; then
         echo HEALTHY
-      elif [ "$old" = "1" ] && [ "$new" = "0" ] && [ "$gaveup" = "1" ]; then
+      elif [ "$old" = "1" ] && [ "$new" = "0" ] && [ "$gaveup" = "1" ] \
+           && [ -z "$missing" ]; then
         echo STRANDED
       else
         echo WAIT
@@ -173,41 +199,6 @@
           CNPG to be empty. Repair manually.
       when: nb_counts.stdout.split() | map('int') | list != [1, 0]
 
-    - name: Scale down the NooBaa writers
-      kubernetes.core.k8s:
-        context: "{{ ocp_context or omit }}"
-        state: patched
-        kind: "{{ item.kind }}"
-        api_version: apps/v1
-        name: "{{ item.name }}"
-        namespace: "{{ odf_namespace }}"
-        definition:
-          spec:
-            replicas: 0
-      loop:
-        - {kind: Deployment, name: noobaa-operator}
-        - {kind: StatefulSet, name: noobaa-core}
-      loop_control:
-        label: "{{ item.name }}"
-
-    - name: Wait for noobaa-core to stop
-      kubernetes.core.k8s_info:
-        context: "{{ ocp_context or omit }}"
-        api_version: v1
-        kind: Pod
-        namespace: "{{ odf_namespace }}"
-        name: noobaa-core-0
-      register: nb_core_pod
-      until: nb_core_pod.resources | length == 0
-      retries: 20
-      delay: 10
-
-    - name: Create a temporary file for the dump
-      ansible.builtin.tempfile:
-        state: file
-        suffix: .sql
-      register: nb_dump
-
     # NooBaa creates the CNPG schema progressively, so the target is a moving
     # target for the first few minutes. A repair that started ~3 minutes after
     # the CNPG pods appeared hit
@@ -219,6 +210,13 @@
     # aborts the whole repair. Wait for the target schema to catch up with the
     # source instead of racing it. Comparing against the source rather than a
     # hardcoded count means this stays correct if a build changes the schema.
+    #
+    # BEFORE the writers are scaled down, not after. noobaa-core is what
+    # creates these tables, so waiting for them with core stopped waits for
+    # work nobody can do: on sandbox127 this sat at 16 of 29 tables and burned
+    # its whole budget before aborting. Waiting here also means a schema that
+    # never completes costs nothing - the repair gives up with NooBaa still
+    # running and still free to finish on its own.
     - name: Wait for the CNPG schema to match the StatefulSet database
       ansible.builtin.shell:
         executable: /bin/bash
@@ -263,6 +261,41 @@
       when: >-
         'systems' not in (nb_tables | split(','))
         or 'accounts' not in (nb_tables | split(','))
+
+    - name: Scale down the NooBaa writers
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: patched
+        kind: "{{ item.kind }}"
+        api_version: apps/v1
+        name: "{{ item.name }}"
+        namespace: "{{ odf_namespace }}"
+        definition:
+          spec:
+            replicas: 0
+      loop:
+        - {kind: Deployment, name: noobaa-operator}
+        - {kind: StatefulSet, name: noobaa-core}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Wait for noobaa-core to stop
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ odf_namespace }}"
+        name: noobaa-core-0
+      register: nb_core_pod
+      until: nb_core_pod.resources | length == 0
+      retries: 20
+      delay: 10
+
+    - name: Create a temporary file for the dump
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .sql
+      register: nb_dump
 
     - name: Dump the stranded system from the StatefulSet database
       ansible.builtin.shell:
