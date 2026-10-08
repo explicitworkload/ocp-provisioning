@@ -65,13 +65,7 @@ evalhub_collections: [leaderboard-v2, safety-and-fairness-v1]
 deploy_kuadrant: true
 kuadrant_namespace: kuadrant-system
 
-# Where extra AI asset endpoints are published. RHOAI finds them by the
-# gen-ai-aa-* ConfigMap name, so the namespace only has to be one the
-# dashboard can read; model_namespace matches where the LiteLLM-backed
-# endpoint already lives.
-rhoai_ai_endpoint_namespace: "{{ model_namespace | default('qwen3-4b') }}"
-
-# Extra AI asset endpoints. Empty here so group_vars/all.yml can carry a
-# commented example and nothing else - uncommenting it is then the whole
-# edit, with no leftover [] to trip over.
-rhoai_extra_ai_endpoints: []
+# rhoai_extra_ai_endpoints and rhoai_ai_endpoint_namespace used to live here.
+# They moved to roles/litellm/defaults when publishing moved to the litellm
+# role - the endpoints are routed through LiteLLM now, so they need its
+# virtual key, which does not exist while this role is running.

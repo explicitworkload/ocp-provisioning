@@ -290,22 +290,63 @@
     name: "{{ model_name }}-sa-token"
   register: qwen_token_secret
 
+# One declaration per endpoint. litellm_extra_models is the list; everything
+# in it is registered as a model here, and published to RHOAI's Gen AI
+# playground as an AI asset endpoint unless the entry opts out. There is no
+# second list to keep in step - an endpoint has one base_url, one key and one
+# set of models wherever it is being consumed from.
+#
+# rhoai_extra_ai_endpoints is the old name for the same thing, accepted so a
+# run-time vars file written against it keeps working. Undocumented, and
+# merged by name, so declaring an endpoint in both is harmless.
+- name: Gather the declared extra endpoints
+  ansible.builtin.set_fact:
+    litellm_all_extras: >-
+      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+         | unique(attribute='name') | list }}
+
 # Endpoints with no key are dropped rather than registered with an empty
 # one: LiteLLM would accept the model and every call to it would 401.
 - name: Select the usable extra endpoints
   ansible.builtin.set_fact:
     litellm_usable_extras: >-
-      {{ litellm_extra_models | selectattr('api_key', 'defined')
+      {{ litellm_all_extras | selectattr('api_key', 'defined')
          | rejectattr('api_key', 'equalto', '') | list }}
 
 - name: Report extra endpoints skipped for want of a key
   ansible.builtin.debug:
     msg: >-
-      Extra LiteLLM endpoint "{{ item.name }}" has no api_key and is being
-      skipped; its models will not be served. Supply one at run time.
-  loop: "{{ litellm_extra_models | rejectattr('name', 'in', litellm_usable_extras | map(attribute='name') | list) | list }}"
+      Extra endpoint "{{ item.name }}" has no api_key and is being skipped;
+      its models will not be served, nor published to the playground.
+      Supply one at run time.
+  loop: >-
+    {{ litellm_all_extras
+       | rejectattr('name', 'in', litellm_usable_extras | map(attribute='name') | list)
+       | list }}
   loop_control:
     label: "{{ item.name }}"
+
+# Published by default, because an endpoint worth proxying is usually worth
+# offering in the playground. Embeddings endpoints are the exception and are
+# excluded without being asked to: the playground is a chat UI and has
+# nothing to do with an embeddings model. publish_as_ai_asset overrides
+# either way.
+- name: Select the endpoints to publish as AI assets
+  ansible.builtin.set_fact:
+    litellm_publishable_endpoints: >-
+      {{ litellm_usable_extras
+         | rejectattr('name', 'in', litellm_unpublished_names) | list }}
+  vars:
+    litellm_unpublished_names: >-
+      {{ litellm_usable_extras
+         | rejectattr('publish_as_ai_asset', 'defined')
+         | selectattr('mode', 'defined')
+         | selectattr('mode', 'equalto', 'embedding')
+         | map(attribute='name') | list
+         + (litellm_usable_extras
+            | selectattr('publish_as_ai_asset', 'defined')
+            | rejectattr('publish_as_ai_asset')
+            | map(attribute='name') | list) }}
 
 - name: Create LiteLLM API key secret
   kubernetes.core.k8s:
@@ -679,46 +720,24 @@
         api_key: "{{ litellm_vkey.json.key }}"
   when: existing_vkey_secret.resources | length == 0
 
-- name: Create AI Asset Endpoint for LiteLLM models
+# Added in c9df4cc, on the mistaken belief that qwen3-4b was not reaching the
+# playground. It was, via its InferenceService - so this listed it a second
+# time, as a row with status Unknown and no description, and did the same for
+# the Azure model. Removed here as well as from the repo so clusters built
+# with that commit lose the duplicate on the next run.
+- name: Remove the old catch-all AI asset endpoint
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
-    state: present
-    apply: true
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: gen-ai-aa-custom-model-endpoints
-        namespace: "{{ model_namespace }}"
-      data:
-        config.yaml: |
-          providers:
-            inference:
-            - provider_id: endpoint-1
-              provider_type: remote::openai
-              config:
-                base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
-                allowed_models:
-                - {{ model_name }}
-          {% if litellm_azure_available | bool %}
-                - {{ litellm_azure_model_name }}
-          {% endif %}
-                custom_gen_ai:
-                  api_key:
-                    secretRef:
-                      name: endpoint-api-key-1
-                      key: api_key
-          registered_resources:
-            models:
-            - provider_id: endpoint-1
-              model_id: {{ model_name }}
-              model_type: llm
-              metadata:
-                display_name: {{ model_name }}
-          {% if litellm_azure_available | bool %}
-            - provider_id: endpoint-1
-              model_id: {{ litellm_azure_model_name }}
-              model_type: llm
-              metadata:
-                display_name: {{ litellm_azure_model_name }}
-          {% endif %}
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ model_namespace }}"
+    name: gen-ai-aa-custom-model-endpoints
+
+- name: Publish the extra endpoints as AI assets
+  ansible.builtin.include_tasks:
+    file: ai_endpoints.yml
+    apply:
+      tags: [litellm, ai-endpoints]
+  when: litellm_publishable_endpoints | length > 0
+  tags: [litellm, ai-endpoints]

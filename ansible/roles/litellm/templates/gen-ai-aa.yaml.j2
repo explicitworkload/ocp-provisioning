@@ -1,18 +1,23 @@
 {#
   One AI asset endpoint, as RHOAI's Gen AI playground expects it.
 
+  base_url is LiteLLM, not the upstream the entry declares: the same models
+  are registered in LiteLLM's config.yaml, so the playground, OpenRAG, Dev
+  Spaces and the Ops Dashboard all reach them through one proxy with one key.
+  The upstream URL and its key stay in litellm-secrets.
+
   A template rather than an inline expression because the models list needs a
   loop, and Jinja has no list comprehension - building it inline failed with
   "expected token ',', got 'for'".
 
-  `item` is the entry from rhoai_extra_ai_endpoints.
+  `item` is the entry from litellm_publishable_endpoints.
 -#}
 providers:
   inference:
     - provider_id: {{ item.name }}
       provider_type: remote::openai
       config:
-        base_url: {{ item.base_url }}
+        base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
         allowed_models:
 {% for m in item.models %}
           - {{ m }}

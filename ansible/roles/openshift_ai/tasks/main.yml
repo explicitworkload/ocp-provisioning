@@ -954,11 +954,3 @@
             "url": "http://openshift-mcp-server.{{ mcp_server_namespace }}.svc.cluster.local:8080/mcp",
             "description": "MCP server for Kubernetes and OpenShift cluster operations"
           }
-
-- name: Publish extra AI asset endpoints
-  ansible.builtin.include_tasks:
-    file: ai_endpoints.yml
-    apply:
-      tags: [openshift-ai, ai-endpoints]
-  when: rhoai_extra_ai_endpoints | length > 0
-  tags: [openshift-ai, ai-endpoints]

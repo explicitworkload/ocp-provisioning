@@ -1,0 +1,101 @@
+---
+# Publishes the extra endpoints as AI assets in the RHOAI Gen AI playground -
+# routed through LiteLLM rather than straight at the upstream. Which of them
+# get here is decided by the caller: everything in litellm_extra_models that
+# has a key and has not opted out with publish_as_ai_asset: false, embeddings
+# endpoints excepted.
+#
+# Lives in the litellm role, not openshift_ai, because of the key: the
+# ConfigMap points at LiteLLM's service and so has to carry LiteLLM's virtual
+# key, which does not exist until this role has run. Published from
+# openshift_ai it would reference a Secret that is not there yet and RHOAI
+# would show the endpoint as broken for the rest of the run.
+#
+# RHOAI discovers these by NAME: a ConfigMap called gen-ai-aa-* holding a
+# config.yaml. There is no label selector, which is why the name is built
+# rather than free-form.
+#
+# Endpoints with no api_key never get here - the caller filters them out, and
+# warns - because an endpoint in the picker that 401s on first use is worse
+# than one that is absent. Keys are never defaulted in the repo; supply them
+# at run time, see group_vars/all.yml.
+
+# Either the key this run generated, or the one already on the cluster. Both
+# branches are set up by the virtual-key tasks in main.yml immediately above.
+- name: Note the LiteLLM virtual key the endpoints will use
+  ansible.builtin.set_fact:
+    litellm_vkey_value: >-
+      {{ litellm_vkey.json.key
+         if (existing_vkey_secret.resources | length == 0)
+         else (existing_vkey_secret.resources[0].data.api_key | b64decode) }}
+  no_log: true
+
+# An endpoint can name any namespace it likes and none of them are guaranteed
+# to exist. Labelled as a Data Science Project, which is what the namespace
+# needs to be for the dashboard to show anything in it - apply merges, so it
+# costs nothing where model_serving has already labelled it.
+- name: Create the namespaces the endpoints are published to
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+  loop: >-
+    {{ litellm_publishable_endpoints
+       | map(attribute='namespace')
+       | map('default', rhoai_ai_endpoint_namespace, true)
+       | unique | list }}
+  loop_control:
+    label: "{{ item }}"
+
+# The endpoint's own upstream key is not what goes here - that one is held by
+# LiteLLM, in litellm-secrets, and never leaves the litellm namespace. What
+# RHOAI needs is a key for the proxy in front of it.
+- name: Give each endpoint the virtual key for LiteLLM
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "gen-ai-key-{{ item.name }}"
+        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+      type: Opaque
+      stringData:
+        api_key: "{{ litellm_vkey_value }}"
+  loop: "{{ litellm_publishable_endpoints }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Publish each endpoint as an AI asset
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "gen-ai-aa-{{ item.name }}"
+        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+      data:
+        config.yaml: "{{ lookup('template', 'gen-ai-aa.yaml.j2') }}"
+  loop: "{{ litellm_publishable_endpoints }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.models | length }} model(s))"
+
+- name: Report the published endpoints
+  ansible.builtin.debug:
+    msg: >-
+      {{ litellm_publishable_endpoints | length }} AI asset endpoint(s)
+      published via LiteLLM:
+      {{ litellm_publishable_endpoints | map(attribute='name') | join(', ') }}

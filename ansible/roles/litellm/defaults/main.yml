@@ -35,12 +35,25 @@ litellm_embedding_model_name: bge-small-en-v1.5
 litellm_embedding_model_id: BAAI/bge-small-en-v1.5
 litellm_embedding_api_base: http://text-embeddings.openrag.svc.cluster.local:8080/v1
 
-# Extra OpenAI-compatible endpoints to register as models in LiteLLM, which
-# is what makes them appear in OpenRAG, Dev Spaces/Continue and the Ops
-# Dashboard at once - all three ask LiteLLM what it serves. Same shape as
-# rhoai_extra_ai_endpoints, which is a different thing: that publishes to
-# RHOAI's Gen AI playground and does not reach LiteLLM.
+# Extra OpenAI-compatible endpoints. Each is registered as a model in
+# LiteLLM - which is what makes it appear in OpenRAG, Dev Spaces/Continue
+# and the Ops Dashboard, since all three ask LiteLLM what it serves - and
+# published to RHOAI's Gen AI playground as an AI asset endpoint pointing
+# back at LiteLLM. See group_vars/all.yml for the per-entry keys.
 #
 # Keys go into the litellm-secrets Secret and are referenced from config.yaml
 # as os.environ/EXTRA_KEY_<NAME>, so they are never written into a ConfigMap.
 litellm_extra_models: []
+
+# The former name for the list above, from when the playground endpoints
+# were published separately by the openshift_ai role and never reached
+# LiteLLM. Merged with it by name so a run-time vars file written against
+# the old name still works; deliberately not documented in all.yml, where
+# a second list asking for the same base_url, key and models would only be
+# something to keep in step.
+rhoai_extra_ai_endpoints: []
+
+# Where an endpoint is published when it does not name a namespace itself.
+# RHOAI finds AI assets by the gen-ai-aa-* ConfigMap name, so this only has
+# to be a namespace the dashboard can read.
+rhoai_ai_endpoint_namespace: "{{ model_namespace | default('qwen3-4b') }}"

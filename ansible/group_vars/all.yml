@@ -190,54 +190,50 @@ external_dns_cloudflare_proxied: true
 #
 # -------------------------------------------------------------------
 
-# --- Extra AI asset endpoints ----------------------------------------------
-# External OpenAI-compatible model APIs to offer in the RHOAI Gen AI
-# playground alongside the cluster's own models - Red Hat's MaaS, another
-# cluster's LiteLLM, anything that speaks /v1/chat/completions.
+# --- Extra model endpoints -------------------------------------------------
+# External OpenAI-compatible model APIs to offer alongside the cluster's own
+# models - Red Hat's MaaS, another cluster's LiteLLM, anything that speaks
+# /v1/chat/completions.
+#
+# Declared once, here. Each endpoint is registered as a model in LiteLLM,
+# which is what puts it in OpenRAG, Dev Spaces/Continue and the Ops
+# Dashboard - all three ask LiteLLM what it serves - and is published to
+# RHOAI's Gen AI playground as an AI asset endpoint pointing back at
+# LiteLLM. One base_url, one key, one list of models, one proxy in front of
+# them all.
+#
+# Do NOT list a model that already has an InferenceService on this cluster.
+# RHOAI lists those from the InferenceService itself, with a description and
+# a real status; naming it here as well puts a second, statusless row beside
+# it in the AI asset endpoints table.
 #
 # NEVER put a real api_key here. This repo is public, and a committed key is
 # a key to rotate. Leave it empty and supply it at run time:
 #
-#     ./run.sh --tags ai-endpoints -e @$HOME/.openshift-ai-endpoints.yml
+#     ./run.sh --tags litellm -e @$HOME/.openshift-ai-endpoints.yml
 #
 # where that file, kept outside the repo, holds the same structure with the
 # keys filled in. An endpoint with no key is skipped with a warning rather
 # than published half-configured, because one that 401s on first use is
 # worse than one that is absent.
 #
-# base_url must be the OpenAI-compatible root, the part ending in /v1 - the
-# same URL the provider's own curl example posts /chat/completions to.
-# models are the ids as that endpoint serves them.
+# Per endpoint:
+#   name       short id; becomes the provider id and the Secret/ConfigMap
+#              suffix, so keep it to lowercase and dashes
+#   base_url   the OpenAI-compatible root, the part ending in /v1 - the same
+#              URL the provider's own curl example posts /chat/completions to
+#   models     the ids as that endpoint serves them
+#   mode       chat (default) or embedding
+#   provider   openai (default), right for anything OpenAI-compatible
+#   namespace  where the AI asset is published; defaults to model_namespace
+#   publish_as_ai_asset
+#              whether it appears in the Gen AI playground. Defaults to true
+#              for chat, false for embedding - the playground is a chat UI
+#              and has no use for an embeddings model. Set it explicitly to
+#              serve a model through LiteLLM without listing it in RHOAI.
+#
 # Uncomment and fill in to add endpoints. The default is an empty list in
-# roles/openshift_ai/defaults, so there is nothing here to delete first.
-#rhoai_extra_ai_endpoints:
-#     - name: maas-rhdp
-#       base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
-#       api_key: ""
-#       models:
-#         - gpt-oss-120b
-#         - qwen36-35b-a3b
-#         - qwen38-27b
-
-# --- Extra models in LiteLLM -----------------------------------------------
-# External OpenAI-compatible endpoints registered as models in LiteLLM. This
-# is the one that makes them appear in OpenRAG, Dev Spaces/Continue and the
-# Ops Dashboard, because all three ask LiteLLM what it serves.
-#
-# Not the same as rhoai_extra_ai_endpoints above. That publishes gen-ai-aa
-# ConfigMaps for RHOAI's Gen AI playground and never reaches LiteLLM; this
-# never reaches the playground. Declare an endpoint in both if you want it
-# in both.
-#
-# Keys are stored in the litellm-secrets Secret and referenced from
-# config.yaml as os.environ/EXTRA_KEY_<NAME>, so they never land in a
-# ConfigMap. Still, do not put a real one here - supply it at run time:
-#
-#     ./run.sh -e @$HOME/.openrag-endpoints.yml
-#
-# mode defaults to chat; use embedding for an embeddings endpoint. provider
-# defaults to openai, which is right for anything OpenAI-compatible.
-#
+# roles/litellm/defaults, so there is nothing here to delete first.
 #litellm_extra_models:
 #     - name: maas-rhdp
 #       base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
