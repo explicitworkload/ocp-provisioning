@@ -120,6 +120,17 @@ mcp_write_rules:
 # OFF by default: it adds a 3-node OpenSearch cluster (~9Gi RAM, 3x20Gi PVCs)
 # plus docling-serve and a CPU embedding model, which is a lot to carry on a
 # cluster that is not using it.
+# Configure OpenRAG without anyone clicking through its setup wizard: point
+# it at the cluster's own models through LiteLLM using OpenRAG's Red Hat
+# OpenShift AI provider, and advance the wizard's step counter past the end.
+#
+# false leaves a freshly deployed OpenRAG on its first-run wizard, for setting
+# up by hand. Note that doing it by hand is not equivalent: the wizard offers
+# only the providers OpenRAG advertises, and whoever clicks through picks a
+# model from whatever LiteLLM happens to serve - on this cluster that included
+# the Azure model, which does not exist where Lightspeed is absent.
+openrag_auto_configure: true
+
 deploy_openrag: false
 
 # Zero Trust Workload Identity Manager (SPIFFE/SPIRE).

@@ -67,3 +67,10 @@ openrag_litellm_base_url: "http://litellm.{{ litellm_namespace | default('litell
 openrag_provider_visibility:
   rhoai: true
   ollama: false
+
+# The wizard's step count. onboarded: true does not put it away on its own -
+# the UI also wants the counter past the end, and null reads as "not started"
+# rather than "finished". Established by diffing a hand-completed workspace
+# against an API-onboarded one: current_step was the only field that differed.
+# Bump this if a future OpenRAG adds a step.
+openrag_onboarding_final_step: 4

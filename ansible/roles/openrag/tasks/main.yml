@@ -820,7 +820,35 @@
     timeout: 120
   register: openrag_onboarding_post
   no_log: true
-  when: not (openrag_onboarded.json.onboarded | default(false) | bool)
+  when:
+    - openrag_auto_configure | bool
+    - not (openrag_onboarded.json.onboarded | default(false) | bool)
+  tags: [openrag-config]
+
+# onboarded: true is NOT enough to put the wizard away - the UI also wants the
+# step counter past the end. Established by comparing a hand-completed
+# workspace against an API-onboarded one: every other field matched, and the
+# only difference was current_step.
+#
+# POST /onboarding leaves it at 0, which the UI reads as "on step 1 of 4" and
+# renders the wizard over the whole app, /chat included. null does not work
+# either - that reads as "not started". It has to be the terminal step number,
+# which is why this is a separate call and not a field on the body above.
+- name: Advance the onboarding step counter past the wizard
+  ansible.builtin.uri:
+    url: "https://{{ openrag_api_host }}/onboarding/state"
+    method: POST
+    body_format: json
+    body:
+      current_step: "{{ openrag_onboarding_final_step | int }}"
+    validate_certs: false
+    status_code: [200, 201]
+    timeout: 60
+  register: openrag_step_post
+  changed_when: >-
+    (openrag_onboarded.json.current_step | default(0) | int)
+    != (openrag_onboarding_final_step | int)
+  when: openrag_auto_configure | bool
   tags: [openrag-config]
 
 # Reports what actually happened, not what was intended - the first version
