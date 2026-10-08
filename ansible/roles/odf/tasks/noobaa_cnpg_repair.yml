@@ -104,14 +104,30 @@
       primary=$($OC get pod -l cnpg.io/cluster=noobaa-db-pg-cluster,role=primary \
                   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
       [ -z "$primary" ] && { absent_verdict; exit 0; }
-      $OC get pod noobaa-db-pg-0 >/dev/null 2>&1 || { absent_verdict; exit 0; }
 
       systems() {
         $OC exec "$1" ${2:+-c "$2"} -- psql -U postgres -d nbcore -t -A \
           -c "select count(*) from systems" </dev/null 2>/dev/null | tr -cd '0-9'
       }
-      old=$(systems noobaa-db-pg-0)
+
+      # CNPG holding the system is the one unambiguous signal, and it does not
+      # depend on the old StatefulSet database existing. Checked first for
+      # exactly that reason: a cluster that went straight to CNPG never has a
+      # noobaa-db-pg-0, and the old order fell through to absent_verdict, saw
+      # a CNPG CR, and returned WAIT on every one of its eighty polls - twenty
+      # minutes per run, on the healthy path. Since the role stopped patching
+      # NooBaa during bootstrap that path is the common one, not the exception.
       new=$(systems "$primary" postgres)
+      if [ "${new:-0}" -ge 1 ] 2>/dev/null; then
+        echo "new=$new (no migration needed)" >&2
+        echo HEALTHY
+        exit 0
+      fi
+
+      # CNPG is empty. With no StatefulSet database there is nothing it could
+      # have been stranded from, so this is a system still coming up.
+      $OC get pod noobaa-db-pg-0 >/dev/null 2>&1 || { absent_verdict; exit 0; }
+      old=$(systems noobaa-db-pg-0)
 
       msg=$($OC get noobaa noobaa \
             -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.message}{end}' 2>/dev/null)
@@ -144,10 +160,10 @@
       [ -z "$src" ] && missing='(source unreadable)'
 
       echo "old=${old:-?} new=${new:-?} gaveup=$gaveup missing=${missing:-none}" >&2
-      if [ "${new:-0}" -ge 1 ] 2>/dev/null; then
-        echo HEALTHY
-      elif [ "$old" = "1" ] && [ "$new" = "0" ] && [ "$gaveup" = "1" ] \
-           && [ -z "$missing" ]; then
+      # new >= 1 already returned HEALTHY above, so only the stranded and
+      # still-working cases remain.
+      if [ "$old" = "1" ] && [ "$new" = "0" ] && [ "$gaveup" = "1" ] \
+         && [ -z "$missing" ]; then
         echo STRANDED
       else
         echo WAIT
