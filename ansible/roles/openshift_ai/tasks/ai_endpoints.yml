@@ -23,6 +23,38 @@
     label: "{{ item.name }}"
   when: not (item.api_key | default('') | length > 0)
 
+# The target namespace may not exist yet. openshift_ai runs five roles before
+# model_serving, which is what creates model_namespace - so the default target
+# is absent at this point on a fresh cluster and the Secret fails with
+# namespaces "qwen3-4b" not found. Creating it here rather than reordering,
+# because an endpoint can name any namespace it likes and none of them are
+# guaranteed to exist.
+#
+# Labelled as a Data Science Project, which is what the namespace needs to be
+# for the dashboard to show anything in it, and what model_serving would
+# label it anyway - apply merges, so whichever runs second adds what it wants.
+- name: Create the namespaces the endpoints are published to
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+  loop: >-
+    {{ rhoai_extra_ai_endpoints
+       | selectattr('api_key', 'defined')
+       | rejectattr('api_key', 'equalto', '')
+       | map(attribute='namespace')
+       | map('default', rhoai_ai_endpoint_namespace, true)
+       | unique | list }}
+  loop_control:
+    label: "{{ item }}"
+
 - name: Create the API key Secret for each endpoint
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
