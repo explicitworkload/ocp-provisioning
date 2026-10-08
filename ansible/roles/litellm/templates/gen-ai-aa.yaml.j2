@@ -1,38 +1,39 @@
 {#
-  One AI asset endpoint, as RHOAI's Gen AI playground expects it.
+  LiteLLM as one AI asset endpoint, the shape RHOAI's Gen AI playground
+  expects.
 
-  base_url is LiteLLM, not the upstream the entry declares: the same models
-  are registered in LiteLLM's config.yaml, so the playground, OpenRAG, Dev
-  Spaces and the Ops Dashboard all reach them through one proxy with one key.
-  The upstream URL and its key stay in litellm-secrets.
+  base_url is LiteLLM's in-cluster service and the key is the openshift-ai
+  virtual key, so the playground reaches every model through the same proxy
+  the Ops Dashboard, OpenRAG and Dev Spaces/Continue use. Each upstream's own
+  URL and key stay in litellm-secrets.
 
   A template rather than an inline expression because the models list needs a
   loop, and Jinja has no list comprehension - building it inline failed with
   "expected token ',', got 'for'".
 
-  `item` is the entry from litellm_publishable_endpoints.
+  litellm_asset_models is the list decided in tasks/ai_endpoints.yml.
 -#}
 providers:
   inference:
-    - provider_id: {{ item.name }}
+    - provider_id: {{ litellm_ai_asset_name }}
       provider_type: remote::openai
       config:
         base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
         allowed_models:
-{% for m in item.models %}
+{% for m in litellm_asset_models %}
           - {{ m }}
 {% endfor %}
         custom_gen_ai:
           api_key:
             secretRef:
-              name: gen-ai-key-{{ item.name }}
+              name: {{ litellm_ai_asset_key_secret }}
               key: api_key
 registered_resources:
   models:
-{% for m in item.models %}
-    - provider_id: {{ item.name }}
+{% for m in litellm_asset_models %}
+    - provider_id: {{ litellm_ai_asset_name }}
       model_id: {{ m }}
-      model_type: {{ item.model_type | default('llm') }}
+      model_type: llm
       metadata:
         display_name: {{ m }}
 {% endfor %}

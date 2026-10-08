@@ -48,6 +48,21 @@ openrag_frontend_host: ""
 openrag_backend_host: ""
 openrag_langflow_host: ""
 
+# Whether Langflow gets a Route of its own. The "Edit in Langflow" buttons in
+# OpenRAG's settings open the flow editor in a new tab, so Langflow has to be
+# reachable from the browser - it is a ClusterIP service otherwise, and the
+# chart's ingress block templates only the frontend and backend hosts, so the
+# langflow host handed to it above is silently dropped.
+#
+# Langflow has its own login, seeded with the superuser password this role
+# generates, so exposing it does not expose the flows themselves. Set false to
+# keep it in-cluster; the buttons then lead nowhere, which is the state this
+# deployment was in.
+openrag_expose_langflow: true
+
+# Resolved once so the Route and LANGFLOW_PUBLIC_URL cannot drift apart.
+openrag_langflow_fqdn: "{{ openrag_langflow_host | default('openrag-langflow.' ~ ocp_apps_domain, true) }}"
+
 # One gateway in front of chat and embeddings. Used both for the backend's
 # OPENAI_BASE_URL and for the rhoai provider's api_base at onboarding, which
 # have to agree - the first decides where queries go, the second is what the

@@ -38,7 +38,7 @@
 - name: Generate random credentials
   ansible.builtin.set_fact:
     litellm_master_key: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"
-    litellm_ui_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"
+    litellm_ui_password: "{{ litellm_ui_password }}"
   when: existing_proxy_secret.resources | length == 0
 
 - name: Reuse existing credentials
@@ -46,6 +46,26 @@
     litellm_master_key: "{{ existing_proxy_secret.resources[0].data.LITELLM_MASTER_KEY | b64decode }}"
     litellm_ui_password: "{{ existing_proxy_secret.resources[0].data.UI_PASSWORD | b64decode }}"
   when: existing_proxy_secret.resources | length > 0
+
+# Clusters built before the password policy was accounted for hold a
+# ten-character alphanumeric here. LiteLLM rejects it, so the database user
+# never gets a password - and with disable_env_credential_login on, that is
+# an unreachable UI. Replaced rather than worked around; the new one is
+# printed by the summary role like every other generated credential.
+- name: Replace a stored UI password that LiteLLM would reject
+  ansible.builtin.set_fact:
+    litellm_ui_password: >-
+      {{ lookup('password', '/dev/null chars=ascii_lowercase length=6')
+         ~ lookup('password', '/dev/null chars=ascii_uppercase length=5')
+         ~ lookup('password', '/dev/null chars=digits length=4') ~ '-' }}
+  when:
+    - existing_proxy_secret.resources | length > 0
+    - >-
+      litellm_ui_password | length < 12
+      or not (litellm_ui_password is search('[a-z]'))
+      or not (litellm_ui_password is search('[A-Z]'))
+      or not (litellm_ui_password is search('[0-9]'))
+      or not (litellm_ui_password is search('[^A-Za-z0-9]'))
 
 - name: Store LiteLLM proxy credentials
   kubernetes.core.k8s:
@@ -326,28 +346,6 @@
   loop_control:
     label: "{{ item.name }}"
 
-# Published by default, because an endpoint worth proxying is usually worth
-# offering in the playground. Embeddings endpoints are the exception and are
-# excluded without being asked to: the playground is a chat UI and has
-# nothing to do with an embeddings model. publish_as_ai_asset overrides
-# either way.
-- name: Select the endpoints to publish as AI assets
-  ansible.builtin.set_fact:
-    litellm_publishable_endpoints: >-
-      {{ litellm_usable_extras
-         | rejectattr('name', 'in', litellm_unpublished_names) | list }}
-  vars:
-    litellm_unpublished_names: >-
-      {{ litellm_usable_extras
-         | rejectattr('publish_as_ai_asset', 'defined')
-         | selectattr('mode', 'defined')
-         | selectattr('mode', 'equalto', 'embedding')
-         | map(attribute='name') | list
-         + (litellm_usable_extras
-            | selectattr('publish_as_ai_asset', 'defined')
-            | rejectattr('publish_as_ai_asset')
-            | map(attribute='name') | list) }}
-
 - name: Create LiteLLM API key secret
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -360,17 +358,12 @@
         name: litellm-secrets
         namespace: "{{ litellm_namespace }}"
       type: Opaque
-      # Extra endpoints' keys live here, not in config.yaml - that is a
-      # ConfigMap, readable by anyone with get on the namespace. LiteLLM
-      # reads them back with os.environ/<NAME>, exactly as QWEN_API_KEY
-      # already works. Endpoint names become env vars: maas-rhdp ->
-      # EXTRA_KEY_MAAS_RHDP.
-      stringData: >-
-        {{ {'QWEN_API_KEY': qwen_token_secret.resources[0].data.token | b64decode}
-           | combine(dict(litellm_usable_extras | map(attribute='name') | map('upper')
-                          | map('regex_replace', '[^A-Z0-9]', '_')
-                          | map('regex_replace', '^', 'EXTRA_KEY_') | list
-                          | zip(litellm_usable_extras | map(attribute='api_key') | list))) }}
+      # Only the in-cluster model's token. An extra endpoint's key is not
+      # here: it is held by LiteLLM itself, as a reusable credential in its
+      # database, so it can be rotated from the LiteLLM UI without an
+      # Ansible run - and so a run does not quietly put it back.
+      stringData:
+        QWEN_API_KEY: "{{ qwen_token_secret.resources[0].data.token | b64decode }}"
 
 - name: Fetch Azure credentials from openshift-lightspeed
   kubernetes.core.k8s_info:
@@ -649,19 +642,119 @@
     selectattr('credential_name', 'equalto', litellm_azure_credential_name) |
     list | length == 0
 
+# Stored by LiteLLM, in its database, encrypted with the master key - not in
+# an OpenShift Secret. That is what makes the key editable from the LiteLLM
+# UI: a credential defined in config.yaml is read-only there, shown as
+# "Defined in config", because the ConfigMap it comes from is mounted
+# read-only and a run would overwrite an edit anyway.
+#
+# Created only when absent, so a key rotated through the UI survives every
+# later run. api_key in litellm_extra_models is therefore a seed, used on the
+# first run and ignored after; to rotate from Ansible instead, delete the
+# credential first.
+- name: Create a reusable credential for each extra endpoint
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/credentials"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      credential_name: "{{ item.credential_name | default(item.name) }}"
+      credential_values:
+        api_base: "{{ item.base_url }}"
+        api_key: "{{ item.api_key }}"
+      credential_info:
+        custom_llm_provider: "{{ item.provider | default('openai') }}"
+        description: "{{ item.models | length }} model(s) served by {{ item.name }}"
+    validate_certs: false
+    status_code: [200, 201]
+  loop: "{{ litellm_usable_extras }}"
+  loop_control:
+    label: "{{ item.credential_name | default(item.name) }}"
+  when: >-
+    litellm_creds.json.credentials
+    | selectattr('credential_name', 'equalto', item.credential_name | default(item.name))
+    | list | length == 0
+  register: litellm_extra_creds
+  # uri does not set changed by itself, so litellm_extra_creds.changed was
+  # always false and the restart below - the thing that actually binds the
+  # credentials to the config-loaded models - never ran. The task only
+  # executes when the credential was missing, so a success here is a change.
+  changed_when: true
+  no_log: true
+
+# A model whose litellm_params carry only litellm_credential_name is resolved
+# when the proxy loads its config. Credentials created just now were not there
+# at load time, so those models are sitting with no url and no key and would
+# answer 401 against api.openai.com until something restarted them.
+- name: Restart LiteLLM to bind the new credentials
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    label_selectors:
+      - app=litellm
+  when: litellm_extra_creds.changed
+
+- name: Wait for LiteLLM to come back with the credentials bound
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ litellm_namespace }}"
+    name: litellm
+  register: litellm_cred_rollout
+  until: >-
+    litellm_cred_rollout.resources | length > 0 and
+    (litellm_cred_rollout.resources[0].status.readyReplicas | default(0)) >= 1 and
+    (litellm_cred_rollout.resources[0].status.unavailableReplicas | default(0)) == 0
+  retries: 20
+  delay: 15
+  when: litellm_extra_creds.changed
+
+# The deployment reporting ready is not the same as the route answering: the
+# old pod can still be terminating behind it. Everything after this talks to
+# litellm_url, so wait for the thing that is actually being talked to.
+- name: Wait for the LiteLLM API to answer again
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/health/liveliness"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: litellm_cred_health
+  until: litellm_cred_health.status == 200
+  retries: 20
+  delay: 15
+  when: litellm_extra_creds.changed
+
 # --- Admin User ---
 
-- name: Check if LiteLLM admin user exists
+# A database-backed proxy_admin, so there is an account to attach a password
+# to from the UI. The password is NOT set from here: LiteLLM answers
+#   password cannot be set via /user/new
+# and a password set through /user/update comes back with
+# password_reset_required: true, which /login then rejects - there is no API
+# on this build to clear that flag. See litellm_disable_env_credential_login.
+#
+# Identified by user_id, which is what the UI login form takes. The old check
+# asked /user/info?user_email=..., which answers 200 with the built-in
+# default_user_id whatever email you pass, so it always concluded the admin
+# existed and never created one.
+- name: Check if the LiteLLM admin user exists
   ansible.builtin.uri:
-    url: "{{ litellm_url }}/user/info?user_email={{ litellm_admin_email }}"
+    url: "{{ litellm_url }}/user/info?user_id={{ litellm_ui_username }}"
     method: GET
     headers:
       Authorization: "Bearer {{ litellm_master_key }}"
     validate_certs: false
-    status_code: [200, 404]
+    status_code: [200, 400, 404]
   register: litellm_admin_check
 
-- name: Create LiteLLM admin user
+- name: Create the LiteLLM admin user
   ansible.builtin.uri:
     url: "{{ litellm_url }}/user/new"
     method: POST
@@ -670,12 +763,13 @@
       Content-Type: application/json
     body_format: json
     body:
+      user_id: "{{ litellm_ui_username }}"
       user_email: "{{ litellm_admin_email }}"
       user_role: proxy_admin
       auto_create_key: true
     validate_certs: false
     status_code: [200, 201]
-  when: litellm_admin_check.status == 404
+  when: litellm_admin_check.status != 200
 
 # --- Virtual Key & AI Asset Endpoint ---
 
@@ -687,6 +781,39 @@
     namespace: "{{ model_namespace }}"
     name: endpoint-api-key-1
   register: existing_vkey_secret
+
+# Presence of the Secret is not proof the key still works. Revoke it in the
+# LiteLLM UI, or lose the database PVC, and the stored string becomes a dead
+# token that every later run faithfully republishes - the Gen AI playground
+# then 401s on every request, with no run ever reporting a problem.
+- name: Check that the stored virtual key is still valid
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/key/info"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ existing_vkey_secret.resources[0].data.api_key | b64decode }}"
+    validate_certs: false
+    status_code: [200, 401, 400]
+  register: litellm_vkey_probe
+  failed_when: false
+  when: existing_vkey_secret.resources | length > 0
+  no_log: true
+
+- name: Note that the stored virtual key has to be replaced
+  ansible.builtin.set_fact:
+    litellm_vkey_stale: >-
+      {{ (existing_vkey_secret.resources | length == 0)
+         or (litellm_vkey_probe.status | default(401)) != 200 }}
+
+- name: Report that the virtual key was revoked
+  ansible.builtin.debug:
+    msg: >-
+      The virtual key in endpoint-api-key-1 is no longer valid - revoked, or
+      lost with the LiteLLM database. Generating a new one; RHOAI's AI asset
+      endpoint is republished against it.
+  when:
+    - existing_vkey_secret.resources | length > 0
+    - litellm_vkey_stale | bool
 
 - name: Generate LiteLLM virtual key
   ansible.builtin.uri:
@@ -702,7 +829,7 @@
     validate_certs: false
     status_code: [200, 201]
   register: litellm_vkey
-  when: existing_vkey_secret.resources | length == 0
+  when: litellm_vkey_stale | bool
 
 - name: Store LiteLLM virtual key in model namespace
   kubernetes.core.k8s:
@@ -718,26 +845,14 @@
       type: Opaque
       stringData:
         api_key: "{{ litellm_vkey.json.key }}"
-  when: existing_vkey_secret.resources | length == 0
+  when: litellm_vkey_stale | bool
 
-# Added in c9df4cc, on the mistaken belief that qwen3-4b was not reaching the
-# playground. It was, via its InferenceService - so this listed it a second
-# time, as a row with status Unknown and no description, and did the same for
-# the Azure model. Removed here as well as from the repo so clusters built
-# with that commit lose the duplicate on the next run.
-- name: Remove the old catch-all AI asset endpoint
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: absent
-    api_version: v1
-    kind: ConfigMap
-    namespace: "{{ model_namespace }}"
-    name: gen-ai-aa-custom-model-endpoints
-
-- name: Publish the extra endpoints as AI assets
+# No ai-endpoints tag. These tasks need litellm_url, litellm_master_key,
+# litellm_all_extras, existing_vkey_secret and litellm_vkey_stale, every one
+# of which is set by an untagged task earlier in this role - so --tags
+# ai-endpoints reached them with nothing defined and died on the first
+# reference. Publishing is part of deploying LiteLLM; --tags litellm runs it.
+- name: Publish LiteLLM's models as an AI asset endpoint
   ansible.builtin.include_tasks:
     file: ai_endpoints.yml
-    apply:
-      tags: [litellm, ai-endpoints]
-  when: litellm_publishable_endpoints | length > 0
-  tags: [litellm, ai-endpoints]
+  when: litellm_publish_ai_assets | bool

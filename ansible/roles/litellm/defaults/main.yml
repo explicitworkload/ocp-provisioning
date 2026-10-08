@@ -18,7 +18,16 @@ litellm_db_name: litellm
 
 litellm_master_key: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"
 litellm_ui_username: admin
-litellm_ui_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=10') }}"
+# LiteLLM enforces a policy on database user passwords: at least 12
+# characters, with a lowercase letter, an uppercase letter, a digit and a
+# special character. Drawn one class at a time rather than as a single random
+# string, because a single draw can come out with no digit and then
+# /user/update answers 400 - which, with disable_env_credential_login on,
+# leaves the UI with no working login at all.
+litellm_ui_password: >-
+  {{ lookup('password', '/dev/null chars=ascii_lowercase length=6')
+     ~ lookup('password', '/dev/null chars=ascii_uppercase length=5')
+     ~ lookup('password', '/dev/null chars=digits length=4') ~ '-' }}
 
 litellm_admin_email: admin@example.com
 
@@ -53,7 +62,61 @@ litellm_extra_models: []
 # something to keep in step.
 rhoai_extra_ai_endpoints: []
 
-# Where an endpoint is published when it does not name a namespace itself.
-# RHOAI finds AI assets by the gen-ai-aa-* ConfigMap name, so this only has
-# to be a namespace the dashboard can read.
+# Turns off the UI login path that accepts UI_USERNAME/UI_PASSWORD - or the
+# master key, when UI_PASSWORD is unset - as a shared static secret. LiteLLM
+# warns about it in a banner across the top of its own UI, and the warning is
+# fair: it is a shared static secret.
+#
+# Off by default all the same, because on LiteLLM v1.106.0 turning it on from
+# here leaves no way in at all. A password cannot be set at /user/new ("users
+# set their own password through an invitation link"), and one set through
+# /user/update comes back with password_reset_required: true, which /login
+# rejects - with no API on this build to clear the flag and no /invitation
+# endpoints published. So the playbook cannot hand you a working password,
+# and this setting would remove the only one that works.
+#
+# LiteLLM's own banner says to create a regular admin account with its own
+# password first. That is a person at the UI, not a run. Once you have done
+# it, set this true and re-run:
+#
+#     ./run.sh --tags litellm -e litellm_disable_env_credential_login=true
+litellm_disable_env_credential_login: false
+
+# --- Publishing to RHOAI --------------------------------------------------
+# Whether LiteLLM is published to RHOAI as an AI asset endpoint, which is
+# what puts its models in the Gen AI playground's picker.
+litellm_publish_ai_assets: true
+
+# The ConfigMap RHOAI reads AI asset endpoints from. NOT a free-form name and
+# not a gen-ai-aa-* prefix convention: the dashboard's BFF binary contains
+# exactly three hardcoded names - gen-ai-aa-custom-model-endpoints,
+# gen-ai-aa-mcp-servers and gen-ai-aa-vector-stores - and ignores anything
+# else. A ConfigMap published under any other name is simply never read, with
+# no error anywhere to say so.
+litellm_ai_asset_configmap: gen-ai-aa-custom-model-endpoints
+
+# The provider id shown against each model, and the Secret the endpoint reads
+# its key from (endpoint-api-key-<n>). endpoint-1 is the shape RHOAI's own
+# documentation uses.
+litellm_ai_asset_name: endpoint-1
+litellm_ai_asset_key_secret: endpoint-api-key-1
+
+# Modes the Gen AI playground has no use for - it is a chat UI. Listed as
+# what to reject rather than what to accept, so a model LiteLLM reports no
+# mode for, or a null mode, is still published.
+litellm_ai_asset_reject_modes:
+  - embedding
+  - rerank
+  - image_generation
+  - audio_transcription
+  - audio_speech
+  - moderation
+
+# Model names to keep out of the endpoint whatever LiteLLM says. Models with
+# an InferenceService on this cluster are excluded already, by lookup - RHOAI
+# lists those itself - so this is for the rest.
+litellm_ai_asset_exclude: []
+
+# Where the endpoint is published. RHOAI finds AI assets by the gen-ai-aa-*
+# ConfigMap name, so this only has to be a namespace the dashboard can read.
 rhoai_ai_endpoint_namespace: "{{ model_namespace | default('qwen3-4b') }}"

@@ -45,8 +45,10 @@ model_list:
   - model_name: {{ m }}
     litellm_params:
       model: {{ ep.provider | default('openai') }}/{{ m }}
-      api_base: {{ ep.base_url }}
-      api_key: os.environ/EXTRA_KEY_{{ ep.name | upper | regex_replace('[^A-Z0-9]', '_') }}
+      # url and key come from the shared credential of this name, which the
+      # role creates in LiteLLM's database. Every model on the endpoint moves
+      # together when that credential is rotated, from Ansible or the UI.
+      litellm_credential_name: {{ ep.credential_name | default(ep.name) }}
     model_info:
       mode: {{ ep.mode | default('chat') }}
 {% endfor %}
@@ -57,3 +59,4 @@ general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
   store_model_in_db: true
+  disable_env_credential_login: {{ litellm_disable_env_credential_login | bool | lower }}

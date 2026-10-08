@@ -225,6 +225,10 @@ external_dns_cloudflare_proxied: true
 #   models     the ids as that endpoint serves them
 #   mode       chat (default) or embedding
 #   provider   openai (default), right for anything OpenAI-compatible
+#   credential_name
+#              the shared LiteLLM credential the models are bound to, shown
+#              on the LLM Credentials page and reused by every model on the
+#              endpoint, so a rotated key is one edit. Defaults to name.
 #   namespace  where the AI asset is published; defaults to model_namespace
 #   publish_as_ai_asset
 #              whether it appears in the Gen AI playground. Defaults to true
@@ -236,9 +240,13 @@ external_dns_cloudflare_proxied: true
 # roles/litellm/defaults, so there is nothing here to delete first.
 #litellm_extra_models:
 #     - name: maas-rhdp
+#       credential_name: rhdp-maas
 #       base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
 #       api_key: ""
 #       models:
 #         - gpt-oss-120b
 #         - qwen36-35b-a3b
+#         - qwen38-27b
+#         - granite-3-2-8b-instruct
+#         - Docling
 #         - qwen38-27b

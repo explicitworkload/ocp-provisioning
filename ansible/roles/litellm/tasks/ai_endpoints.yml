@@ -1,40 +1,110 @@
 ---
-# Publishes the extra endpoints as AI assets in the RHOAI Gen AI playground -
-# routed through LiteLLM rather than straight at the upstream. Which of them
-# get here is decided by the caller: everything in litellm_extra_models that
-# has a key and has not opted out with publish_as_ai_asset: false, embeddings
-# endpoints excepted.
+# Publishes what LiteLLM serves as an AI asset endpoint in RHOAI, so the Gen
+# AI playground offers the same models the Ops Dashboard and OpenRAG do.
+#
+# One endpoint, not one per upstream. Everything is reached through LiteLLM
+# on one base_url with one key, so splitting by where a model happens to run
+# would be a distinction RHOAI cannot act on - and it is exactly the
+# distinction LiteLLM exists to remove. The model list comes from LiteLLM
+# itself rather than from litellm_extra_models, which means models the role
+# registers from elsewhere - the Azure credential out of openshift-lightspeed,
+# say - are published too, without having to be declared a second time.
 #
 # Lives in the litellm role, not openshift_ai, because of the key: the
-# ConfigMap points at LiteLLM's service and so has to carry LiteLLM's virtual
-# key, which does not exist until this role has run. Published from
-# openshift_ai it would reference a Secret that is not there yet and RHOAI
-# would show the endpoint as broken for the rest of the run.
+# ConfigMap carries LiteLLM's virtual key, which does not exist until this
+# role has run. Published from openshift_ai it would reference a Secret that
+# is not there yet and RHOAI would show the endpoint as broken.
 #
 # RHOAI discovers these by NAME: a ConfigMap called gen-ai-aa-* holding a
 # config.yaml. There is no label selector, which is why the name is built
 # rather than free-form.
-#
-# Endpoints with no api_key never get here - the caller filters them out, and
-# warns - because an endpoint in the picker that 401s on first use is worse
-# than one that is absent. Keys are never defaulted in the repo; supply them
-# at run time, see group_vars/all.yml.
 
-# Either the key this run generated, or the one already on the cluster. Both
-# branches are set up by the virtual-key tasks in main.yml immediately above.
-- name: Note the LiteLLM virtual key the endpoints will use
+# Either the key this run generated or the one already on the cluster - the
+# virtual key aliased openshift-ai. Both branches are set up by the
+# virtual-key tasks in main.yml immediately above.
+- name: Note the LiteLLM virtual key the endpoint will use
   ansible.builtin.set_fact:
     litellm_vkey_value: >-
       {{ litellm_vkey.json.key
-         if (existing_vkey_secret.resources | length == 0)
+         if (litellm_vkey_stale | bool)
          else (existing_vkey_secret.resources[0].data.api_key | b64decode) }}
   no_log: true
 
-# An endpoint can name any namespace it likes and none of them are guaranteed
-# to exist. Labelled as a Data Science Project, which is what the namespace
-# needs to be for the dashboard to show anything in it - apply merges, so it
-# costs nothing where model_serving has already labelled it.
-- name: Create the namespaces the endpoints are published to
+# Asked rather than computed from the role's own variables. /v1/model/info
+# is what the proxy will actually answer /chat/completions for, and it
+# carries each model's mode, which is what decides whether the playground
+# has any use for it.
+- name: Ask LiteLLM what it serves
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/v1/model/info"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+    validate_certs: false
+    status_code: [200]
+  register: litellm_model_info
+  retries: 10
+  delay: 6
+  until: litellm_model_info.status == 200
+  no_log: true
+
+# Models already served on this cluster are left out. RHOAI builds a row for
+# each InferenceService by itself, with a description and a real status;
+# naming one here as well produced a second, statusless row beside it - the
+# duplicate qwen3-4b that c9df4cc introduced.
+- name: Read the models RHOAI already lists for itself
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+  register: litellm_isvcs
+  failed_when: false
+
+- name: Decide which models to publish
+  ansible.builtin.set_fact:
+    litellm_asset_models: >-
+      {{ served | reject('in', excluded) | list }}
+  vars:
+    # Everything LiteLLM serves, minus the modes the playground has no use
+    # for. Inverted deliberately: mode comes back three ways - absent,
+    # present-and-null, present-and-set - and only the third can be matched
+    # reliably, so anything not positively identified as a non-chat mode is
+    # published. An OpenAI-compatible endpoint is a chat endpoint unless it
+    # says otherwise.
+    served: >-
+      {{ litellm_model_info.json.data | default([])
+         | map(attribute='model_name') | list }}
+    not_for_chat: >-
+      {{ litellm_model_info.json.data | default([])
+         | selectattr('model_info.mode', 'defined')
+         | rejectattr('model_info.mode', 'none')
+         | selectattr('model_info.mode', 'in', litellm_ai_asset_reject_modes)
+         | map(attribute='model_name') | list }}
+    on_cluster: >-
+      {{ litellm_isvcs.resources | default([])
+         | map(attribute='metadata.name') | list
+         + (litellm_isvcs.resources | default([])
+            | map(attribute='metadata.annotations') | map('default', {}, true)
+            | map('dict2items') | sum(start=[])
+            | selectattr('key', 'equalto', 'openshift.io/display-name')
+            | map(attribute='value') | list) }}
+    # Models belonging to an extra endpoint that opted out.
+    opted_out: >-
+      {{ litellm_usable_extras
+         | selectattr('publish_as_ai_asset', 'defined')
+         | rejectattr('publish_as_ai_asset')
+         | map(attribute='models') | sum(start=[]) | list }}
+    excluded: "{{ (not_for_chat + on_cluster + opted_out + litellm_ai_asset_exclude) | unique | list }}"
+
+- name: Report that there is nothing to publish
+  ansible.builtin.debug:
+    msg: >-
+      No AI asset endpoint published: every model LiteLLM serves is either an
+      embedding, already listed by RHOAI from its own InferenceService, or
+      excluded.
+  when: litellm_asset_models | length == 0
+
+- name: Create the namespace the endpoint is published to
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
@@ -43,21 +113,20 @@
       apiVersion: v1
       kind: Namespace
       metadata:
-        name: "{{ item }}"
+        name: "{{ rhoai_ai_endpoint_namespace }}"
+        # What the namespace has to be for the dashboard to show anything in
+        # it. apply merges, so this costs nothing where model_serving has
+        # already labelled it.
         labels:
           opendatahub.io/dashboard: "true"
-  loop: >-
-    {{ litellm_publishable_endpoints
-       | map(attribute='namespace')
-       | map('default', rhoai_ai_endpoint_namespace, true)
-       | unique | list }}
-  loop_control:
-    label: "{{ item }}"
+  when: litellm_asset_models | length > 0
 
-# The endpoint's own upstream key is not what goes here - that one is held by
-# LiteLLM, in litellm-secrets, and never leaves the litellm namespace. What
-# RHOAI needs is a key for the proxy in front of it.
-- name: Give each endpoint the virtual key for LiteLLM
+# Not any upstream's own key - those stay with LiteLLM and never leave its
+# namespace. What RHOAI needs is a key for the proxy in front of them, which
+# is the openshift-ai virtual key. Written under the name the endpoint's
+# secretRef uses; where rhoai_ai_endpoint_namespace is the default this is
+# the same object main.yml already created, with the same value.
+- name: Give the endpoint the virtual key for LiteLLM
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
@@ -66,17 +135,15 @@
       apiVersion: v1
       kind: Secret
       metadata:
-        name: "gen-ai-key-{{ item.name }}"
-        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+        name: "{{ litellm_ai_asset_key_secret }}"
+        namespace: "{{ rhoai_ai_endpoint_namespace }}"
       type: Opaque
       stringData:
         api_key: "{{ litellm_vkey_value }}"
-  loop: "{{ litellm_publishable_endpoints }}"
-  loop_control:
-    label: "{{ item.name }}"
+  when: litellm_asset_models | length > 0
   no_log: true
 
-- name: Publish each endpoint as an AI asset
+- name: Publish LiteLLM as an AI asset endpoint
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
@@ -85,17 +152,52 @@
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: "gen-ai-aa-{{ item.name }}"
-        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+        name: "{{ litellm_ai_asset_configmap }}"
+        namespace: "{{ rhoai_ai_endpoint_namespace }}"
       data:
         config.yaml: "{{ lookup('template', 'gen-ai-aa.yaml.j2') }}"
-  loop: "{{ litellm_publishable_endpoints }}"
-  loop_control:
-    label: "{{ item.name }} ({{ item.models | length }} model(s))"
+  when: litellm_asset_models | length > 0
 
-- name: Report the published endpoints
+# Earlier revisions published one ConfigMap per declared endpoint, and then
+# one under a name of this role's choosing. Neither was ever read - the
+# dashboard only looks at the three names it has compiled in - so they sat
+# there looking published.
+#
+# ConfigMaps only. The matching gen-ai-key-<name> Secrets are left where they
+# are: on a cluster provisioned by the openshift_ai revision of this code
+# they hold the endpoint's own upstream key, which may be the only copy, and
+# an orphaned Secret costs nothing. Deleting one cost a real key once
+# already.
+- name: Remove the endpoints published under names RHOAI never reads
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ rhoai_ai_endpoint_namespace }}"
+    name: "gen-ai-aa-{{ item }}"
+  loop: >-
+    {{ (litellm_all_extras | map(attribute='name') | list + ['litellm'])
+       | unique | reject('equalto', litellm_ai_asset_configmap | replace('gen-ai-aa-', ''))
+       | list }}
+  loop_control:
+    label: "gen-ai-aa-{{ item }}"
+
+- name: Remove the endpoint when there is nothing left to publish
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ rhoai_ai_endpoint_namespace }}"
+    name: "{{ litellm_ai_asset_configmap }}"
+  when: litellm_asset_models | length == 0
+
+- name: Report the published endpoint
   ansible.builtin.debug:
     msg: >-
-      {{ litellm_publishable_endpoints | length }} AI asset endpoint(s)
-      published via LiteLLM:
-      {{ litellm_publishable_endpoints | map(attribute='name') | join(', ') }}
+      {{ litellm_ai_asset_configmap }} published to
+      {{ rhoai_ai_endpoint_namespace }} with
+      {{ litellm_asset_models | length }} model(s):
+      {{ litellm_asset_models | join(', ') }}
+  when: litellm_asset_models | length > 0

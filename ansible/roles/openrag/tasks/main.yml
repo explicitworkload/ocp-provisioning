@@ -536,6 +536,43 @@
 #
 # Applied after Helm because the chart offers no extraEnv hook; a helm upgrade
 # drops it, which is why this task runs on every pass.
+# The chart's ingress.hosts map templates frontend and backend only, so the
+# langflow entry passed with them never becomes an Ingress and Langflow has no
+# way in from a browser. Created directly rather than as an Ingress for
+# ingress-to-route to convert, because there is nothing to convert from.
+- name: Expose Langflow
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: openrag-langflow
+        namespace: "{{ openrag_namespace }}"
+      spec:
+        host: "{{ openrag_langflow_fqdn }}"
+        to:
+          kind: Service
+          name: openrag-langflow
+        port:
+          targetPort: 7860
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+  when: openrag_expose_langflow | bool
+
+- name: Remove the Langflow route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-langflow
+  when: not (openrag_expose_langflow | bool)
+
 - name: Point the OpenRAG backend at LiteLLM
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -566,6 +603,16 @@
                   # data and cluster-manager counts are still enforced at 3.
                   - name: OPENSEARCH_EXPECTED_COORDINATING_NODE_COUNT
                     value: "0"
+                  # Where the browser can reach Langflow. Without it the
+                  # frontend falls back to same-host:7860 - resolveLangflowEditUrl
+                  # in frontend/lib/url-utils.ts prefers this value over that
+                  # fallback - and produces
+                  #   https://openrag.<domain>:7860/flow/<id>
+                  # which nothing serves: the OpenShift router listens on 443
+                  # only. Not an upstream gap; upstream provides this variable
+                  # for exactly this case, and nothing here was setting it.
+                  - name: LANGFLOW_PUBLIC_URL
+                    value: "{{ openrag_expose_langflow | bool | ternary('https://' ~ openrag_langflow_fqdn, '') }}"
 
 # The chart sets OPENRAG_BACKEND_HOST but not OPENRAG_BACKEND_PORT, and the
 # frontend builds http://$HOST:$PORT/... from both. Under docker-compose PORT
