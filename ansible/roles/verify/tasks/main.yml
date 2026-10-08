@@ -176,14 +176,6 @@
     msg: "{{ ['VERIFICATION FAILED - ' ~ (verify_failures | length) ~ ' problem(s):'] + verify_failures }}"
   when: verify_failures | length > 0
 
-# Separate from the report above so the list is printed in full before the
-# play stops, rather than being truncated into a failure message.
-- name: Fail the play
-  ansible.builtin.fail:
-    msg: >-
-      {{ verify_failures | length }} component(s) did not reach a working
-      state. See the list above. Set verify_fail_on_error=false to report
-      without failing.
-  when:
-    - verify_failures | length > 0
-    - verify_fail_on_error | bool
+# The play is NOT failed here. site.yml does it in post_tasks, after summary
+# has printed, so a failing verification still shows the URLs and passwords -
+# which is exactly the run you need them for. verify_failures carries over.

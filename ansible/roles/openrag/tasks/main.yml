@@ -630,14 +630,72 @@
 #
 # Read from the running image rather than vendored, so upstream's own edits to
 # that file survive and only these flags are asserted on top.
-- name: Read the provider catalogue from the running backend
-  ansible.builtin.command:
-    cmd: >-
-      oc {{ ocp_context_arg }} -n {{ openrag_namespace }}
-      exec deploy/openrag-backend -c backend --
-      cat /app/src/config/model_providers.yaml
-  register: openrag_provider_yaml
-  changed_when: false
+# Read from the IMAGE, not the running pod. The pod has our own ConfigMap
+# mounted over this very file, so reading it there reads the previous
+# output - and an override, once applied, could never be removed: dropping
+# "ollama: false" left ollama hidden, because the "shipped" catalogue it
+# diffed against already said oss: false.
+#
+# Captured once into its own ConfigMap. After that the pristine copy is in
+# the cluster and no pod is needed.
+- name: Look for a captured copy of the shipped catalogue
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-model-providers-src
+  register: openrag_provider_src
+  tags: [openrag-config]
+
+- name: Capture the shipped catalogue from the backend image
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -eo pipefail
+      OC="oc {{ ocp_context_arg }} -n {{ openrag_namespace }}"
+      IMG=$($OC get deploy openrag-backend \
+              -o jsonpath='{.spec.template.spec.containers[0].image}')
+      $OC delete pod openrag-mp-src --ignore-not-found >/dev/null 2>&1
+      # A throwaway pod from the same image: nothing is mounted over the
+      # file there, so this is the file as upstream ships it.
+      $OC run openrag-mp-src --image="$IMG" --restart=Never --quiet \
+        --command -- cat /app/src/config/model_providers.yaml >/dev/null
+      for _ in $(seq 1 60); do
+        ph=$($OC get pod openrag-mp-src -o jsonpath='{.status.phase}' 2>/dev/null)
+        case "$ph" in Succeeded|Failed) break ;; esac
+        sleep 5
+      done
+      $OC logs openrag-mp-src
+      $OC delete pod openrag-mp-src --ignore-not-found >/dev/null 2>&1
+  register: openrag_provider_capture
+  changed_when: true
+  when: openrag_provider_src.resources | length == 0
+  tags: [openrag-config]
+
+- name: Store the shipped catalogue
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openrag-model-providers-src
+        namespace: "{{ openrag_namespace }}"
+      data:
+        model_providers.yaml: "{{ openrag_provider_capture.stdout }}"
+  when: openrag_provider_src.resources | length == 0
+  tags: [openrag-config]
+
+- name: Use the shipped catalogue as the source
+  ansible.builtin.set_fact:
+    openrag_provider_yaml:
+      stdout: >-
+        {{ openrag_provider_capture.stdout
+           if (openrag_provider_src.resources | length == 0)
+           else openrag_provider_src.resources[0].data['model_providers.yaml'] }}
   tags: [openrag-config]
 
 - name: Start from the catalogue as shipped

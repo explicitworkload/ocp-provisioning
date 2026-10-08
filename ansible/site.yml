@@ -218,14 +218,30 @@
     # before asserting anything. Running verify alone used to skip it, which
     # is backwards: a failing verification is exactly when the URLs are
     # wanted, and that is the run most likely to be invoked on its own.
-    - role: summary
-      tags: [summary, verify]
-
-    # After summary, not before: when verification fails this is exactly when
-    # the URLs and passwords are wanted, and a failing role stops the play.
+    # Checks first, so its findings are printed; summary last, so the links
+    # and credentials are the final thing on screen. The play is failed after
+    # both, in post_tasks.
     #
     # 56 of this playbook's tasks are until: loops, seven of which swallow
     # their expiry and seven more are one-shot probes feeding a when:, so a
     # green PLAY RECAP has never meant the cluster works. This asserts it.
     - role: verify
+      tags: [verify]
+
+    - role: summary
+      tags: [summary, verify]
+
+  post_tasks:
+    # Last of all, so everything above has had its say. A verification
+    # failure that hid the summary would be withholding the URLs at the one
+    # moment they are wanted.
+    - name: Fail when verification found problems
+      ansible.builtin.fail:
+        msg: >-
+          {{ verify_failures | length }} component(s) did not reach a working
+          state. See the list above the summary. Set
+          verify_fail_on_error=false to report without failing.
+      when:
+        - verify_failures | default([]) | length > 0
+        - verify_fail_on_error | default(true) | bool
       tags: [verify]

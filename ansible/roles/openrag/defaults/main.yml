@@ -64,9 +64,12 @@ openrag_litellm_base_url: "http://litellm.{{ litellm_namespace | default('litell
 # OpenShift AI never appeared and a workspace configured against it looked
 # unconfigured - the wizard covered the whole app on a backend that
 # /provider/health called "properly configured and validated".
+# Only rhoai. Upstream already ships every other provider enabled in oss
+# mode, so listing them here would assert a default rather than change one -
+# and each entry is a line that silently stops matching if upstream reshapes
+# the file. Add "ollama: false" or similar to hide one.
 openrag_provider_visibility:
   rhoai: true
-  ollama: false
 
 # The wizard's step count. onboarded: true does not put it away on its own -
 # the UI also wants the counter past the end, and null reads as "not started"
