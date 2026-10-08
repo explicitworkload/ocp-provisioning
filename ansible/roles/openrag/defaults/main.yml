@@ -74,3 +74,20 @@ openrag_provider_visibility:
 # against an API-onboarded one: current_step was the only field that differed.
 # Bump this if a future OpenRAG adds a step.
 openrag_onboarding_final_step: 4
+
+# --- Documentation ---------------------------------------------------------
+# OpenRAG's own Docusaurus site, built from the upstream repo in-cluster and
+# served beside the app. Upstream ships the site but no container recipe, so
+# the Dockerfile is inlined into the BuildConfig.
+openrag_deploy_docs: true
+openrag_docs_git_version: "{{ openrag_git_version }}"
+# baseUrl is baked into every generated link at build time, so it has to match
+# where the site is actually served. Its own Route serves at the root.
+openrag_docs_base_url: "/"
+openrag_docs_build_image: docker.io/library/node:22-alpine
+# A UBI nginx, not a stock one: it serves /opt/app-root/src on 8080 and
+# tolerates the arbitrary high UID restricted-v2 assigns.
+openrag_docs_runtime_image: registry.access.redhat.com/ubi9/nginx-124
+# A build takes a couple of minutes and refetches the npm tree, so it only
+# runs when there is no image yet. Set true to rebuild against a newer commit.
+openrag_docs_force_build: false

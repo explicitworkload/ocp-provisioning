@@ -864,3 +864,15 @@
          else '- onboarding completed with ' ~ openrag_chat_model ~ ' and '
               ~ openrag_embedding_model_name }}
   tags: [openrag-config]
+
+# apply: on the include, not just tags: beside it. A dynamic include passes
+# its own tags to itself only - the included tasks keep no tag and are
+# filtered out by --tags openrag-docs, so the include runs, reports
+# "included: docs.yml", and then nothing happens.
+- name: Build and deploy the OpenRAG documentation
+  ansible.builtin.include_tasks:
+    file: docs.yml
+    apply:
+      tags: [openrag-docs]
+  when: openrag_deploy_docs | bool
+  tags: [openrag-docs]

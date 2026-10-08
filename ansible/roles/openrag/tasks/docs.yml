@@ -1,0 +1,226 @@
+---
+# OpenRAG's own documentation, built from the upstream repo and served beside
+# the app. Upstream ships a Docusaurus site under docs/ but no container
+# recipe for it, so the Dockerfile is inlined into the BuildConfig - OpenShift
+# injects it into the git context, which avoids forking the repo just to add
+# one file.
+#
+# Built in-cluster rather than locally: nothing then depends on the operator
+# having node, and the image lands in the internal registry where the
+# Deployment can reach it.
+- name: Create the docs ImageStream
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: image.openshift.io/v1
+      kind: ImageStream
+      metadata:
+        name: openrag-docs
+        namespace: "{{ openrag_namespace }}"
+      spec:
+        # No lookupPolicy.local. It rewrites a bare "openrag-docs:latest" in
+        # the Deployment to the resolved digest, so every apply of the bare
+        # tag differs from what is stored and the task is changed on every
+        # run. The Deployment names the registry path in full instead.
+        lookupPolicy:
+          local: false
+
+- name: Create the docs BuildConfig
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: build.openshift.io/v1
+      kind: BuildConfig
+      metadata:
+        name: openrag-docs
+        namespace: "{{ openrag_namespace }}"
+      spec:
+        source:
+          type: Git
+          git:
+            uri: "{{ openrag_git_repo }}"
+            ref: "{{ openrag_docs_git_version }}"
+          contextDir: docs
+          dockerfile: |
+            FROM {{ openrag_docs_build_image }} AS build
+            WORKDIR /src
+            COPY . .
+            # package.json pins engines.node >=20.20.0. npm ci wants the
+            # lockfile to agree with package.json; fall back rather than lose
+            # the whole image to that particular disagreement.
+            RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+            # baseUrl is read from BASE_URL at BUILD time and baked into every
+            # generated link, so it cannot be set at runtime.
+            ENV BASE_URL={{ openrag_docs_base_url }}
+            # docusaurus.config.js sets onBrokenLinks: 'throw', so a broken
+            # link upstream fails this step rather than shipping a bad site.
+            RUN npm run build
+
+            FROM {{ openrag_docs_runtime_image }}
+            # This image serves /opt/app-root/src on 8080 and tolerates the
+            # arbitrary high UID OpenShift assigns under restricted-v2, which
+            # a stock nginx image does not.
+            COPY --from=build /src/build /opt/app-root/src
+            EXPOSE 8080
+            CMD ["nginx", "-g", "daemon off;"]
+        strategy:
+          type: Docker
+          dockerStrategy: {}
+        output:
+          to:
+            kind: ImageStreamTag
+            name: openrag-docs:latest
+        resources:
+          requests:
+            cpu: "500m"
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+
+- name: Check whether the docs image already exists
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: image.openshift.io/v1
+    kind: ImageStream
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-docs
+  register: openrag_docs_is
+
+# Only when there is no image yet, or on request. A build takes a couple of
+# minutes and pulls the npm tree every time, so doing it on every run would
+# add that to a playbook that is already long.
+- name: Build the docs
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} -n {{ openrag_namespace }}
+      start-build openrag-docs --wait
+  register: openrag_docs_build
+  changed_when: true
+  when: >-
+    openrag_docs_force_build | bool
+    or (openrag_docs_is.resources[0].status.tags | default([]) | length) == 0
+
+- name: Deploy the docs
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: openrag-docs
+        namespace: "{{ openrag_namespace }}"
+        labels: {app: openrag-docs}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: openrag-docs}
+        template:
+          metadata:
+            labels: {app: openrag-docs}
+          spec:
+            containers:
+              - name: nginx
+                image: >-
+                  image-registry.openshift-image-registry.svc:5000/{{
+                    openrag_namespace }}/openrag-docs:latest
+                # Named in full rather than as a bare ImageStream tag, so the
+                # applied value is the stored value. The cost is that a
+                # rebuild no longer redeploys by itself, which the restart
+                # below covers.
+                imagePullPolicy: Always
+                ports:
+                  - containerPort: 8080
+                    name: http
+                readinessProbe:
+                  httpGet: {path: /, port: 8080}
+                  initialDelaySeconds: 3
+                  periodSeconds: 10
+                livenessProbe:
+                  httpGet: {path: /, port: 8080}
+                  initialDelaySeconds: 10
+                  periodSeconds: 30
+                resources:
+                  requests: {cpu: 20m, memory: 64Mi}
+                  limits: {cpu: 500m, memory: 256Mi}
+
+- name: Create the docs Service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: openrag-docs
+        namespace: "{{ openrag_namespace }}"
+        labels: {app: openrag-docs}
+      spec:
+        selector: {app: openrag-docs}
+        ports:
+          - name: http
+            port: 8080
+            targetPort: 8080
+
+- name: Create the docs Route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: openrag-docs
+        namespace: "{{ openrag_namespace }}"
+        labels: {app: openrag-docs}
+      spec:
+        to: {kind: Service, name: openrag-docs}
+        port: {targetPort: http}
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+
+- name: Wait for the docs to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-docs
+  register: openrag_docs_dep
+  until: openrag_docs_dep.resources[0].status.readyReplicas | default(0) > 0
+  retries: 30
+  delay: 10
+
+# Only after an actual build. The image reference does not change across a
+# rebuild - it is :latest either way - so nothing else would notice.
+- name: Restart the docs after a rebuild
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} -n {{ openrag_namespace }}
+      rollout restart deploy/openrag-docs
+  when: openrag_docs_build is changed
+  changed_when: true
+
+- name: Read the docs Route
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-docs
+  register: openrag_docs_route
+
+- name: Show the docs URL
+  ansible.builtin.debug:
+    msg: >-
+      OpenRAG documentation is at https://{{
+        openrag_docs_route.resources[0].spec.host }}

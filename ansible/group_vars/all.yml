@@ -50,6 +50,14 @@ model_namespace: qwen3-4b
 model_name: qwen3-4b
 model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
 
+# Console plugins to enable
+console_plugins:
+- pipelines-console-plugin
+- gitops-plugin
+- kuadrant-console-plugin
+- odf-console
+- odf-client-console
+
 # Quay configuration
 # With ODF installed, Quay can use managed object storage (NooBaa).
 # Set to true to deploy the QuayRegistry CR.
@@ -133,6 +141,15 @@ openrag_auto_configure: true
 
 deploy_openrag: false
 
+# -------------------------------------------------------------------
+#
+#
+# OPTIONAL - Anything below is not necessary.
+#
+#
+#
+#
+
 # Zero Trust Workload Identity Manager (SPIFFE/SPIRE).
 # Deploys a SPIRE server StatefulSet plus an agent and CSI-driver DaemonSet on
 # every node, so workloads can obtain cryptographic identities (SVIDs) instead
@@ -143,17 +160,6 @@ deploy_openrag: false
 # first run.
 deploy_ztwim: true
 
-# Console plugins to enable
-console_plugins:
-- pipelines-console-plugin
-- gitops-plugin
-- kuadrant-console-plugin
-- odf-console
-- odf-client-console
-
-#
-# OPTIONAL - Anything below is not necessary.
-#
 # External DNS / Cloudflare — OFF by default. Runs last in the playbook.
 # Enable only when you want real records written to the Cloudflare zone:
 #   ansible-playbook site.yml -e deploy_external_dns=true
@@ -180,3 +186,6 @@ external_dns_cloudflare_proxied: true
 # collide. They are only created when deploy_external_dns is true.
 # Override dashboard_custom_host / devspaces_custom_host to pin a name, or set
 # either to "" to skip that Route.
+#
+#
+# -------------------------------------------------------------------
