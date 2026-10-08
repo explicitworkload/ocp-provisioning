@@ -10,6 +10,17 @@
     # one. Without this the run dies on "'ocp_context' is undefined" twelve
     # lines later, which says nothing about the actual cause. run.sh checks
     # for the file itself; this covers ansible-playbook called directly.
+    # Stamped before anything else so the summary can report how long the
+    # whole run took. gather_facts is false, so there is no ansible_date_time
+    # to read; date +%s on the control host is the portable equivalent.
+    # Deliberately NOT tagged always. A full run has no tags and so stamps
+    # the clock; ./run.sh --tags summary skips this task, run_started_epoch
+    # stays undefined, and the summary says so instead of reporting the
+    # twelve seconds the reprint itself took.
+    - name: Stamp the start of the run
+      ansible.builtin.set_fact:
+        run_started_epoch: "{{ lookup('pipe', 'date +%s') }}"
+
     - name: Check that group_vars/all.yml exists
       ansible.builtin.assert:
         that: ocp_context is defined

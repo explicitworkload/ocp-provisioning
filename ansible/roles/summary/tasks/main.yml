@@ -66,10 +66,85 @@
     - item.item.pass in ((item.resources | default([{}]))[0].data | default({}))
   no_log: true
 
+# The same data the report below prints, kept structured so the Ops
+# Dashboard can render it as a page instead of people copying it out of a
+# terminal. Built alongside the printed lines rather than parsed back out of
+# them, because '%-18s' padding is for human eyes, not for a UI.
+- name: Collect the links and credentials for the dashboard
+  ansible.builtin.set_fact:
+    summary_links_data: >-
+      {{ summary_links_data | default([])
+         + [{'label': item.label, 'url': 'https://' ~ hosts[0]}] }}
+  vars:
+    hosts: >-
+      {{ summary_routes.resources
+         | selectattr('metadata.namespace', 'equalto', item.ns)
+         | map(attribute='spec.host')
+         | select('match', item.match)
+         | list }}
+  loop: "{{ summary_links }}"
+  loop_control:
+    label: "{{ item.label }}"
+  when: hosts | length > 0
+
+- name: Collect the credentials for the dashboard
+  ansible.builtin.set_fact:
+    summary_creds_data: >-
+      {{ summary_creds_data | default([])
+         + [{'label': item.item.label, 'user': who,
+             'password': data[item.item.pass] | b64decode}] }}
+  vars:
+    data: "{{ (item.resources | default([{}]))[0].data | default({}) }}"
+    who: >-
+      {{ (data[item.item.user] | b64decode)
+         if (item.item.user | default('')) in data and (item.item.user | default(''))
+         else (item.item.user_literal | default('')) }}
+  loop: "{{ summary_secret_reads.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - item.resources | default([]) | length > 0
+    - item.item.pass in ((item.resources | default([{}]))[0].data | default({}))
+  no_log: true
+
+# Written to the dashboard's own namespace, as one Secret, so the dashboard
+# needs read access to exactly this object and nothing else. The alternative
+# - letting the dashboard read the real credential Secrets where they live -
+# would mean granting a web application get on secrets across six
+# namespaces, which is a far larger grant than the feature is worth.
+#
+# A Secret rather than a ConfigMap because it holds passwords, and the
+# contents are therefore encrypted at rest with the rest of etcd and hidden
+# from anyone with only configmap read.
+- name: Publish the summary for the Ops Dashboard
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ops-dashboard-summary
+        namespace: "{{ dashboard_namespace | default('dashboard') }}"
+      type: Opaque
+      stringData:
+        summary.json: >-
+          {{ {'cluster': ocp_cluster_name | default(''),
+              'api': ocp_api_url | default(''),
+              'generated': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'),
+              'links': summary_links_data | default([]),
+              'credentials': summary_creds_data | default([])} | to_json }}
+  when: summary_publish_to_dashboard | bool
+  no_log: true
+
 - name: Show the deployment summary
   ansible.builtin.debug:
-    msg: "{{ header + summary_link_lines + divider + summary_cred_lines + footer }}"
+    msg: "{{ header + summary_link_lines + divider + summary_cred_lines + elapsed + footer }}"
   vars:
+    secs: >-
+      {{ ((lookup('pipe', 'date +%s') | int) - (run_started_epoch | default(0) | int))
+         if run_started_epoch is defined else 0 }}
     header:
       - "═══════════════════════════════════════════════════════════════════"
       - "  {{ ocp_cluster_name | default('cluster') }}   {{ ocp_api_url | default('') }}"
@@ -78,6 +153,15 @@
     divider:
       - ""
       - "CREDENTIALS   (generated per cluster; none of this is in the repo)"
+    # Absent when the summary is reprinted on its own with --tags summary,
+    # because that run did not do the work being timed. Reporting the few
+    # seconds that reprint took would be worse than reporting nothing.
+    elapsed:
+      - ""
+      - "{{ 'TOTAL RUN TIME    ' ~ (secs // 3600) ~ 'h ' ~ ((secs % 3600) // 60)
+            ~ 'm ' ~ (secs % 60) ~ 's'
+            if run_started_epoch is defined
+            else 'TOTAL RUN TIME    (not measured - summary run on its own)' }}"
     footer:
       - ""
       - "Reprint any time with:  ./run.sh --tags summary"

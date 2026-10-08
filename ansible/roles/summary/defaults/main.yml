@@ -36,3 +36,8 @@ summary_credentials:
   - {label: "Langflow",        ns: openrag,                 name: openrag-langflow,          pass: superuser-password, user: superuser}
   - {label: "MLflow DB",       ns: redhat-ods-applications, name: mlflow-db-credentials,     pass: POSTGRES_PASSWORD, user: POSTGRES_USER}
   - {label: "NooBaa console",  ns: openshift-storage,       name: noobaa-admin,              pass: password, user: email}
+
+# Whether the links and credentials are also published to the Ops Dashboard,
+# as Secret ops-dashboard-summary in the dashboard namespace, for its Access
+# page. Set false to keep them to the terminal.
+summary_publish_to_dashboard: true

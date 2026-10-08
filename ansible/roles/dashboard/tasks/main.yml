@@ -123,6 +123,46 @@
           resources: ["mcpservers"]
           verbs: ["get", "list"]
 
+# A namespaced Role, not a ClusterRole, and named to a single object. The
+# Access page needs the summary the summary role publishes and nothing else;
+# resourceNames keeps this from becoming "the dashboard can read secrets".
+- name: Allow the dashboard to read its own summary secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: ops-dashboard-summary
+        namespace: "{{ dashboard_namespace }}"
+      rules:
+        - apiGroups: [""]
+          resources: ["secrets"]
+          resourceNames: ["ops-dashboard-summary"]
+          verbs: ["get"]
+
+- name: Bind the dashboard SA to the summary Role
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: ops-dashboard-summary
+        namespace: "{{ dashboard_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: ops-dashboard-summary
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ dashboard_namespace }}"
+
 - name: Bind dashboard SA to mesh ClusterRole
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
