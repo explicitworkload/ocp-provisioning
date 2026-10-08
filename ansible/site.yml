@@ -221,16 +221,23 @@
     - role: devspaces
       tags: [devspaces]
 
-    # After litellm: the dashboard copies LiteLLM's master key into its own
-    # Secret, so running it earlier leaves the AI page unauthenticated.
-    - role: dashboard
-      tags: [dashboard]
-
     # After litellm: OpenRAG reads the LiteLLM key for both chat and
     # embeddings, and registers its embedding model there.
     - role: openrag
       tags: [openrag, rag]
       when: deploy_openrag | bool
+
+    # Late, and after openrag. It needs LiteLLM's master key for its AI page,
+    # and its Access page lists the Routes of everything else - so the later
+    # it runs, the fewer of them are missing when someone opens it on a
+    # freshly built cluster. It is a view over the rest of the platform, so
+    # it goes after the platform.
+    #
+    # Still ahead of external_dns, which only publishes DNS for Routes that
+    # already exist, and ahead of summary, which publishes the Access page's
+    # own data.
+    - role: dashboard
+      tags: [dashboard]
 
     # Last: publishes live DNS records to Cloudflare. Opt-in only, and runs
     # after every Route it might need to publish already exists.

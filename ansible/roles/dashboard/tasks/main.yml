@@ -414,6 +414,22 @@
       metadata:
         name: ops-dashboard
         namespace: "{{ dashboard_namespace }}"
+        # Roll the Deployment whenever the ImageStream tag moves. Without
+        # this a rebuilt image sits in the registry and the running pod
+        # keeps serving the old one: the Deployment references :latest by
+        # tag, nothing re-resolves it, and "rollout status" reports success
+        # because the existing ReplicaSet is indeed fully rolled out. The
+        # Access page was built, pushed, built on-cluster from the right
+        # commit, and still 404ed for exactly this reason.
+        #
+        # OpenShift's image trigger controller rewrites the container image
+        # to the tag's current digest, which is also what makes :latest
+        # meaningful here at all.
+        annotations:
+          image.openshift.io/triggers: >-
+            [{"from": {"kind": "ImageStreamTag", "name": "ops-dashboard:{{ dashboard_image_tag }}",
+              "namespace": "{{ dashboard_namespace }}"},
+              "fieldPath": "spec.template.spec.containers[?(@.name==\"dashboard\")].image"}]
       spec:
         replicas: 1
         selector:

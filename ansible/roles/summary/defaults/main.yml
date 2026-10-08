@@ -13,6 +13,7 @@ summary_links:
   - {label: "OpenRAG",           ns: openrag,                        match: "^openrag\\."}
   - {label: "OpenRAG API",       ns: openrag,                        match: "^openrag-api\\."}
   - {label: "OpenRAG docs",      ns: openrag,                        match: "^openrag-docs"}
+  - {label: "Langflow",          ns: openrag,                        match: "^openrag-langflow"}
   - {label: "Kiali",             ns: istio-system,                   match: "^kiali"}
   - {label: "RHOAI",             ns: openshift-ingress,              match: "^rh-ai\\."}
   - {label: "Dev Spaces",        ns: openshift-devspaces,            match: "^devspaces\\."}
