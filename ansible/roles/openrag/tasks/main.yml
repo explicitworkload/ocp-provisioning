@@ -465,19 +465,31 @@
             storageClass: "{{ openrag_shared_storage_class }}"
       frontend:
         enabled: true
-      llmProviders:
-        openai:
-          enabled: true
-          apiKey: "{{ openrag_litellm_key }}"
+      # No llmProviders block. It used to declare openai with the LiteLLM key,
+      # which planted openai-api-key in the openrag-llm-providers Secret and
+      # left providers.openai.has_api_key true while configured stayed false.
+      # The frontend's provider-selection loop matches the built-ins on
+      # has_api_key but custom providers on configured:
+      #
+      #   else if ("openai"===e && D.providers.openai?.has_api_key)
+      #        { T("openai"); break }
+      #   else if (D.providers.custom?.[e]?.configured === true)
+      #        { T(e); break }
+      #
+      # so it selected openai and broke out before ever reaching rhoai, found
+      # openai not configured, and showed the setup wizard over the whole app
+      # - on a backend that was fully onboarded. Credentials now arrive only
+      # through the rhoai provider at onboarding, which is the one source of
+      # truth for them.
       appConfig:
         agent:
           llmModel: "{{ openrag_chat_model }}"
-          llmProvider: openai
+          llmProvider: rhoai
         knowledge:
           chunkSize: "{{ openrag_chunk_size }}"
           chunkOverlap: "{{ openrag_chunk_overlap }}"
           embeddingModel: "{{ openrag_embedding_model_name }}"
-          embeddingProvider: openai
+          embeddingProvider: rhoai
           ocr: false
           tableStructure: true
       ingress:
