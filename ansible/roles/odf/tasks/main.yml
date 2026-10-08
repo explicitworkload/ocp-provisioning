@@ -165,54 +165,6 @@
   retries: 30
   delay: 15
 
-- name: Configure NooBaa to use manual default backing store
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: present
-    definition:
-      apiVersion: noobaa.io/v1alpha1
-      kind: NooBaa
-      metadata:
-        name: noobaa
-        namespace: "{{ odf_namespace }}"
-      spec:
-        manualDefaultBackingStore: true
-  register: noobaa_patch
-  retries: 10
-  delay: 15
-  until: noobaa_patch is succeeded
-
-- name: Wait for BackingStore CRD
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context or omit }}"
-    api_version: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    name: backingstores.noobaa.io
-  register: bs_crd
-  until: bs_crd.resources | length > 0
-  retries: 30
-  delay: 15
-
-- name: Create PV pool backing store for NooBaa
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: present
-    apply: true
-    definition:
-      apiVersion: noobaa.io/v1alpha1
-      kind: BackingStore
-      metadata:
-        name: noobaa-pv-backing-store
-        namespace: "{{ odf_namespace }}"
-      spec:
-        type: pv-pool
-        pvPool:
-          numVolumes: "{{ odf_noobaa_pv_pool_volumes | int }}"
-          storageClass: "{{ odf_storage_class }}"
-          resources:
-            requests:
-              storage: "{{ odf_noobaa_pv_pool_size }}"
-
 # ---------------------------------------------------------------------------
 # Workaround for an MCG bug observed on ODF 4.22.5-rhodf.
 #
@@ -248,31 +200,65 @@
   ansible.builtin.include_tasks: noobaa_cnpg_repair.yml
   when: odf_fix_noobaa_cnpg | bool
 
-- name: Wait for PV backing store to be ready
+# Nothing above touches NooBaa. It is left to bootstrap, choose its own
+# default backing store and settle, and this only watches.
+#
+# Earlier revisions patched manualDefaultBackingStore onto the NooBaa CR the
+# moment its CRD appeared, then created a sized pv-pool BackingStore and
+# repointed the default BucketClass at it - three writes to a system that was
+# still bootstrapping. On sandbox830 the same ODF 4.22.5 left entirely alone
+# produced an equivalent pv-pool of its own, called
+# noobaa-default-backing-store, and reached Ready without the CNPG migration
+# stranding at all. Whether the interference caused the race is unproven, but
+# it bought nothing that NooBaa does not do by itself.
+#
+# What was lost with it: odf_noobaa_pv_pool_volumes and _size no longer
+# apply, so the pool is whatever NooBaa picks. Size it by hand afterwards if
+# that matters.
+- name: Wait for NooBaa to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: noobaa.io/v1alpha1
+    kind: NooBaa
+    namespace: "{{ odf_namespace }}"
+    name: noobaa
+  register: noobaa_ready
+  until: >-
+    noobaa_ready.resources | length > 0 and
+    (noobaa_ready.resources[0].status.phase | default('')) == 'Ready'
+  # 15 minutes. This now covers everything the hand-made backing store used to
+  # share the budget with: ocs-operator reconciling, noobaa-core starting, the
+  # CNPG cluster coming up, and NooBaa building and binding its own pool.
+  retries: 60
+  delay: 15
+
+# Any Ready BackingStore, not one by name. A cluster built by an earlier
+# revision of this role carries a hand-made noobaa-pv-backing-store and no
+# noobaa-default-backing-store at all, so waiting on the new name would hang
+# forever on exactly the clusters that already work.
+- name: Wait for a backing store to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
     api_version: noobaa.io/v1alpha1
     kind: BackingStore
     namespace: "{{ odf_namespace }}"
-    name: noobaa-pv-backing-store
-  register: pv_bs
+  register: noobaa_bs
   until: >-
-    pv_bs.resources | length > 0 and
-    pv_bs.resources[0].status is defined and
-    pv_bs.resources[0].status.phase is defined and
-    pv_bs.resources[0].status.phase == 'Ready'
-  # 15 minutes, not 7.5. This is the first genuinely slow wait after the
-  # StorageCluster is created, and on a healthy cluster nothing ahead of it
-  # blocks for long: the detection above exits the moment CNPG holds the
-  # system, and the post-repair NooBaa wait is skipped when not stranded. It
-  # must therefore cover ocs-operator reconciling, noobaa-core and the CNPG
-  # cluster coming up, and only then the 3-replica pv-pool binding 3x50Gi and
-  # registering its agents. The detection rewrite removed two failed_when:false
-  # polls that used to absorb ~6 minutes of that; this restores the headroom.
-  retries: 60
+    noobaa_bs.resources | default([])
+    | selectattr('status.phase', 'defined')
+    | selectattr('status.phase', 'equalto', 'Ready') | list | length > 0
+  retries: 40
   delay: 15
 
-- name: Wait for default BucketClass
+- name: Note which backing store NooBaa settled on
+  ansible.builtin.debug:
+    msg: >-
+      NooBaa backing store(s) ready:
+      {{ noobaa_bs.resources | selectattr('status.phase', 'defined')
+         | selectattr('status.phase', 'equalto', 'Ready')
+         | map(attribute='metadata.name') | join(', ') }}
+
+- name: Wait for the default BucketClass to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
     api_version: noobaa.io/v1alpha1
@@ -280,26 +266,11 @@
     namespace: "{{ odf_namespace }}"
     name: noobaa-default-bucket-class
   register: default_bc
-  until: default_bc.resources | length > 0
-  retries: 20
+  until: >-
+    default_bc.resources | length > 0 and
+    (default_bc.resources[0].status.phase | default('')) == 'Ready'
+  retries: 40
   delay: 15
-
-- name: Update default BucketClass to use PV backing store
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: present
-    apply: true
-    definition:
-      apiVersion: noobaa.io/v1alpha1
-      kind: BucketClass
-      metadata:
-        name: noobaa-default-bucket-class
-        namespace: "{{ odf_namespace }}"
-      spec:
-        placementPolicy:
-          tiers:
-            - backingStores:
-                - noobaa-pv-backing-store
 
 # Again. The migration begins whenever NooBaa gets to it - on one cluster
 # that was after the first pass had already run and found nothing, after the

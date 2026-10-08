@@ -58,8 +58,11 @@ odf_noobaa_tables:
 # one volume's worth of usable object capacity once replicated.
 #
 # Scaling this UP is supported; NooBaa does not support scaling it back down.
-odf_noobaa_pv_pool_volumes: 3
-odf_noobaa_pv_pool_size: 50Gi
+# The default backing store NooBaa creates for itself. Not created here -
+# the role leaves NooBaa alone to bootstrap - so this is the name to watch,
+# not a name to choose. odf_noobaa_pv_pool_volumes and _size used to size a
+# hand-made pv-pool and no longer apply.
+odf_default_backing_store: noobaa-default-backing-store
 
 
 # --- Resource requests -----------------------------------------------------

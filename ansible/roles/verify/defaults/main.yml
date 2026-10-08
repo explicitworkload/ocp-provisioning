@@ -44,7 +44,7 @@ verify_resources:
     api_version: noobaa.io/v1alpha1
     kind: BackingStore
     namespace: openshift-storage
-    name: noobaa-pv-backing-store
+    name: noobaa-default-backing-store
     check: phase
     expect: Ready
 
