@@ -261,6 +261,20 @@
     - odf_exp_assert_ceph | bool
     - odf_exp_problems | length > 0
 
+- name: Read the NooBaa backing stores
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    namespace: "{{ odf_exp_namespace }}"
+  register: odf_exp_bs
+  failed_when: false
+
+# backed-by is read, not assumed. This line used to claim "the Ceph object
+# store" unconditionally; on sandbox830 NooBaa asked for AWS credentials,
+# CCO could not mint them because RHPDS strips kube-system/aws-creds, and
+# NooBaa fell back to a pv-pool of its own - so the report named something
+# that was never built.
 - name: Report what was built
   ansible.builtin.debug:
     msg:
@@ -271,5 +285,11 @@
       - "storage nodes   : {{ odf_exp_nodes | join(', ') }}"
       - "block           : ocs-storagecluster-ceph-rbd"
       - "file            : ocs-storagecluster-cephfs"
-      - "object          : openshift-storage.noobaa.io, backed by the Ceph object store"
+      - "object          : openshift-storage.noobaa.io, via {{ backing_stores | default('no backing store', true) }}"
       - "S3 endpoint     : https://s3-{{ odf_exp_namespace }}.{{ ocp_apps_domain }}"
+  vars:
+    backing_stores: >-
+      {{ odf_exp_bs.resources | default([])
+         | map(attribute='metadata.name') | zip(odf_exp_bs.resources | default([])
+             | map(attribute='spec.type') | map('default', 'unknown', true))
+         | map('join', ' (') | map('regex_replace', '$', ')') | join(', ') }}

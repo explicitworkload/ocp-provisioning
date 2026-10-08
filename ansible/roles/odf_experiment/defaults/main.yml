@@ -40,3 +40,17 @@ odf_exp_expected_storage_classes:
   - ocs-storagecluster-ceph-rbd        # block
   - ocs-storagecluster-cephfs          # file
   - openshift-storage.noobaa.io        # object, via NooBaa
+
+# Whether the shared NooBaa CNPG repair runs. Defined here, not just in the
+# odf role where the tasks live, because the include_role that pulls them in
+# carries "when: odf_fix_noobaa_cnpg | bool" - and a when: on an include_role
+# is evaluated in THIS role's scope, before the odf role's defaults are
+# loaded. Without it the playbook dies on
+#   'odf_fix_noobaa_cnpg' is undefined
+# right after creating the StorageCluster, which is what happened on the
+# first real run of this experiment (sandbox830).
+#
+# Set false to watch NooBaa fend for itself, which is the more interesting
+# experiment: on sandbox830 it came up Ready unaided and never created the
+# StatefulSet database the CNPG race strands data in.
+odf_fix_noobaa_cnpg: true
