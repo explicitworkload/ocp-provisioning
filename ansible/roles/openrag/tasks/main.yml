@@ -271,6 +271,23 @@
                 args:
                   - "--model-id={{ openrag_embedding_model_id }}"
                   - "--port=8080"
+                  # bge-small-en-v1.5 cannot accept more than 512 tokens -
+                  # that is the model's position-embedding limit, not a
+                  # server setting, so it cannot be raised. Without this TEI
+                  # answers 413 on anything longer:
+                  #   Input validation error: `inputs` must have less than
+                  #   512 tokens. Given: 571
+                  # OpenRAG chunks at 1000 characters, which is under 512
+                  # tokens for prose and over it for anything dense, so
+                  # ingestion failed on some documents and not others.
+                  # LiteLLM turned the 413 into a 502 and OpenRAG reported
+                  # it as "OpenSearch rejected the credential", which is
+                  # three layers away from the cause.
+                  #
+                  # Truncating loses the tail of an oversized chunk, which
+                  # costs a little retrieval quality on those chunks. The
+                  # alternative is failing the whole ingest, so: truncate.
+                  - "--auto-truncate"
                 ports:
                   - containerPort: 8080
                 env:
