@@ -22,7 +22,7 @@ ocp-provisioning/
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
 │   ├── site.yml            # Main playbook (17 roles)
-│   ├── group_vars/all.yml  # Configuration variables
+│   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
 │   ├── roles/              # operators, service_mesh, network_observability, gpu_worker, odf, quay, etc.
 │   └── README.md           # Ansible-specific docs
 ├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
@@ -72,6 +72,10 @@ cd ansible
 python3 -m venv .venv
 source .venv/bin/activate
 pip install ansible kubernetes
+
+# Create your variables file. all.yml is untracked so it can hold a pull
+# secret, API key or endpoint credential; the repo ships the sample.
+cp group_vars/all.yml.sample group_vars/all.yml
 
 # Point oc at the target cluster. The playbook follows whatever
 # `oc config current-context` returns, and opens by printing the context,

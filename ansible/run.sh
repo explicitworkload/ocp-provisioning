@@ -28,6 +28,25 @@ MSG
   exit 1
 fi
 
+# group_vars/all.yml is untracked so it can hold credentials; the repo ships
+# group_vars/all.yml.sample instead. A missing one is not an obscure failure
+# worth debugging - every variable silently falls back to a role default and
+# the run targets the wrong things.
+if [[ ! -f group_vars/all.yml ]]; then
+  cat >&2 <<'MSG'
+group_vars/all.yml not found.
+
+It is deliberately untracked, so that a pull secret, API key or endpoint
+credential can live in it without being committed. Start from the sample:
+
+    cp group_vars/all.yml.sample group_vars/all.yml
+
+then edit it. The sample carries every setting with its documentation, and
+no secrets.
+MSG
+  exit 1
+fi
+
 # Install required collections if not present
 ansible-galaxy collection install -r requirements.yml 2>/dev/null || true
 

@@ -64,6 +64,13 @@ ansible/vault-password*
 ansible/**/secrets.yml
 ansible/**/vault.yml
 
+# The working copy of the main variables file. Tracked as
+# group_vars/all.yml.sample instead, so a real pull secret, API key or
+# endpoint credential can live in the untracked one without a stray
+# `git add -A` publishing it. Copy the sample to all.yml to get started;
+# run.sh refuses to run without it.
+ansible/group_vars/all.yml
+
 # Python virtualenvs. Note: running `python3 -m venv .` in a project root
 # overwrites that root's .gitignore with venv's own (a single `*`), silently
 # disabling every rule above — always create it in a subdirectory.

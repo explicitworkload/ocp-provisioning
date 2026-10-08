@@ -1,4 +1,16 @@
 ---
+# TEMPLATE. Copy to group_vars/all.yml, which is untracked, and edit that:
+#
+#     cp group_vars/all.yml.sample group_vars/all.yml
+#
+# all.yml is in .gitignore so a pull secret, API key or endpoint credential
+# can live in it without a stray `git add -A` publishing it to a public repo.
+# This file is the tracked copy and must stay free of real values.
+#
+# It is also the only documentation of what these settings do, so when you
+# add or change a variable in all.yml, make the same edit here - with the
+# value left empty or an example. Nothing enforces that; a drifting sample
+# is how the next person ends up with a cluster configured by role defaults.
 # OpenShift cluster context.
 # Empty = whatever `oc config current-context` points at, so a rebuilt sandbox
 # needs no commit here. Pinning a name is still supported and is worth doing

@@ -5,6 +5,22 @@
   gather_facts: false
 
   pre_tasks:
+    # First, before anything reads a variable. group_vars/all.yml is
+    # untracked so it can hold credentials, and a fresh clone does not have
+    # one. Without this the run dies on "'ocp_context' is undefined" twelve
+    # lines later, which says nothing about the actual cause. run.sh checks
+    # for the file itself; this covers ansible-playbook called directly.
+    - name: Check that group_vars/all.yml exists
+      ansible.builtin.assert:
+        that: ocp_context is defined
+        fail_msg: >-
+          group_vars/all.yml is missing. It is deliberately untracked so that
+          a pull secret, API key or endpoint credential can live in it
+          without being committed. Copy the sample and edit it:
+          cp group_vars/all.yml.sample group_vars/all.yml
+        quiet: true
+      tags: [always]
+
     # Everything down to the banner is read-only, and runs before the first
     # task that changes the cluster. ocp_context defaults to empty, meaning
     # follow the current kubeconfig context, so what this play is pointed at
