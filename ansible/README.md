@@ -6,7 +6,7 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 
 ## What gets installed
 
-### Operators (14 subscriptions)
+### Operators (13 subscriptions)
 
 | Operator | Namespace | Channel |
 |----------|-----------|---------|
@@ -22,8 +22,12 @@ This playbook does **not** create the cluster from scratch. It assumes you alrea
 | Network Observability | openshift-operators | stable |
 | Service Mesh 3 (Sail) | openshift-operators | stable |
 | Kiali (OSSM) | openshift-operators | stable |
-| Dev Spaces | openshift-operators | stable |
 | Zero Trust Workload Identity Manager | zero-trust-workload-identity-manager | stable-v1 |
+
+Three more operators are subscribed by the roles that need them rather than
+up front, because each is only installed when its feature is enabled: ODF
+(`odf`), Dev Spaces (`devspaces`) and Loki (`network_observability`, when
+`netobserv_enable_loki` is true).
 
 ### Service Mesh 3
 
@@ -35,7 +39,19 @@ Deploys the full Istio service mesh stack:
 
 ### Network Observability
 
-Deploys FlowCollector with eBPF agent for network traffic visibility directly in the OpenShift console. Loki is disabled (no flow log storage) — metrics-only mode via Prometheus.
+Deploys FlowCollector with an eBPF agent for network traffic visibility directly in the OpenShift console.
+
+Flow records are stored in a LokiStack backed by NooBaa object storage, so the
+console's **Traffic flows** table — the per-connection records, which is
+usually the point of asking — is populated rather than empty. The bucket is
+claimed with an ObjectBucketClaim, which means ODF has to be up first; the
+role checks for the `ObjectBucketClaim` CRD by name and fails with that
+explanation rather than dying thirty tasks later on a missing API. Backing it
+with NooBaa rather than a cloud bucket also keeps it working on a
+disconnected cluster.
+
+Set `netobserv_enable_loki=false` to keep the FlowCollector without flow
+records (topology still renders, from Prometheus metrics).
 
 ### GPU Worker
 
@@ -89,7 +105,7 @@ Deploys the Istio Bookinfo sample application with sidecar injection, all four m
 ### Operations Dashboard
 
 A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Password-protected via cluster Secret. Features:
-- **Sidebar navigation** — Dashboard, Platform Admin, AI, Gatus, Help, and Logout
+- **Sidebar navigation** — Dashboard, Platform Admin, AI, Health, Access, Help, and Logout
 - **Login page** — session-based authentication with password stored in Kubernetes Secret
 - **Traffic generator** — burst mode (fixed request count) or sustained mode (continuous for up to 60 minutes) with configurable concurrency (1–50 threads)
 - **Traffic shifting** — route traffic across Reviews v1/v2/v3 by percentage for canary deployment demos
@@ -100,6 +116,7 @@ A self-service operations dashboard built with Flask and deployed via OpenShift 
 - **Resiliency testing** — select one or two worker nodes and **Stop** them (powers the EC2 instance off so the node goes NotReady), **Start** them again, or **Destroy & Rebuild** (deletes the Machine so its MachineSet provisions a replacement). Control-plane nodes are refused
 - **AI Assistant** — summarization and chat with models served via LiteLLM, MCP server discovery and tool use for live cluster interaction (separate page)
 - **Floating task log** — pinned bottom-right panel with live progress, toast notifications for all actions
+- **Access page** — every URL and generated credential for the cluster, the same set the `summary` role prints. Passwords are masked, with show/copy per row. It reads a single Secret, `ops-dashboard-summary`, published by the `summary` role; a `resourceNames`-scoped Role grants the dashboard `get` on that one object, so it gains no ability to read secrets generally. Re-run `./run.sh --tags summary` after rotating anything
 - **Help page** — built-in guide with demo scenarios for each feature
 - Links to Gatus health monitor
 
@@ -183,6 +200,41 @@ Deploys [Gatus](https://github.com/TwiN/gatus) health monitoring, exposed at `ga
 
 Deploys Red Hat Quay backed by ODF managed object storage (NooBaa). Falls back to S3 config when ODF is unavailable.
 
+### OpenRAG — optional, off by default
+
+Deploys [OpenRAG](https://github.com/langflow-ai/openrag) and its dependencies:
+a three-node OpenSearch cluster, docling-serve for document conversion,
+text-embeddings-inference serving `BAAI/bge-small-en-v1.5` on CPU, Langflow,
+Postgres, and the OpenRAG chart itself.
+
+Needs `helm` on the control host — the only role that does. Enable with
+`deploy_openrag=true`.
+
+Chat and embeddings both go through LiteLLM rather than straight to a model,
+so OpenRAG, the Gen AI playground and the Ops Dashboard all serve the same
+model list. The role reads the LiteLLM key from the cluster rather than
+inheriting it, which is what makes `--tags openrag` runnable on its own.
+
+Two deployment-specific details worth knowing, because neither is obvious
+from the upstream project:
+
+- **Langflow gets its own Route.** The "Edit in Langflow" buttons open the
+  flow editor in a new tab, and upstream resolves that link through
+  `LANGFLOW_PUBLIC_URL` before falling back to `same-host:7860` — a port
+  nothing serves behind the OpenShift router. The chart's ingress block
+  renders only its frontend and backend hosts, so the Route is created
+  directly and the variable set to match. `openrag_expose_langflow=false`
+  keeps Langflow in-cluster.
+- **`openrag-backend` is made resolvable from the OpenSearch namespace.**
+  OpenRAG authenticates per-user reads to OpenSearch with a JWT, and
+  OpenSearch validates it by fetching OpenRAG's JWKS from
+  `http://openrag-backend:8000/...` — a docker-compose hostname baked into
+  the OpenSearch image. A bare service name resolves only within its own
+  namespace, so without an ExternalName service pointing at the real one,
+  the Knowledge page returns 401 and OpenRAG reports it as "OpenSearch
+  rejected the credential", which is misleading: ingestion works, because
+  that path uses basic auth.
+
 ## Prerequisites
 
 - An existing OpenShift 4.22+ cluster on AWS
@@ -200,21 +252,39 @@ Deploys Red Hat Quay backed by ODF managed object storage (NooBaa). Falls back t
    pip install ansible kubernetes
    ```
 
-2. Log in to your cluster:
+2. Create your variables file. `group_vars/all.yml` is untracked, so it can
+   hold a pull secret, an API key or an endpoint credential without a stray
+   `git add -A` publishing it. The repo ships the template:
+
+   ```bash
+   cp group_vars/all.yml.sample group_vars/all.yml
+   ```
+
+   `run.sh` refuses to start without it, and `site.yml` asserts it as its
+   first task, so a fresh clone fails with that instruction rather than
+   running every variable off its role default.
+
+   When you add or change a setting, mirror it into the sample — with the
+   value left empty or an example. Nothing enforces that, and the sample is
+   the only documentation of what these settings do.
+
+3. Log in to your cluster:
 
    ```bash
    oc login https://api.<cluster>.<domain>:6443 -u admin -p <password>
    ```
 
-3. Set your context in `group_vars/all.yml`:
+4. Set your context in `group_vars/all.yml`:
 
    ```yaml
    ocp_context: "<your oc context>"
    ```
 
-   Find it with `oc config current-context`.
+   Find it with `oc config current-context`. Leave it empty to follow
+   whatever the current context is; the run prints the context, API URL,
+   infrastructure name and node count before changing anything.
 
-4. Run the playbook:
+5. Run the playbook:
 
    ```bash
    ./run.sh
@@ -377,11 +447,11 @@ ansible/
 ├── run.sh
 ├── site.yml
 ├── inventory/hosts.yml
-├── group_vars/all.yml
+├── group_vars/all.yml.sample   # copy to all.yml (untracked)
 └── roles/
-    ├── operators/              # Namespaces, OperatorGroups, Subscriptions (14 operators)
+    ├── operators/              # Namespaces, OperatorGroups, Subscriptions (13 operators)
     ├── service_mesh/           # Istio, IstioCNI, Kiali, OSSMConsole, monitoring
-    ├── network_observability/  # FlowCollector with eBPF agent
+    ├── network_observability/  # FlowCollector (eBPF) + LokiStack on NooBaa
     ├── gpu_worker/             # GPU MachineSet (auto-discovers cluster config)
     ├── nfd/                    # NodeFeatureDiscovery instance
     ├── nvidia_gpu/             # NVIDIA ClusterPolicy
@@ -396,7 +466,10 @@ ansible/
     ├── external_dns/           # Upstream ExternalDNS -> Cloudflare (opt-in)
     ├── devspaces/              # Dev Spaces operator + CheCluster
     ├── ztwim/                  # SPIFFE/SPIRE workload identity (server, agent, CSI, OIDC)
-    └── gatus/                  # Gatus health monitoring
+    ├── gatus/                  # Gatus health monitoring
+    ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings (opt-in)
+    ├── verify/                 # Asserts the deployment; collects every failure
+    └── summary/                # Prints URLs, credentials and total run time
 ```
 
 ## Idempotency

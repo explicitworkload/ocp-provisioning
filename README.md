@@ -21,7 +21,7 @@ ocp-provisioning/
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook (17 roles)
+│   ├── site.yml            # Main playbook (21 roles)
 │   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
 │   ├── roles/              # operators, service_mesh, network_observability, gpu_worker, odf, quay, etc.
 │   └── README.md           # Ansible-specific docs
@@ -39,8 +39,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 
 **What it does:**
 
-- Installs 14 operators (NFD, RHOAI 3.5, NVIDIA GPU, Service Mesh 3, Kiali, Network Observability, ODF, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link, Dev Spaces)
-- Deploys Service Mesh 3 (Istio + Kiali) with Thanos Querier integration and Network Observability (eBPF FlowCollector)
+- Installs 13 operators up front (NFD, RHOAI 3.5, NVIDIA GPU, Service Mesh 3, Kiali, Network Observability, Observability, Pipelines, Quay, Web Terminal, GitOps, Connectivity Link, Zero Trust Workload Identity Manager); ODF, Dev Spaces and Loki are subscribed by the roles that need them
+- Deploys Service Mesh 3 (Istio + Kiali) with Thanos Querier integration and Network Observability (eBPF FlowCollector, with flow records stored in a LokiStack backed by NooBaa so the console's Traffic flows table is populated)
 - Deploys ODF with gp3 EBS-backed Ceph storage and NooBaa object storage
 - Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
 - Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, p4d.24xlarge, p4de.24xlarge) with dedicated MachineConfigPool by auto-discovering cluster config
@@ -50,6 +50,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring (probes in-cluster service DNS, with the Gatus UI embedded in the dashboard)
 - Deploys OpenShift Dev Spaces with a `CheCluster` and registers this repo as a one-click workspace sample; workspaces install the Claude Code CLI and the Kubernetes extension on start
 - Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), node resiliency testing (stop/start the backing EC2 instance, or destroy a Machine and let its MachineSet rebuild it), AI Assistant (chat with MCP server tool use), embedded health monitor, floating task log with toast notifications, and sustained traffic generator
+- Optionally deploys OpenRAG with OpenSearch, docling, CPU embeddings and Langflow, wired through LiteLLM so it serves the same models as everything else (off by default; needs `helm`)
 - Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
 
 ### Prerequisites
@@ -62,7 +63,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 
 `helm` is worth installing up front if you plan to use `deploy_openrag=true`:
 it is the one tool a single role needs, so a host without it runs the other
-eighteen roles to completion and only then fails.
+twenty roles to completion and only then fails.
 
 ### Quick Start
 
@@ -88,16 +89,22 @@ oc login ...
 
 The run ends by printing every URL it created and every credential it
 generated — Ops Dashboard, LiteLLM UI and master key, OpenSearch, Langflow,
-the MLflow and LiteLLM databases, the NooBaa console. All of it is read back
-from the cluster, so nothing is stored in the repo and you can reprint it
-later without re-running anything:
+the MLflow and LiteLLM databases, the NooBaa console — along with the total
+run time. All of it is read back from the cluster, so nothing is stored in
+the repo and you can reprint it later without re-running anything:
 
 ```bash
 ./run.sh --tags summary
 ```
 
+The same links and credentials are published to the Ops Dashboard's **Access**
+page, so they can be read from a browser rather than scrolled back to in a
+terminal. The dashboard reads one Secret for this and is granted `get` on
+that single object by name, so it gains no ability to read secrets generally.
+A reprint refreshes it after a rotation.
+
 The run then ends by *asserting* that state, rather than trusting a green
-`PLAY RECAP`. 56 of this playbook's tasks are `until:` loops waiting on
+`PLAY RECAP`. 63 of this playbook's tasks are `until:` loops waiting on
 operators to converge; seven swallow their expiry and seven more are one-shot
 probes feeding a `when:`, so a run could previously finish successfully having
 silently skipped work. The `verify` role checks every expected custom
