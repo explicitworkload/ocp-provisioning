@@ -702,6 +702,55 @@
 #
 # Captured once into its own ConfigMap. After that the pristine copy is in
 # the cluster and no pod is needed.
+# OpenSearch validates OpenRAG's per-user JWTs by fetching OpenRAG's JWKS,
+# and the image ships the docker-compose hostname for it:
+#
+#   openid_connect_url: http://openrag-backend:8000/.well-known/openid-configuration
+#
+# A bare service name resolves only inside its own namespace, and OpenSearch
+# runs in another one, so the fetch fails and every token is rejected. The
+# global writer client uses basic auth and is unaffected, which is why
+# ingestion works while the Knowledge page returns 401 - OpenRAG surfaces
+# that as "OpenSearch rejected the credential. Please sign in again.", which
+# is true only in the narrowest sense.
+#
+# Patched rather than re-applying the whole securityconfig with
+# securityadmin.sh: one field is wrong, and the rest of the shipped config -
+# the roles, the role mappings, the internal users - is what OpenRAG expects.
+# OpenSearch validates OpenRAG's per-user JWTs by fetching OpenRAG's JWKS,
+# and the image bakes in the docker-compose hostname for it:
+#
+#   openid_connect_url: http://openrag-backend:8000/.well-known/openid-configuration
+#
+# A bare service name resolves only inside its own namespace, and OpenSearch
+# runs in another, so the fetch fails and every token is rejected. The global
+# writer client uses basic auth and is unaffected, which is why ingestion
+# works while the Knowledge page 401s - OpenRAG reports that as "OpenSearch
+# rejected the credential", which is true only in the narrowest sense.
+#
+# Fixed by making the name resolve rather than by rewriting the security
+# config. Patching securityconfig through the REST API is refused outright -
+# {"status":"FORBIDDEN","message":"Access denied"} - because OpenSearch
+# reserves that API for the admin certificate unless
+# plugins.security.restapi.roles_enabled is set, which would mean a config
+# change and a rolling restart of all three nodes. An ExternalName service is
+# a CNAME: no restart, nothing privileged, and it leaves the shipped security
+# config exactly as upstream intends it.
+- name: Make openrag-backend resolvable from the OpenSearch namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: openrag-backend
+        namespace: "{{ openrag_opensearch_namespace }}"
+      spec:
+        type: ExternalName
+        externalName: "openrag-backend.{{ openrag_namespace }}.svc.cluster.local"
+
 - name: Look for a captured copy of the shipped catalogue
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
