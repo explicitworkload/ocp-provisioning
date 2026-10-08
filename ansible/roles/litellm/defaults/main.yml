@@ -101,11 +101,14 @@ litellm_ai_asset_configmap: gen-ai-aa-custom-model-endpoints
 litellm_ai_asset_name: endpoint-1
 litellm_ai_asset_key_secret: endpoint-api-key-1
 
-# Modes the Gen AI playground has no use for - it is a chat UI. Listed as
-# what to reject rather than what to accept, so a model LiteLLM reports no
-# mode for, or a null mode, is still published.
+# Modes RHOAI genuinely cannot use. Listed as what to reject rather than
+# what to accept, so a model LiteLLM reports no mode for, or a null mode, is
+# still published.
+#
+# embedding is NOT rejected: the models are published with
+# model_type: embedding so RHOAI's vector stores and AutoRAG can use them,
+# and llama-stack keeps them out of the chat picker itself.
 litellm_ai_asset_reject_modes:
-  - embedding
   - rerank
   - image_generation
   - audio_transcription

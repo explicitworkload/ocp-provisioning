@@ -60,20 +60,36 @@
   register: litellm_isvcs
   failed_when: false
 
+# Accumulated one model at a time rather than built inline, because each
+# entry needs both a name and a type and Jinja has no list comprehension to
+# pair them with.
+#
+# model_type matters: llama-stack distinguishes llm from embedding, and an
+# embedding model published as llm is offered in the chat picker and fails
+# when something tries to talk to it. Embeddings are published - RHOAI's
+# vector stores and AutoRAG want them - but as what they are.
 - name: Decide which models to publish
   ansible.builtin.set_fact:
     litellm_asset_models: >-
-      {{ served | reject('in', excluded) | list }}
+      {{ litellm_asset_models | default([])
+         + [{'name': item.model_name,
+             'model_type': 'embedding'
+               if (item.model_info.mode | default('')) == 'embedding' else 'llm'}] }}
+  loop: "{{ litellm_model_info.json.data | default([]) }}"
+  loop_control:
+    label: "{{ item.model_name }}"
+  when:
+    - item.model_name not in excluded
+    # Declaring the same model twice in litellm_extra_models is a typo, not
+    # an instruction to list it twice - and RHOAI renders each entry as its
+    # own row. Seen on sandbox5164, where maas-rhdp named qwen38-27b twice.
+    - item.model_name not in (litellm_asset_models | default([]) | map(attribute='name') | list)
   vars:
-    # Everything LiteLLM serves, minus the modes the playground has no use
-    # for. Inverted deliberately: mode comes back three ways - absent,
-    # present-and-null, present-and-set - and only the third can be matched
-    # reliably, so anything not positively identified as a non-chat mode is
-    # published. An OpenAI-compatible endpoint is a chat endpoint unless it
-    # says otherwise.
-    served: >-
-      {{ litellm_model_info.json.data | default([])
-         | map(attribute='model_name') | list }}
+    # Modes the playground genuinely cannot use. Inverted deliberately: mode
+    # comes back three ways - absent, present-and-null, present-and-set - and
+    # only the third can be matched reliably, so anything not positively
+    # identified as unusable is published. An OpenAI-compatible endpoint is a
+    # chat endpoint unless it says otherwise.
     not_for_chat: >-
       {{ litellm_model_info.json.data | default([])
          | selectattr('model_info.mode', 'defined')
@@ -199,5 +215,5 @@
       {{ litellm_ai_asset_configmap }} published to
       {{ rhoai_ai_endpoint_namespace }} with
       {{ litellm_asset_models | length }} model(s):
-      {{ litellm_asset_models | join(', ') }}
+      {{ litellm_asset_models | map(attribute='name') | join(', ') }}
   when: litellm_asset_models | length > 0

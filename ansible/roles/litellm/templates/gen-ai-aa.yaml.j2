@@ -21,7 +21,7 @@ providers:
         base_url: http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1
         allowed_models:
 {% for m in litellm_asset_models %}
-          - {{ m }}
+          - {{ m.name }}
 {% endfor %}
         custom_gen_ai:
           api_key:
@@ -32,8 +32,8 @@ registered_resources:
   models:
 {% for m in litellm_asset_models %}
     - provider_id: {{ litellm_ai_asset_name }}
-      model_id: {{ m }}
-      model_type: llm
+      model_id: {{ m.name }}
+      model_type: {{ m.model_type }}
       metadata:
-        display_name: {{ m }}
+        display_name: {{ m.name }}
 {% endfor %}
