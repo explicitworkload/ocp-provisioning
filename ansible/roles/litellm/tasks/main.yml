@@ -720,51 +720,11 @@
   changed_when: true
   no_log: true
 
-# A model whose litellm_params carry only litellm_credential_name is resolved
-# when the proxy loads its config. Credentials created just now were not there
-# at load time, so those models are sitting with no url and no key and would
-# answer 401 against api.openai.com until something restarted them.
-- name: Restart LiteLLM to bind the new credentials
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: absent
-    api_version: v1
-    kind: Pod
-    namespace: "{{ litellm_namespace }}"
-    label_selectors:
-      - app=litellm
-  when: litellm_extra_creds.changed
-
-- name: Wait for LiteLLM to come back with the credentials bound
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context or omit }}"
-    api_version: apps/v1
-    kind: Deployment
-    namespace: "{{ litellm_namespace }}"
-    name: litellm
-  register: litellm_cred_rollout
-  until: >-
-    litellm_cred_rollout.resources | length > 0 and
-    (litellm_cred_rollout.resources[0].status.readyReplicas | default(0)) >= 1 and
-    (litellm_cred_rollout.resources[0].status.unavailableReplicas | default(0)) == 0
-  retries: 20
-  delay: 15
-  when: litellm_extra_creds.changed
-
-# The deployment reporting ready is not the same as the route answering: the
-# old pod can still be terminating behind it. Everything after this talks to
-# litellm_url, so wait for the thing that is actually being talked to.
-- name: Wait for the LiteLLM API to answer again
-  ansible.builtin.uri:
-    url: "{{ litellm_url }}/health/liveliness"
-    method: GET
-    validate_certs: false
-    status_code: 200
-  register: litellm_cred_health
-  until: litellm_cred_health.status == 200
-  retries: 20
-  delay: 15
-  when: litellm_extra_creds.changed
+# No restart here. An earlier revision needed one: the models were declared
+# in config.yaml and bound their credential when the proxy loaded the file,
+# so a credential created afterwards was invisible to them. Models are
+# registered through the API now, after the credentials exist, and bind at
+# registration.
 
 # --- Admin User ---
 
@@ -887,6 +847,12 @@
 # of which is set by an untagged task earlier in this role - so --tags
 # ai-endpoints reached them with nothing defined and died on the first
 # reference. Publishing is part of deploying LiteLLM; --tags litellm runs it.
+# Before the AI asset endpoint is published, which asks LiteLLM what it
+# serves - and before anything else reads the model list.
+- name: Register LiteLLM's models in its database
+  ansible.builtin.include_tasks:
+    file: models.yml
+
 - name: Publish LiteLLM's models as an AI asset endpoint
   ansible.builtin.include_tasks:
     file: ai_endpoints.yml

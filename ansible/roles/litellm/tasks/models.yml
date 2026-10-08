@@ -1,0 +1,164 @@
+---
+# Registers LiteLLM's models in its own database rather than declaring them in
+# config.yaml, so they can be inspected and edited from the LiteLLM UI. A
+# model that comes from the mounted ConfigMap is shown there as "Defined in
+# config" and is read-only - the mount is read-only, and the next Ansible run
+# would overwrite an edit anyway.
+#
+# Keys are still not copied into the database where there is an alternative:
+# litellm_params carries os.environ/<NAME>, which LiteLLM resolves per request
+# for database models exactly as it does for config ones, so the Qwen service
+# account token stays in litellm-secrets. The external endpoints' keys live in
+# LiteLLM credentials, which this references by name.
+#
+# Ownership is recorded in model_info.managed_by. Anything without that marker
+# was added by hand in the UI and is never touched - not updated, not deleted.
+
+- name: Start with the models this cluster serves itself
+  ansible.builtin.set_fact:
+    litellm_desired_models:
+      - model_name: "{{ model_name }}"
+        mode: chat
+        params:
+          model: "openai/{{ model_name }}"
+          api_base: "https://{{ model_name }}-{{ model_namespace }}.{{ ocp_apps_domain }}/v1"
+          api_key: os.environ/QWEN_API_KEY
+          # The model's route presents the cluster's wildcard certificate,
+          # which the proxy's trust store does not carry.
+          tls_verify: false
+      # Deployed by the openrag role. LiteLLM resolves the host per request,
+      # so this entry is harmless - just unusable - when that role has not run.
+      # mode: embedding matters: without it LiteLLM assumes chat and sends
+      # both its health check and the UI's "Test connection" to
+      # /v1/chat/completions, which text-embeddings-inference answers 404.
+      - model_name: "{{ litellm_embedding_model_name }}"
+        mode: embedding
+        params:
+          model: "openai/{{ litellm_embedding_model_id }}"
+          api_base: "{{ litellm_embedding_api_base }}"
+          api_key: none
+
+- name: Add the Azure model
+  ansible.builtin.set_fact:
+    litellm_desired_models: >-
+      {{ litellm_desired_models + [{
+           'model_name': litellm_azure_model_name,
+           'mode': 'chat',
+           'params': {
+             'model': 'azure/gpt-4',
+             'litellm_credential_name': litellm_azure_credential_name,
+           },
+         }] }}
+  when: litellm_azure_available | bool
+
+# subelements rather than a nested loop, because the desired list is one entry
+# per model and the declarations are one entry per endpoint. Jinja has no list
+# comprehension to flatten them inline.
+- name: Add the models of each extra endpoint
+  ansible.builtin.set_fact:
+    litellm_desired_models: >-
+      {{ litellm_desired_models + [{
+           'model_name': item.1,
+           'mode': item.0.mode | default('chat'),
+           'params': {
+             'model': (item.0.provider | default('openai')) ~ '/' ~ item.1,
+             'litellm_credential_name': item.0.credential_name | default(item.0.name),
+           },
+         }] }}
+  loop: "{{ litellm_usable_extras | subelements('models') }}"
+  loop_control:
+    label: "{{ item.1 }} ({{ item.0.name }})"
+
+# Each desired model carries a hash of its own definition, so a run can tell
+# at a glance whether what is registered still matches what is declared.
+# model_name is inside the hashed JSON, so a matching hash also means a
+# matching name.
+- name: Stamp each desired model with a hash of its definition
+  ansible.builtin.set_fact:
+    litellm_wanted: >-
+      {{ litellm_wanted | default([])
+         + [item | combine({'hash': item | to_json | hash('sha1')})] }}
+  loop: "{{ litellm_desired_models }}"
+  loop_control:
+    label: "{{ item.model_name }}"
+
+- name: Read the models LiteLLM already has
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/v1/model/info"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+    validate_certs: false
+    status_code: [200]
+  register: litellm_live_models
+  no_log: true
+
+- name: Work out what to leave alone, what to drop and what to add
+  ansible.builtin.set_fact:
+    litellm_drop: "{{ litellm_ours | rejectattr('model_name', 'in', keep_names) | list }}"
+    litellm_add: "{{ litellm_wanted | rejectattr('model_name', 'in', keep_names) | list }}"
+  vars:
+    # Only the ones this role registered. A model added by hand in the UI has
+    # no managed_by marker and must survive a run untouched - not re-created,
+    # not deleted.
+    litellm_ours: >-
+      {{ litellm_live_models.json.data | default([])
+         | selectattr('model_info.managed_by', 'defined')
+         | selectattr('model_info.managed_by', 'equalto', 'ansible') | list }}
+    keep_names: >-
+      {{ litellm_ours | selectattr('model_info.spec_hash', 'defined')
+         | selectattr('model_info.spec_hash', 'in', litellm_wanted | map(attribute='hash') | list)
+         | map(attribute='model_name') | list }}
+
+# Changed definitions are dropped and re-added rather than updated in place.
+# /model/update answers 200 and silently discards model_info - a sentinel
+# written through it never comes back - so the stored hash would never catch
+# up with the definition and every later run would try to update again.
+- name: Remove the models that are stale or no longer declared
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/model/delete"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      id: "{{ item.model_info.id }}"
+    validate_certs: false
+    status_code: [200, 201]
+  loop: "{{ litellm_drop }}"
+  loop_control:
+    label: "{{ item.model_name }}"
+  changed_when: true
+
+- name: Register the models LiteLLM is missing
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/model/new"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      model_name: "{{ item.model_name }}"
+      litellm_params: "{{ item.params }}"
+      model_info:
+        mode: "{{ item.mode }}"
+        managed_by: ansible
+        spec_hash: "{{ item.hash }}"
+    validate_certs: false
+    status_code: [200, 201]
+  loop: "{{ litellm_add }}"
+  loop_control:
+    label: "{{ item.model_name }}"
+  # uri does not set changed by itself, and this only runs for a model that
+  # was missing or stale, so reaching here is a change.
+  changed_when: true
+  no_log: true
+
+- name: Report the registered models
+  ansible.builtin.debug:
+    msg: >-
+      {{ litellm_wanted | length }} model(s) in LiteLLM's database
+      ({{ litellm_add | length }} added, {{ litellm_drop | length }} removed):
+      {{ litellm_wanted | map(attribute='model_name') | join(', ') }}
