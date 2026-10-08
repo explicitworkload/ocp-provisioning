@@ -325,6 +325,45 @@
       {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
          | unique(attribute='name') | list }}
 
+# Checked before anything uses them. These are hand-written in a vars file
+# outside the repo, and a missing field surfaced a long way from the cause:
+# an entry with no models list reached subelements() in models.yml and failed
+# with "could not find 'models' key in iterated item", by which point the
+# namespace, the Secret and half the role had already been applied.
+#
+# Asserted over names rather than looped over the entries themselves. A
+# failing loop prints its item, and the item holds the endpoint's api_key -
+# so the helpful version of this check was the one that printed a credential
+# to the console and into whatever captured the run's output.
+- name: Check that every extra endpoint has a name
+  ansible.builtin.assert:
+    that: litellm_all_extras | selectattr('name', 'defined') | list | length
+          == litellm_all_extras | length
+    fail_msg: >-
+      An entry in litellm_extra_models has no name. name is what identifies
+      the endpoint, names its LiteLLM credential and labels it in the run;
+      see group_vars/all.yml.
+    quiet: true
+
+- name: Check that every extra endpoint is fully declared
+  ansible.builtin.assert:
+    that: incomplete | length == 0
+    fail_msg: >-
+      Incomplete entries in litellm_extra_models: {{ incomplete | join(', ') }}.
+      Each needs base_url and a non-empty models list alongside its name;
+      see group_vars/all.yml.
+    quiet: true
+  vars:
+    complete: >-
+      {{ litellm_all_extras
+         | selectattr('base_url', 'defined')
+         | rejectattr('base_url', 'equalto', '')
+         | selectattr('models', 'defined')
+         | rejectattr('models', 'equalto', [])
+         | map(attribute='name') | list }}
+    incomplete: >-
+      {{ litellm_all_extras | map(attribute='name') | difference(complete) }}
+
 # Endpoints with no key are dropped rather than registered with an empty
 # one: LiteLLM would accept the model and every call to it would 401.
 - name: Select the usable extra endpoints
