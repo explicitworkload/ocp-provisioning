@@ -218,3 +218,31 @@ external_dns_cloudflare_proxied: true
 #         - gpt-oss-120b
 #         - qwen36-35b-a3b
 #         - qwen38-27b
+
+# --- Extra models in LiteLLM -----------------------------------------------
+# External OpenAI-compatible endpoints registered as models in LiteLLM. This
+# is the one that makes them appear in OpenRAG, Dev Spaces/Continue and the
+# Ops Dashboard, because all three ask LiteLLM what it serves.
+#
+# Not the same as rhoai_extra_ai_endpoints above. That publishes gen-ai-aa
+# ConfigMaps for RHOAI's Gen AI playground and never reaches LiteLLM; this
+# never reaches the playground. Declare an endpoint in both if you want it
+# in both.
+#
+# Keys are stored in the litellm-secrets Secret and referenced from
+# config.yaml as os.environ/EXTRA_KEY_<NAME>, so they never land in a
+# ConfigMap. Still, do not put a real one here - supply it at run time:
+#
+#     ./run.sh -e @$HOME/.openrag-endpoints.yml
+#
+# mode defaults to chat; use embedding for an embeddings endpoint. provider
+# defaults to openai, which is right for anything OpenAI-compatible.
+#
+#litellm_extra_models:
+#     - name: maas-rhdp
+#       base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
+#       api_key: ""
+#       models:
+#         - gpt-oss-120b
+#         - qwen36-35b-a3b
+#         - qwen38-27b

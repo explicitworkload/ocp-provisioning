@@ -290,6 +290,23 @@
     name: "{{ model_name }}-sa-token"
   register: qwen_token_secret
 
+# Endpoints with no key are dropped rather than registered with an empty
+# one: LiteLLM would accept the model and every call to it would 401.
+- name: Select the usable extra endpoints
+  ansible.builtin.set_fact:
+    litellm_usable_extras: >-
+      {{ litellm_extra_models | selectattr('api_key', 'defined')
+         | rejectattr('api_key', 'equalto', '') | list }}
+
+- name: Report extra endpoints skipped for want of a key
+  ansible.builtin.debug:
+    msg: >-
+      Extra LiteLLM endpoint "{{ item.name }}" has no api_key and is being
+      skipped; its models will not be served. Supply one at run time.
+  loop: "{{ litellm_extra_models | rejectattr('name', 'in', litellm_usable_extras | map(attribute='name') | list) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Create LiteLLM API key secret
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -302,8 +319,17 @@
         name: litellm-secrets
         namespace: "{{ litellm_namespace }}"
       type: Opaque
-      stringData:
-        QWEN_API_KEY: "{{ qwen_token_secret.resources[0].data.token | b64decode }}"
+      # Extra endpoints' keys live here, not in config.yaml - that is a
+      # ConfigMap, readable by anyone with get on the namespace. LiteLLM
+      # reads them back with os.environ/<NAME>, exactly as QWEN_API_KEY
+      # already works. Endpoint names become env vars: maas-rhdp ->
+      # EXTRA_KEY_MAAS_RHDP.
+      stringData: >-
+        {{ {'QWEN_API_KEY': qwen_token_secret.resources[0].data.token | b64decode}
+           | combine(dict(litellm_usable_extras | map(attribute='name') | map('upper')
+                          | map('regex_replace', '[^A-Z0-9]', '_')
+                          | map('regex_replace', '^', 'EXTRA_KEY_') | list
+                          | zip(litellm_usable_extras | map(attribute='api_key') | list))) }}
 
 - name: Fetch Azure credentials from openshift-lightspeed
   kubernetes.core.k8s_info:
@@ -363,48 +389,7 @@
         name: litellm-config
         namespace: "{{ litellm_namespace }}"
       data:
-        config.yaml: |
-          model_list:
-            - model_name: qwen3-4b
-              litellm_params:
-                model: openai/qwen3-4b
-                api_base: https://{{ model_name }}-{{ model_namespace }}.{{ ocp_apps_domain }}/v1
-                api_key: os.environ/QWEN_API_KEY
-                tls_verify: false
-              # Chat is LiteLLM's default, so this model worked without it -
-              # but it reported mode=None, leaving health checks guessing
-              # rather than targeting /v1/chat/completions deliberately.
-              model_info:
-                mode: chat
-          {% if litellm_azure_available | bool %}
-            - model_name: {{ litellm_azure_model_name }}
-              litellm_params:
-                model: azure/gpt-4
-                litellm_credential_name: {{ litellm_azure_credential_name }}
-          {% endif %}
-            # CPU-served embeddings for OpenRAG, fronted here so RAG and chat
-            # share one OpenAI-compatible endpoint. Deployed by the openrag
-            # role; LiteLLM resolves the host per request, so this entry is
-            # harmless (just unusable) when that role has not run.
-            - model_name: {{ litellm_embedding_model_name }}
-              litellm_params:
-                model: openai/{{ litellm_embedding_model_id }}
-                api_base: {{ litellm_embedding_api_base }}
-                api_key: none
-              # Without mode: embedding LiteLLM assumes chat and sends the
-              # health check - and the UI "Test connection" - to
-              # /v1/chat/completions. text-embeddings-inference serves only
-              # /v1/embeddings and answers 404 on the others, so a perfectly
-              # working model reports
-              #   NotFoundError: OpenAIException - Error code: 404
-              model_info:
-                mode: embedding
-          litellm_settings:
-            drop_params: true
-          general_settings:
-            master_key: os.environ/LITELLM_MASTER_KEY
-            database_url: os.environ/DATABASE_URL
-            store_model_in_db: true
+        config.yaml: "{{ lookup('template', 'litellm-config.yaml.j2') }}"
 
 - name: Deploy LiteLLM proxy
   kubernetes.core.k8s:
@@ -440,6 +425,13 @@
                 ports:
                   - containerPort: 4000
                     name: http
+                # envFrom as well as the explicit entries below: extra
+                # endpoints add keys to this Secret at run time, and naming
+                # each one here would mean editing the Deployment to add a
+                # model.
+                envFrom:
+                  - secretRef:
+                      name: litellm-secrets
                 env:
                   - name: QWEN_API_KEY
                     valueFrom:
