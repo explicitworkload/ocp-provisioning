@@ -64,3 +64,9 @@ evalhub_collections: [leaderboard-v2, safety-and-fairness-v1]
 # auth policy on it.
 deploy_kuadrant: true
 kuadrant_namespace: kuadrant-system
+
+# Where extra AI asset endpoints are published. RHOAI finds them by the
+# gen-ai-aa-* ConfigMap name, so the namespace only has to be one the
+# dashboard can read; model_namespace matches where the LiteLLM-backed
+# endpoint already lives.
+rhoai_ai_endpoint_namespace: "{{ model_namespace | default('qwen3-4b') }}"

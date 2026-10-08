@@ -1,0 +1,33 @@
+{#
+  One AI asset endpoint, as RHOAI's Gen AI playground expects it.
+
+  A template rather than an inline expression because the models list needs a
+  loop, and Jinja has no list comprehension - building it inline failed with
+  "expected token ',', got 'for'".
+
+  `item` is the entry from rhoai_extra_ai_endpoints.
+-#}
+providers:
+  inference:
+    - provider_id: {{ item.name }}
+      provider_type: remote::openai
+      config:
+        base_url: {{ item.base_url }}
+        allowed_models:
+{% for m in item.models %}
+          - {{ m }}
+{% endfor %}
+        custom_gen_ai:
+          api_key:
+            secretRef:
+              name: gen-ai-key-{{ item.name }}
+              key: api_key
+registered_resources:
+  models:
+{% for m in item.models %}
+    - provider_id: {{ item.name }}
+      model_id: {{ m }}
+      model_type: {{ item.model_type | default('llm') }}
+      metadata:
+        display_name: {{ m }}
+{% endfor %}

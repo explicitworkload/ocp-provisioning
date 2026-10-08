@@ -1,0 +1,75 @@
+---
+# External OpenAI-compatible model APIs surfaced in the RHOAI Gen AI
+# playground alongside the cluster's own models - Red Hat's MaaS, another
+# cluster's LiteLLM, a hosted endpoint.
+#
+# RHOAI discovers these by NAME: a ConfigMap called gen-ai-aa-* holding a
+# config.yaml. There is no label selector, which is why the name is built
+# rather than free-form.
+#
+# Endpoints with no api_key are skipped rather than published half-configured,
+# because an endpoint in the picker that 401s on first use is worse than one
+# that is absent. Keys are never defaulted in the repo - supply them at run
+# time, see group_vars/all.yml.
+- name: Warn about endpoints with no API key
+  ansible.builtin.debug:
+    msg: >-
+      AI asset endpoint "{{ item.name }}" has no api_key, so it is being
+      skipped. Supply one with
+      -e '{"rhoai_extra_ai_endpoints":[{"name":"{{ item.name }}", ... ,
+      "api_key":"sk-..."}]}' or from a vars file kept out of git.
+  loop: "{{ rhoai_extra_ai_endpoints }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (item.api_key | default('') | length > 0)
+
+- name: Create the API key Secret for each endpoint
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "gen-ai-key-{{ item.name }}"
+        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+      type: Opaque
+      stringData:
+        api_key: "{{ item.api_key }}"
+  loop: "{{ rhoai_extra_ai_endpoints }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.api_key | default('') | length > 0
+  no_log: true
+
+- name: Publish each endpoint as an AI asset
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "gen-ai-aa-{{ item.name }}"
+        namespace: "{{ item.namespace | default(rhoai_ai_endpoint_namespace) }}"
+      data:
+        config.yaml: "{{ lookup('template', 'gen-ai-aa.yaml.j2') }}"
+  loop: "{{ rhoai_extra_ai_endpoints }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.models | length }} model(s))"
+  when: item.api_key | default('') | length > 0
+
+- name: Report the published endpoints
+  ansible.builtin.debug:
+    msg: >-
+      {{ published | length }} AI asset endpoint(s) published to
+      {{ rhoai_ai_endpoint_namespace }}:
+      {{ published | map(attribute='name') | join(', ') | default('none', true) }}
+  vars:
+    published: >-
+      {{ rhoai_extra_ai_endpoints
+         | selectattr('api_key', 'defined')
+         | rejectattr('api_key', 'equalto', '') | list }}
+  when: rhoai_extra_ai_endpoints | length > 0

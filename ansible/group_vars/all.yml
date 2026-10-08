@@ -189,3 +189,30 @@ external_dns_cloudflare_proxied: true
 #
 #
 # -------------------------------------------------------------------
+
+# --- Extra AI asset endpoints ----------------------------------------------
+# External OpenAI-compatible model APIs to offer in the RHOAI Gen AI
+# playground alongside the cluster's own models - Red Hat's MaaS, another
+# cluster's LiteLLM, anything that speaks /v1/chat/completions.
+#
+# NEVER put a real api_key here. This repo is public, and a committed key is
+# a key to rotate. Leave it empty and supply it at run time:
+#
+#     ./run.sh --tags ai-endpoints -e @$HOME/.openshift-ai-endpoints.yml
+#
+# where that file, kept outside the repo, holds the same structure with the
+# keys filled in. An endpoint with no key is skipped with a warning rather
+# than published half-configured, because one that 401s on first use is
+# worse than one that is absent.
+#
+# base_url must be the OpenAI-compatible root, the part ending in /v1 - the
+# same URL the provider's own curl example posts /chat/completions to.
+# models are the ids as that endpoint serves them.
+rhoai_extra_ai_endpoints: []
+#  - name: maas-rhdp
+#    base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
+#    api_key: ""
+#    models:
+#      - gpt-oss-120b
+#      - qwen36-35b-a3b
+#      - qwen38-27b
