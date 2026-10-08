@@ -15,6 +15,14 @@
   retries: 30
   delay: 30
 
+- name: Deploy Loki for flow records
+  ansible.builtin.include_tasks:
+    file: loki.yml
+    apply:
+      tags: [network-observability, loki]
+  when: netobserv_enable_loki | bool
+  tags: [network-observability, loki]
+
 - name: Create FlowCollector
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -31,10 +39,18 @@
         agent:
           type: eBPF
           ebpf:
-            sampling: 50
+            sampling: "{{ netobserv_ebpf_sampling | int }}"
             privileged: false
         loki:
-          enable: false
+          enable: "{{ netobserv_enable_loki | bool }}"
+          # LokiStack mode rather than Monolithic: it is what wires up the
+          # gateway, the openshift-network tenant and the console plugin's
+          # read path. Monolithic expects a plain Loki URL and leaves all of
+          # that to be arranged by hand.
+          mode: "{{ 'LokiStack' if netobserv_enable_loki | bool else 'Monolithic' }}"
+          lokiStack:
+            name: "{{ netobserv_lokistack_name }}"
+            namespace: "{{ netobserv_namespace }}"
         consolePlugin:
           # `register` was removed from the FlowCollector CRD; the operator now
           # registers the plugin with the console whenever it is enabled.

@@ -1,2 +1,20 @@
 ---
 netobserv_namespace: netobserv
+
+# Flow records need Loki. Without it the console still draws topology from
+# Prometheus metrics, but the Traffic flows table - the per-connection
+# records - is empty. Backed by NooBaa, so this needs no cloud bucket and
+# works disconnected.
+netobserv_enable_loki: true
+netobserv_loki_channel: stable-6.6
+netobserv_lokistack_name: loki
+# 1x.demo is single-replica and by far the smallest. Red Hat does not support
+# it for production, which is the right trade on a lab cluster where ODF has
+# already taken most of the CPU. 1x.extra-small is the smallest supported one.
+netobserv_lokistack_size: 1x.demo
+netobserv_loki_storage_class: ocs-storagecluster-ceph-rbd
+netobserv_loki_obc: loki-bucket
+netobserv_loki_s3_secret: loki-s3
+
+# eBPF sampling. 50 means one flow in fifty; lower sees more at more cost.
+netobserv_ebpf_sampling: 50
