@@ -365,6 +365,41 @@
       stringData:
         QWEN_API_KEY: "{{ qwen_token_secret.resources[0].data.token | b64decode }}"
 
+# Dropping EXTRA_KEY_* from the task above does not remove it from the
+# cluster: apply records what was sent, which is stringData, while the live
+# object stores data, so the three-way merge has nothing to prune against and
+# the old key sits there indefinitely. It is dead weight at best and a stale
+# credential at worst - the whole point of moving these into LiteLLM was that
+# they stop living in an OpenShift Secret. A JSON merge patch with null
+# removes a key outright.
+- name: Read back the LiteLLM secret to find stale endpoint keys
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ litellm_namespace }}"
+    name: litellm-secrets
+  register: litellm_secret_now
+  no_log: true
+
+- name: Remove endpoint keys left in the LiteLLM secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: v1
+    kind: Secret
+    namespace: "{{ litellm_namespace }}"
+    name: litellm-secrets
+    definition:
+      data: "{{ dict(stale | zip_longest([], fillvalue=none)) }}"
+  vars:
+    stale: >-
+      {{ (litellm_secret_now.resources[0].data | default({}) | list)
+         | select('match', '^EXTRA_KEY_') | list }}
+  when: >-
+    (litellm_secret_now.resources[0].data | default({}) | list)
+    | select('match', '^EXTRA_KEY_') | list | length > 0
+
 - name: Fetch Azure credentials from openshift-lightspeed
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
