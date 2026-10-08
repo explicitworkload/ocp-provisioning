@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Operations Dashboard — Access{% endblock %}
+{% block heading %}Access{% endblock %}
+{% block subtitle %}Links &amp; Credentials{% endblock %}
+
+{% block content %}
+  {% if error %}
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>NOT AVAILABLE</h2>
+      <div class="help-content">
+        <p>{{ error }}</p>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>LINKS</h2>
+      <div class="help-content">
+        <table class="access-table">
+          <tbody>
+            {% for link in summary.links %}
+              <tr>
+                <td class="access-label">{{ link.label }}</td>
+                <td><a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.url }}</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>CREDENTIALS</h2>
+      <div class="help-content">
+        <p>Generated per cluster. None of this is in the repository. Anyone who
+           can reach this page can read every password on it.</p>
+        <table class="access-table">
+          <thead>
+            <tr><th>Service</th><th>User</th><th>Password</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for cred in summary.credentials %}
+              <tr>
+                <td class="access-label">{{ cred.label }}</td>
+                <td>{{ cred.user or '—' }}</td>
+                <td>
+                  <span class="access-secret" data-secret="{{ cred.password }}">••••••••••••</span>
+                </td>
+                <td class="access-actions">
+                  <button type="button" class="access-btn" data-action="reveal">Show</button>
+                  <button type="button" class="access-btn" data-action="copy">Copy</button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel-group">
+      <h2 class="section-title"><span class="marker"></span>SOURCE</h2>
+      <div class="help-content">
+        <p>Cluster <strong>{{ summary.cluster }}</strong> at <code>{{ summary.api }}</code>.</p>
+        <p>Published {{ summary.generated }} by the Ansible <code>summary</code> role.
+           Refresh after rotating anything with <code>./run.sh --tags summary</code>.</p>
+      </div>
+    </section>
+  {% endif %}
+
+  <script>
+    // Secrets live in data-secret and are written into the cell only when
+    // asked for, so a screenshot or a shoulder taken on page load shows
+    // nothing. Re-hiding restores the dots rather than leaving them exposed
+    // for the rest of the session.
+    document.querySelectorAll('.access-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var row = btn.closest('tr');
+        var cell = row.querySelector('.access-secret');
+        var value = cell.getAttribute('data-secret');
+        if (btn.dataset.action === 'copy') {
+          navigator.clipboard.writeText(value).then(function () {
+            var was = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(function () { btn.textContent = was; }, 1200);
+          });
+          return;
+        }
+        var shown = cell.dataset.shown === 'true';
+        cell.textContent = shown ? '••••••••••••' : value;
+        cell.dataset.shown = shown ? 'false' : 'true';
+        btn.textContent = shown ? 'Show' : 'Hide';
+      });
+    });
+  </script>
+{% endblock %}

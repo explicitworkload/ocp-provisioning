@@ -1758,3 +1758,36 @@ main.embed-page ~ footer { display: none; }
   .clock { display: none; }
   .task-panel { width: 100%; }
 }
+
+/* Access page: links and credentials published by the Ansible summary role. */
+.access-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.access-table th {
+  text-align: left;
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  font-weight: 600;
+  opacity: 0.6;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+}
+.access-table td {
+  padding: 0.35rem 0.75rem 0.35rem 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.12);
+  vertical-align: middle;
+}
+.access-label { font-weight: 600; white-space: nowrap; }
+.access-secret { font-family: monospace; letter-spacing: 0.05em; }
+.access-actions { white-space: nowrap; }
+.access-btn {
+  background: transparent;
+  border: 1px solid rgba(127, 127, 127, 0.45);
+  border-radius: 3px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  margin-left: 0.35rem;
+  padding: 0.15rem 0.5rem;
+}
+.access-btn:hover { border-color: currentColor; }

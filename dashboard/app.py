@@ -36,6 +36,19 @@ AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
 # back to the model; the head of the table is the useful part.
 MCP_RESULT_MAX_CHARS = int(os.environ.get("MCP_RESULT_MAX_CHARS", "8000"))
 
+# The namespace this pod runs in, for reading the summary the Ansible
+# summary role publishes. Taken from the service account mount rather than
+# hardcoded, so a dashboard deployed elsewhere still finds its own secret.
+def _own_namespace():
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as fh:
+            return fh.read().strip()
+    except OSError:
+        return os.environ.get("POD_NAMESPACE", "dashboard")
+
+
+SUMMARY_SECRET = os.environ.get("SUMMARY_SECRET", "ops-dashboard-summary")
+
 try:
     config.load_incluster_config()
 except config.ConfigException:
@@ -273,6 +286,33 @@ def health_page():
 @login_required
 def ai_page():
     return render_template("ai.html", gatus_host=GATUS_HOST, active_page="ai")
+
+
+# Read on every request rather than cached at startup: the summary role runs
+# after this role, so at boot the secret usually does not exist yet, and
+# ./run.sh --tags summary refreshes it whenever a credential is rotated.
+@app.route("/access")
+@login_required
+def access_page():
+    data, error = None, None
+    try:
+        secret = k8s_core.read_namespaced_secret(SUMMARY_SECRET, _own_namespace())
+        raw = (secret.data or {}).get("summary.json")
+        if raw:
+            import base64
+            data = json.loads(base64.b64decode(raw))
+        else:
+            error = f"Secret {SUMMARY_SECRET} has no summary.json key."
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            error = ("No summary has been published yet. Run  ./run.sh --tags summary  "
+                     "against this cluster to generate it.")
+        elif e.status == 403:
+            error = (f"Not allowed to read {SUMMARY_SECRET}. The dashboard role grants this "
+                     "with a Role named ops-dashboard-summary; re-run ./run.sh --tags dashboard.")
+        else:
+            error = f"Could not read the summary: {e.status} {e.reason}"
+    return render_template("access.html", summary=data, error=error, active_page="access")
 
 
 @app.route("/help")
