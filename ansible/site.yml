@@ -135,9 +135,6 @@
     - role: service_mesh
       tags: [service-mesh]
 
-    - role: network_observability
-      tags: [network-observability]
-
     - role: gpu_worker
       tags: [gpu]
 
@@ -146,6 +143,14 @@
 
     - role: odf
       tags: [odf]
+
+    # After odf, not before. Its Loki stores flow records in a NooBaa bucket
+    # claimed through an ObjectBucketClaim, and that CRD arrives with ODF.
+    # Run earlier and the claim fails with "Failed to find exact match for
+    # objectbucket.io/v1alpha1.ObjectBucketClaim" - 35 tasks into a run, long
+    # after the operator and the FlowCollector have been created.
+    - role: network_observability
+      tags: [network-observability]
 
     - role: quay
       tags: [quay]
