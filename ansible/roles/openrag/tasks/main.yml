@@ -615,6 +615,119 @@
   loop_control:
     label: "{{ item }}"
 
+# ---------------------------------------------------------------------------
+# Which providers OpenRAG publishes
+# ---------------------------------------------------------------------------
+# GET /models/providers is what the UI builds its provider grid from, and what
+# its "is any provider configured?" loop iterates. src/config/model_providers.
+# yaml gates each provider per run mode, and upstream ships rhoai off in all
+# three - oss, on_prem and saas - so Red Hat OpenShift AI never appeared and a
+# workspace configured against it looked unconfigured. The backend accepts and
+# serves rhoai perfectly well; /provider/health reports "Both providers
+# properly configured and validated". The gate reads as release management
+# rather than brokenness, but enabling it is still going off upstream's
+# defaults.
+#
+# Read from the running image rather than vendored, so upstream's own edits to
+# that file survive and only these flags are asserted on top.
+- name: Read the provider catalogue from the running backend
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} -n {{ openrag_namespace }}
+      exec deploy/openrag-backend -c backend --
+      cat /app/src/config/model_providers.yaml
+  register: openrag_provider_yaml
+  changed_when: false
+  tags: [openrag-config]
+
+- name: Start from the catalogue as shipped
+  ansible.builtin.set_fact:
+    openrag_provider_catalogue: "{{ openrag_provider_yaml.stdout }}"
+  tags: [openrag-config]
+
+# Accumulates across the loop: each pass rewrites the fact set by the last.
+# Non-greedy from the provider's own "- name:" to the first oss: under it, so
+# only that provider's flag moves and the rest of the file is byte-identical.
+- name: Apply the provider visibility overrides
+  ansible.builtin.set_fact:
+    openrag_provider_catalogue: >-
+      {{ openrag_provider_catalogue
+         | regex_replace('(?s)(- name: ' ~ item.key ~ '\n.*?oss: )(true|false)',
+                         '\g<1>' ~ (item.value | string | lower)) }}
+  loop: "{{ openrag_provider_visibility | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} -> {{ item.value }}"
+  tags: [openrag-config]
+
+- name: Publish the overridden catalogue
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openrag-model-providers
+        namespace: "{{ openrag_namespace }}"
+      data:
+        model_providers.yaml: "{{ openrag_provider_catalogue }}"
+  register: openrag_catalogue_cm
+  tags: [openrag-config]
+
+# subPath, so only this one file is replaced and the rest of /app/src/config
+# stays as the image shipped it. The backend reads it under @lru_cache, so the
+# running process keeps the old list until it restarts.
+- name: Mount the catalogue over the shipped file
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-backend
+    definition:
+      spec:
+        template:
+          spec:
+            volumes:
+              - name: model-providers
+                configMap:
+                  name: openrag-model-providers
+            containers:
+              - name: backend
+                volumeMounts:
+                  - name: model-providers
+                    mountPath: /app/src/config/model_providers.yaml
+                    subPath: model_providers.yaml
+                    readOnly: true
+  register: openrag_catalogue_mount
+  tags: [openrag-config]
+
+- name: Restart the backend when the catalogue changed
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} -n {{ openrag_namespace }}
+      rollout restart deploy/openrag-backend
+  when: openrag_catalogue_cm is changed and openrag_catalogue_mount is not changed
+  changed_when: true
+  tags: [openrag-config]
+
+- name: Wait for the backend to come back
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-backend
+  register: openrag_be
+  until: >-
+    openrag_be.resources[0].status.readyReplicas | default(0) > 0 and
+    openrag_be.resources[0].status.updatedReplicas | default(0) ==
+    openrag_be.resources[0].status.replicas | default(1)
+  retries: 40
+  delay: 15
+  tags: [openrag-config]
+
 # Without this the first page is the setup wizard, even though the chart was
 # handed the right models. The chart's openrag-app-config ConfigMap is a seed
 # and is not mounted on the backend at all - WorkspaceConfigService reads

@@ -54,3 +54,16 @@ openrag_langflow_host: ""
 # stored provider credential says, and a mismatch validates against one
 # endpoint while serving from another.
 openrag_litellm_base_url: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+
+# Which providers OpenRAG publishes on GET /models/providers, which is what
+# the UI's provider grid and its "is anything configured?" loop both read.
+# Applied on top of src/config/model_providers.yaml from the running image,
+# so upstream's own changes to that file survive and only these are asserted.
+#
+# rhoai ships disabled in every run mode (oss, on_prem, saas), so Red Hat
+# OpenShift AI never appeared and a workspace configured against it looked
+# unconfigured - the wizard covered the whole app on a backend that
+# /provider/health called "properly configured and validated".
+openrag_provider_visibility:
+  rhoai: true
+  ollama: false
