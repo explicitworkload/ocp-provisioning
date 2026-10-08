@@ -76,22 +76,32 @@ verify_resources:
     name: nfd-instance
     check: exists
 
+  # ClusterPolicy has no status.phase - it reports status.state, and a Ready
+  # condition alongside it. Checking phase produced "phase is <none>" against
+  # a GPU stack that was entirely healthy.
   - label: "NVIDIA ClusterPolicy"
     gate: true
     api_version: nvidia.com/v1
     kind: ClusterPolicy
     name: gpu-cluster-policy
-    check: phase
-    expect: ready
+    check: condition
+    condition: Ready
+    expect: "True"
 
   # Silently skipped today when its CRD has not appeared yet, leaving an
   # orphaned PostgreSQL behind and a green PLAY RECAP.
+  # mlflow.opendatahub.io/v1, cluster-scoped, named "mlflow" - not the
+  # components.platform.opendatahub.io/default-mlflow this guessed at, which
+  # reported "not found" against a running MLflow with its UI, database and
+  # PVCs all up.
   - label: "MLflow tracking server"
     gate: "{{ deploy_mlflow_server | default(true) }}"
-    api_version: components.platform.opendatahub.io/v1alpha1
+    api_version: mlflow.opendatahub.io/v1
     kind: MLflow
-    name: default-mlflow
-    check: exists
+    name: mlflow
+    check: condition
+    condition: Available
+    expect: "True"
 
   - label: "MCP server"
     gate: true

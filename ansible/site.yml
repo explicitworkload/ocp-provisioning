@@ -214,8 +214,12 @@
     # Prints the URLs and generated credentials. Reads them back from the
     # cluster rather than from facts, so --tags summary reprints against an
     # existing cluster and anything not deployed is simply left out.
+    # Tagged verify as well, so --tags verify prints the links and passwords
+    # before asserting anything. Running verify alone used to skip it, which
+    # is backwards: a failing verification is exactly when the URLs are
+    # wanted, and that is the run most likely to be invoked on its own.
     - role: summary
-      tags: [summary]
+      tags: [summary, verify]
 
     # After summary, not before: when verification fails this is exactly when
     # the URLs and passwords are wanted, and a failing role stops the play.
