@@ -162,7 +162,10 @@
     name: noobaas.noobaa.io
   register: noobaa_crd
   until: noobaa_crd.resources | length > 0
-  retries: 30
+  # 15 minutes. The CRD arrives with the ODF CSV, which has its own 30-minute
+  # wait ahead of this, so it is normally there already - but this is the
+  # cheapest possible place to lose a run to a slow operator install.
+  retries: 60
   delay: 15
 
 # ---------------------------------------------------------------------------
@@ -226,10 +229,18 @@
   until: >-
     noobaa_ready.resources | length > 0 and
     (noobaa_ready.resources[0].status.phase | default('')) == 'Ready'
-  # 15 minutes. This now covers everything the hand-made backing store used to
-  # share the budget with: ocs-operator reconciling, noobaa-core starting, the
-  # CNPG cluster coming up, and NooBaa building and binding its own pool.
-  retries: 60
+  # 22.5 minutes, against 8 measured. This covers everything the hand-made
+  # backing store used to share the budget with: ocs-operator reconciling,
+  # noobaa-core starting, the CNPG cluster coming up, NooBaa asking for AWS
+  # credentials and giving up on them, and only then building and binding its
+  # own pool.
+  #
+  # Measured on sandbox5164, a fresh 8-node cluster with the full operator set
+  # installing alongside: openshift-storage created 17:22:44, StorageCluster
+  # 17:25:13, NooBaa CR 17:30:50, NooBaa Ready ~17:45 - about 8 minutes inside
+  # this wait. A smaller cluster has fewer nodes to place OSDs and the PV pool
+  # on, so it is slower, not faster; the margin is for that.
+  retries: 90
   delay: 15
 
 # Any Ready BackingStore, not one by name. A cluster built by an earlier
@@ -247,7 +258,10 @@
     noobaa_bs.resources | default([])
     | selectattr('status.phase', 'defined')
     | selectattr('status.phase', 'equalto', 'Ready') | list | length > 0
-  retries: 40
+  # 15 minutes against 3 measured. The pool has to bind PVs and register its
+  # agents, which is storage work on a cluster that is still installing
+  # everything else.
+  retries: 60
   delay: 15
 
 - name: Note which backing store NooBaa settled on
