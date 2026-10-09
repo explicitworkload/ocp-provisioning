@@ -165,6 +165,32 @@ resource "aws_instance" "bastion" {
 	sudo -u $TARGET_USER git clone https://github.com/tmux-plugins/tpm $USER_HOME/.tmux/plugins/tpm
 	sudo -u $TARGET_USER $USER_HOME/.tmux/plugins/tpm/bin/install_plugins
 
+	# Self-check, so "did the bootstrap work" is one command on the host
+	# rather than a read through the log. Every tool this script claims to
+	# install gets looked up; the brew ones through a login shell, because
+	# they are only on PATH once .bash_profile has run.
+	echo "Verifying installed tooling..."
+	: > /var/log/bastion-tools.txt
+	for t in git wget curl tar jq tmux gcc; do
+	  printf '%-18s %s\n' "$t" "$(command -v $t || echo MISSING)" >> /var/log/bastion-tools.txt
+	done
+	for t in aws kubectx tofu oc kubectl; do
+	  printf '%-18s %s\n' "$t" "$(sudo -u $TARGET_USER bash -lc "command -v $t" || echo MISSING)" >> /var/log/bastion-tools.txt
+	done
+	for t in oc-mirror openshift-install; do
+	  printf '%-18s %s\n' "$t" "$(command -v $t || echo MISSING)" >> /var/log/bastion-tools.txt
+	done
+	cat /var/log/bastion-tools.txt
+
+	# The marker is only written when nothing is missing, so its absence
+	# means something failed - including the case where this script died
+	# before reaching here at all.
+	if grep -q MISSING /var/log/bastion-tools.txt; then
+	  echo "BOOTSTRAP INCOMPLETE - these did not install:" >&2
+	  grep MISSING /var/log/bastion-tools.txt >&2
+	  exit 1
+	fi
+	touch /var/log/bastion-bootstrap-complete
 	echo "Bastion Setup Complete!"
 	EOF
 
