@@ -7,48 +7,6 @@ odf_storage_class: gp3-csi
 # by the number of those workers.
 odf_storage_size: 512Gi
 odf_device_set_replica: 1
-
-# Work around the MCG CNPG migration bug (ODF 4.22.5-rhodf): NooBaa bootstraps
-# into the noobaa-db-pg StatefulSet, is then repointed at a freshly created and
-# empty CNPG cluster, and loops on "account not found" forever. The task only
-# fires when that exact state is detected, so it is inert on fixed builds.
-odf_fix_noobaa_cnpg: true
-
-# Candidate tables for that repair. The StatefulSet DB additionally carries
-# stats/log tables that CNPG does not create, so a whole-database restore
-# would fail — hence an explicit list rather than pg_dump of everything.
-#
-# Treated as an upper bound, not a guarantee. NooBaa builds the CNPG schema
-# progressively, so for the first few minutes the target genuinely lacks
-# tables the source has — a repair that raced it died on
-#   ERROR: relation "datablocks" does not exist
-# The role now waits for the target schema to match the source before it
-# dumps or truncates, so listing a table absent from a given build is
-# harmless, but a table that never appears aborts the repair rather than
-# silently restoring a partial database.
-odf_noobaa_tables:
-  - accounts
-  - agent_configs
-  - buckets
-  - chunk_configs
-  - clusters
-  - datablocks
-  - datachunks
-  - master_keys
-  - namespace_resources
-  - nodes
-  - objectmds
-  - objectmultiparts
-  - objectparts
-  - pools
-  - replicationconfigs
-  - roles
-  - systems
-  - tieringpolicies
-  - tiers
-  - vector_buckets
-  - vector_indices
-
 # NooBaa PV-pool backing store. Object redundancy comes from replication
 # across the pool's agent nodes, so a single volume means a single copy and
 # the console reports Object Resiliency as Pending forever. Three volumes

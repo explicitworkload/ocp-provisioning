@@ -168,41 +168,6 @@
   retries: 60
   delay: 15
 
-# ---------------------------------------------------------------------------
-# Workaround for an MCG bug observed on ODF 4.22.5-rhodf.
-#
-# noobaa-operator creates the noobaa-db-pg StatefulSet, lets NooBaa bootstrap
-# into it, then creates a CNPG cluster roughly four minutes later and repoints
-# noobaa-core at it WITHOUT migrating any data. When bootstrap wins that race
-# the system, admin account and first.bucket are stranded in the StatefulSet
-# database and NooBaa loops forever on "account not found", leaving
-# StorageCluster at Progressing/NoobaaInitializing. Ceph itself is unaffected.
-#
-# This copies the stranded rows into the CNPG primary, which preserves the
-# original system ID so the PV-pool agent's persisted identity stays valid.
-# Re-bootstrapping instead would mint a new ID and strand the agent.
-#
-# VERSION SCOPE — this targets ODF 4.22.5-rhodf (mcg-operator 4.22.5-rhodf),
-# where the bug was observed and the fix verified. It is reported upstream
-# against the NooBaa/MCG operator, not odf-operator.
-#
-# Deliberately NOT gated on the version string, for two reasons:
-#   * It is a race, so it does not fire on every 4.22.5 install. A version
-#     match would be neither necessary nor sufficient.
-#   * If the fix slips past 4.22.5, a version pin would silently stop
-#     protecting the very releases that still need it.
-# The trigger is the observed failure signature instead, so this is inert on
-# any release where the bug is absent — including a fixed 4.22.5 rebuild.
-#
-# 4.21.13 ships CNPG too, so downgrading the channel is not an escape.
-#
-# WHEN THE UPSTREAM FIX SHIPS: delete this whole block and the
-# odf_fix_noobaa_cnpg / odf_noobaa_tables defaults rather than leaving dead
-# code in a storage role. Set odf_fix_noobaa_cnpg=false to skip it meanwhile.
-- name: Repair NooBaa if the CNPG migration stranded it
-  ansible.builtin.include_tasks: noobaa_cnpg_repair.yml
-  when: odf_fix_noobaa_cnpg | bool
-
 # Nothing above touches NooBaa. It is left to bootstrap, choose its own
 # default backing store and settle, and this only watches.
 #
@@ -285,15 +250,6 @@
     (default_bc.resources[0].status.phase | default('')) == 'Ready'
   retries: 40
   delay: 15
-
-# Again. The migration begins whenever NooBaa gets to it - on one cluster
-# that was after the first pass had already run and found nothing, after the
-# backing store had gone Ready, and during this very wait. Catching it here
-# turns a thirty-minute timeout into a repair. Idempotent: not stranded means
-# every task inside skips.
-- name: Repair NooBaa if it stranded later in the migration
-  ansible.builtin.include_tasks: noobaa_cnpg_repair.yml
-  when: odf_fix_noobaa_cnpg | bool
 
 - name: Wait for StorageCluster to be ready
   kubernetes.core.k8s_info:
