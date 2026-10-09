@@ -125,11 +125,16 @@
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+# expect_status is per-endpoint because "healthy" is not the same shape
+# everywhere. Attu sits behind oauth-proxy, which serves its sign-in page
+# with 403 to anyone without a session - that is the proxy working, not a
+# fault, and the check has to be able to say so without globally accepting
+# 403 and thereby ignoring real permission failures elsewhere.
 - name: Call each expected endpoint
   ansible.builtin.uri:
     url: "{{ item.url }}"
     validate_certs: false
-    status_code: [200, 201, 302]
+    status_code: "{{ item.expect_status | default([200, 201, 302]) }}"
     return_content: true
     timeout: 20
   loop: "{{ verify_endpoints }}"
@@ -146,7 +151,7 @@
     reason: >-
       {{ item.item.label ~ ': ' ~ (
            ('unreachable or HTTP ' ~ (item.status | default('error') | string))
-             if (item.status | default(0)) not in [200, 201, 302]
+             if (item.status | default(0)) not in (item.item.expect_status | default([200, 201, 302]))
            else ('answered but body lacks ' ~ (item.item.contains | default('')))
          ) ~ ' - ' ~ item.item.url }}
   loop: "{{ verify_ep_reads.results }}"
@@ -155,7 +160,7 @@
   when:
     - not (item.skipped | default(false))
     - >-
-      (item.status | default(0)) not in [200, 201, 302]
+      (item.status | default(0)) not in (item.item.expect_status | default([200, 201, 302]))
       or (item.item.contains is defined
           and item.item.contains not in (item.content | default('')))
 
