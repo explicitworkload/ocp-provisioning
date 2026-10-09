@@ -386,12 +386,16 @@
   ansible.builtin.fail:
     msg: >-
       Preset {{ model_preset }} pulls from Hugging Face ({{ model_storage_uri }})
-      and hf_token is empty. Supply it at run time with
-      -e hf_token="$HF_TOKEN". Failing now rather than letting the storage
-      initializer download tens of gigabytes and then stop on a 401.
+      and no token was found, in hf_token or in the HF_TOKEN environment
+      variable. Set hf_token in group_vars/all.yml, or export HF_TOKEN before
+      the run. Failing now rather than letting the storage initializer
+      download tens of gigabytes and then stop on a 401.
+      If you did pass -e hf_token="$HF_TOKEN" and are seeing this anyway,
+      HF_TOKEN was unset in the shell: -e outranks everything, so it
+      overrode all.yml with an empty string. Drop the -e.
   when:
     - model_storage_uri is match('^hf://')
-    - hf_token | default('') | length == 0
+    - model_hf_token | default('') | length == 0
 
 - name: Store the Hugging Face token
   kubernetes.core.k8s:
@@ -406,7 +410,7 @@
         namespace: "{{ model_namespace }}"
       type: Opaque
       stringData:
-        HF_TOKEN: "{{ hf_token }}"
+        HF_TOKEN: "{{ model_hf_token }}"
   when: model_storage_uri is match('^hf://')
   no_log: true
 
@@ -478,15 +482,26 @@
             # here: the FP8 preset is hf://, which KServe's default storage
             # container supports alongside oci://.
             storageUri: "{{ model_storage_uri }}"
-            args:
-              - "--max-model-len={{ model_max_model_len }}"
-              # Without this vLLM defaults to 1 and puts the whole model on
-              # one card, so a four-GPU preset would reserve four GPUs and
-              # then fail to fit on the first. 1 is the default, so this is
-              # inert for the single-GPU presets.
-              - "--tensor-parallel-size={{ model_gpu_count }}"
-              - "--enable-auto-tool-choice"
-              - "--tool-call-parser=hermes"
+            # Without --tensor-parallel-size vLLM defaults to 1 and puts the
+            # whole model on one card, so a four-GPU preset would reserve
+            # four GPUs and then fail to fit on the first. 1 is the default,
+            # so it is inert for the single-GPU presets.
+            #
+            # Built as a list rather than written out, because the last two
+            # entries are conditional. --max-num-seqs is only passed by the
+            # hybrid presets, which carry a fixed DeltaNet state per sequence
+            # and would ask for 37 GiB of it at vLLM's default of 256;
+            # --hf-overrides only when rope scaling is being used to go past
+            # the model's native length.
+            args: >-
+              {{ ['--max-model-len=' ~ model_max_model_len,
+                  '--tensor-parallel-size=' ~ model_gpu_count,
+                  '--enable-auto-tool-choice',
+                  '--tool-call-parser=hermes']
+                 + (['--max-num-seqs=' ~ model_max_num_seqs]
+                    if model_max_num_seqs | int > 0 else [])
+                 + (['--hf-overrides=' ~ (model_rope_override | to_json)]
+                    if model_rope_override | length > 0 else []) }}
             resources:
               limits:
                 cpu: "{{ model_cpu_limit }}"

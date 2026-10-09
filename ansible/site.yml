@@ -106,16 +106,23 @@
     # than refusing the combination - a 27B on a 16 GB card is allowed to
     # proceed and fail at model load, which is the choice that was made.
     #
-    # Compares the preset's weight size against gpu_count x the instance's
-    # per-GPU memory, with 20% added for KV cache and activations. An
-    # instance missing from gpu_instance_specs is reported as unknown rather
-    # than assumed to fit.
+    # Adds up what the model actually wants - weights, KV cache for one full
+    # max_model_len sequence, and any per-sequence hybrid state - and compares
+    # it against gpu_count x the instance's per-GPU memory. A flat percentage
+    # for KV used to do, but no longer: context is now sized per preset and a
+    # 262144 sequence is 16 GiB on its own, so the cache has to be counted.
+    #
+    # Instance memory is quoted in vendor GB and converted, then scaled by the
+    # 0.9 vLLM reserves by default. An instance missing from
+    # gpu_instance_specs is reported as unknown rather than assumed to fit.
     - name: Check the model fits the GPU instances being created
       ansible.builtin.debug:
         msg: >-
           {{ 'model   : ' ~ sel.display ~ '  (' ~ sel.weights_gb ~ ' GB weights, '
              ~ sel.gpu_count ~ ' GPU' ~ ('s' if sel.gpu_count | int > 1 else '')
-             ~ ', ' ~ sel.max_model_len ~ ' context)' }}
+             ~ ', ' ~ sel.max_model_len ~ ' context'
+             ~ (', ' ~ sel.max_num_seqs ~ ' concurrent'
+                if sel.max_num_seqs | default(0) | int > 0 else '') ~ ')' }}
       vars:
         sel: "{{ model_presets[model_preset] }}"
       when: model_preset is defined
@@ -129,16 +136,29 @@
              else (spec.gpus | string ~ ' GPU(s) per node but the model needs '
                    ~ sel.gpu_count ~ ' - it will not schedule')
                if spec.gpus | int < sel.gpu_count | int
-             else ('fits: ' ~ have ~ ' GB across ' ~ sel.gpu_count ~ ' x ' ~ spec.gpu
-                   ~ ', model needs about ' ~ need ~ ' GB')
-               if have | int >= need | int
-             else ('DOES NOT FIT: ' ~ have ~ ' GB across ' ~ sel.gpu_count ~ ' x ' ~ spec.gpu
-                   ~ ', model needs about ' ~ need ~ ' GB - it will fail at model load') }}
+             else ((('fits' if have | float >= need | float
+                     else 'DOES NOT FIT')
+                   ~ ': ' ~ have ~ ' GiB usable across ' ~ sel.gpu_count ~ ' x ' ~ spec.gpu
+                   ~ ', model needs about ' ~ need ~ ' GiB ('
+                   ~ w_gib ~ ' weights + ' ~ kv_gib ~ ' KV at ' ~ sel.max_model_len ~ ' context'
+                   ~ (' + ' ~ st_gib ~ ' state for ' ~ sel.max_num_seqs ~ ' sequences'
+                      if st_gib | float > 0 else '') ~ ')'
+                   ~ ('' if have | float >= need | float
+                      else ' - vLLM will refuse to start'))) }}
       vars:
         sel: "{{ model_presets[model_preset] }}"
         spec: "{{ gpu_instance_specs[item.instance_type] | default(none) }}"
-        have: "{{ (sel.gpu_count | int) * (spec.gpu_memory_gb | default(0) | int) }}"
-        need: "{{ ((sel.weights_gb | int) * 1.2) | round | int }}"
+        # Vendor GB to GiB, then the 0.9 of the card vLLM takes by default.
+        have: "{{ ((sel.gpu_count | int) * (spec.gpu_memory_gb | default(0) | int)
+                   * 0.9313 * 0.9) | round(1) }}"
+        w_gib: "{{ ((sel.weights_gb | int) * 0.9313) | round(1) }}"
+        kv_gib: "{{ ((sel.max_model_len | int) * (sel.kv_kb_per_token | default(0) | int)
+                     / 1048576) | round(1) }}"
+        st_gib: "{{ ((sel.max_num_seqs | default(0) | int)
+                     * (sel.state_mb_per_seq | default(0) | int) / 1024) | round(1) }}"
+        # The 1 GiB is CUDA graphs and activations, which a small model
+        # overshoots and a large one undershoots; the margin absorbs it.
+        need: "{{ (w_gib | float + kv_gib | float + st_gib | float + 1) | round(1) }}"
       loop: "{{ gpu_machinesets | default([]) | selectattr('replicas', 'gt', 0) | list }}"
       loop_control:
         label: "{{ item.instance_type }}"

@@ -82,22 +82,55 @@ Deploys one model, chosen with `model_preset`, using the pre-installed RHOAI
 vLLM CUDA ServingRuntime on a GPU node. One name sets the image, the GPU
 count, the context length and the resource limits together:
 
-| Preset | Source | GPUs | Weights | Context | Instance needed |
-|--------|--------|------|---------|---------|-----------------|
-| `qwen3-4b` | modelcar, bf16 | 1 | 8 GB | 32k | any GPU node |
-| `qwen3-8b` | modelcar, bf16 | 1 | 16 GB | 32k | 48 GB card |
-| `qwen3-14b` | modelcar, bf16 | 1 | 29 GB | 16k | 48 GB card |
-| `qwen3.8-27b` | modelcar, bf16 | 4 | 55 GB | 32k | `g6e.12xlarge` |
-| `qwen3.8-27b-fp8` | Hugging Face | 1 | 28 GB | 16k | 48 GB card + `hf_token` |
+| Preset | Source | GPUs | Weights | Context | Native max | Instance needed |
+|--------|--------|------|---------|---------|------------|-----------------|
+| `qwen3-4b` | modelcar, bf16 | 1 | 8 GB | 32k | 40k | any GPU node |
+| `qwen3-8b` | modelcar, bf16 | 1 | 16 GB | 40k | 40k | 48 GB card |
+| `qwen3-14b` | modelcar, bf16 | 1 | 29 GB | 40k | 40k | 48 GB card |
+| `qwen3.8-27b` | modelcar, bf16 | 4 | 56 GB | 256k | 256k | `g6e.12xlarge` |
+| `qwen3.8-27b-fp8` | Hugging Face | 1 | 31 GB | 64k | 256k | 48 GB card + `hf_token` |
 
-Context length is sized per model rather than shared. KV cache per token is
-`2 x layers x kv_heads x head_dim x bytes`, which varies enormously:
-`qwen3.8-27b` has `head_dim` 256 over 64 layers, so it costs 256 KB per
-token — 8 GB for a single 32k sequence — where `qwen3-4b` costs a fraction
-of that. The FP8 preset is capped at 16k for the same reason: its weights
-leave roughly 14 GB of KV on a 48 GB card, and at 32k one sequence would
-take 8 GB of it. vLLM would start and then serialise, which is harder to
-diagnose than a smaller limit.
+Context is sized per model against two separate ceilings, and set to what the
+pair will actually carry rather than to a round number.
+
+The first is `max_position_embeddings` from the model's own `config.json` —
+the "native max" column. Going past it needs rope scaling, and vLLM refuses
+to start without it. The dense Qwen3 models stop at 40960; `qwen3.8-27b` is
+natively 262144, so it needs no rescaling to serve a quarter-million tokens.
+
+The second is KV cache: vLLM will not start unless the cache holds one whole
+`max_model_len` sequence, so context trades directly against VRAM at
+`2 x full_attention_layers x kv_heads x head_dim x bytes` per token. Note
+**full-attention** layers. `qwen3.8-27b` is a hybrid — only 16 of its 64
+layers are attention at all (`full_attention_interval: 4`), and the other 48
+are gated DeltaNet, whose state is a fixed ~148 MB per sequence however long
+that sequence runs. So it costs 64 KB per token, not the 256 KB that counting
+all 64 layers suggests, and a full 256k sequence is 16 GiB rather than 64.
+Correcting that is what let these numbers go up. The flip side is that the
+per-sequence state, not the cache, is what bounds concurrency: at vLLM's
+default of 256 sequences it alone would want 37 GiB, so both 27B presets pin
+`max_num_seqs` (128 on four cards, 16 on one).
+
+Only `qwen3-4b` sits below its native length, and the card is why: the default
+`g4dn.4xlarge` has a 16 GB T4, and 7.5 GiB of weights plus 4.5 GiB of KV at
+32k is all of it. On a 48 GB card it will take 40960.
+
+The run prints the whole budget before it creates anything — weights, KV at
+the chosen context, and per-sequence state — against each instance you asked
+for, so an over-ambitious context shows up as `DOES NOT FIT` rather than as a
+pod that never becomes ready.
+
+To push a dense model past 40960, Qwen document YaRN to 131072:
+
+```bash
+./run.sh -e model_max_model_len=131072 \
+  -e '{"model_rope_override": {"rope_scaling": {"rope_type": "yarn",
+       "factor": 4.0, "original_max_position_embeddings": 32768}}}'
+```
+
+Static YaRN applies at every length, so it costs some accuracy on short
+prompts too — Qwen suggest enabling it only when long inputs are genuinely
+expected. Neither 27B preset needs it.
 
 The modelcar catalog has no FP8 Qwen, so that preset pulls from Hugging Face
 through KServe's `hf://` storage initializer and needs `hf_token`. Selecting
@@ -369,7 +402,9 @@ All variables are in `group_vars/all.yml`:
 | `hf_token` | (empty) | Hugging Face token, needed only by `hf://` presets. Supply at run time or in the untracked `all.yml` |
 | `model_namespace` | from preset | Namespace for the model deployment. Derived; override only to place it elsewhere |
 | `model_name` | from preset | InferenceService name. Derived |
-| `model_max_model_len` | from preset | vLLM max context length. Derived, and sized per model |
+| `model_max_model_len` | from preset | vLLM max context length. Derived, and sized per model against both the native max and the KV cache |
+| `model_max_num_seqs` | from preset | `--max-num-seqs`. Derived; `0` leaves it to vLLM, and only the hybrid 27B presets set it |
+| `model_rope_override` | `{}` | Rope scaling passed through as `--hf-overrides`, to go past the native context. Off by default |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console, odf-client-console]` | Console plugins to enable |

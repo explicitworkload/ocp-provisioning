@@ -45,7 +45,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
 - Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, p4d.24xlarge, p4de.24xlarge) with dedicated MachineConfigPool by auto-discovering cluster config
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
-- Serves one model of your choosing on vLLM — `model_preset` picks from Qwen3 4B/8B/14B and a 27B in bf16 (4 GPUs) or FP8 (1 GPU) — with external endpoint, bearer token auth, and GenAI Studio playground. The run asks which model and which GPU instance, and reports whether the pair fits before creating anything
+- Serves one model of your choosing on vLLM — `model_preset` picks from Qwen3 4B/8B/14B and a 27B in bf16 (4 GPUs, 256k context) or FP8 (1 GPU, 64k) — with external endpoint, bearer token auth, and GenAI Studio playground. The run asks which model and which GPU instance, then prints the full VRAM budget (weights, KV cache at the chosen context, per-sequence state) against each instance before creating anything
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying the cluster's own model, Azure GPT-4 and any external OpenAI-compatible endpoints via reusable credentials
 - Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring (probes in-cluster service DNS, with the Gatus UI embedded in the dashboard)
 - Deploys OpenShift Dev Spaces with a `CheCluster` and registers this repo as a one-click workspace sample; workspaces install the Claude Code CLI and the Kubernetes extension on start

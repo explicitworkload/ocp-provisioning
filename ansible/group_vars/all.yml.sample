@@ -62,11 +62,16 @@ gpu_machinesets:
 # together. Full definitions, including why each context length is what it
 # is, are in roles/model_serving/defaults/main.yml.
 #
-#   qwen3-4b          bf16, modelcar,  1 GPU,   8 GB weights, 32k context
-#   qwen3-8b          bf16, modelcar,  1 GPU,  16 GB weights, 32k context
-#   qwen3-14b         bf16, modelcar,  1 GPU,  29 GB weights, 16k context
-#   qwen3.8-27b       bf16, modelcar,  4 GPUs, 55 GB weights, 32k context
-#   qwen3.8-27b-fp8   FP8,  HuggingFace, 1 GPU, 28 GB weights, 16k context
+#   qwen3-4b          bf16, modelcar,  1 GPU,   8 GB weights,  32k context
+#   qwen3-8b          bf16, modelcar,  1 GPU,  16 GB weights,  40k context
+#   qwen3-14b         bf16, modelcar,  1 GPU,  29 GB weights,  40k context
+#   qwen3.8-27b       bf16, modelcar,  4 GPUs, 56 GB weights, 256k context
+#   qwen3.8-27b-fp8   FP8,  HuggingFace, 1 GPU, 31 GB weights, 64k context
+#
+# 40k is the whole native length of the dense Qwen3 models. Only qwen3-4b is
+# held below its own - its default g4dn.4xlarge has a 16 GB T4, and weights
+# plus 32k of cache is all of it. Set model_max_model_len to 40960 by hand if
+# it is going on a 48 GB card.
 #
 # The GPU instance is chosen separately, in gpu_machinesets above - you pick
 # the hardware. The run prints a fit check before it changes anything, so a
@@ -74,8 +79,9 @@ gpu_machinesets:
 # discovered at model load.
 #
 # qwen3.8-27b needs four GPUs on one node: g6e.12xlarge is the smallest that
-# has them. qwen3.8-27b-fp8 fits one L40S but downloads ~28 GB from Hugging
-# Face at pod start instead of pulling a cached image.
+# has them, and with that much VRAM it serves the model's full native 256k.
+# qwen3.8-27b-fp8 fits one L40S but downloads ~31 GB from Hugging Face at pod
+# start instead of pulling a cached image, and one card caps it at 64k.
 model_preset: qwen3-4b
 
 # Hugging Face token. Only the hf:// presets need it - today just
