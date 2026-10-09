@@ -3,10 +3,14 @@
 # reference cluster; the metrics/traces blocks are only honoured on the v2
 # DSCI schema.
 rhoai_monitoring_namespace: redhat-ods-monitoring
-rhoai_metrics_retention: 90d
+rhoai_metrics_retention: 7d
 rhoai_metrics_size: 5Gi
 rhoai_traces_sample_ratio: "0.1"
-rhoai_traces_retention: 2160h   # 90 days
+# Unused today: the role deliberately omits the DSCI traces block, because a
+# traces key makes RHOAI stand up a TempoStack and an OpenTelemetryCollector
+# and nothing in roles/operators subscribes to Tempo or OpenTelemetry. Kept
+# in step with the metrics retention so it is already right if that changes.
+rhoai_traces_retention: 168h   # 7 days
 
 # Dashboard access. adminGroups must be a group that exists, or nobody gets
 # the admin UI; the reference cluster uses a dedicated rhods-admins group.
@@ -24,6 +28,22 @@ rhoai_gpu_profile_max: 2
 # the name, so no label can override it: an MCPServer in openshift-mcp-server
 # can never be listed under AI hub > MCP servers > Deployments.
 mcp_server_namespace: mcp-servers
+# Pinned to a release branch deliberately. The netobserv toolset - the one
+# that reads flow records - exists only in the main build; checked on
+# 2026-10-09 by grepping each image for the tool symbols. release-03 and
+# release-04 carry no netobserv_* at all and were both last built 26 Sep,
+# while main carries netobserv_get_flow_metrics and is rebuilt daily.
+#
+# Moving to main is not a swap. It renamed the config schema, and pointing
+# this at main without rewriting config.toml crash-loops the server on
+#   unknown config key "toolset_configs.metrics"
+# Specifically: toolsets are namespaced (metrics -> observability/metrics,
+# as a quoted TOML key), the bare openshift toolset is gone, and ca_file is
+# no longer accepted under the metrics config. main also dropped the
+# --toolsets flag for config-file-only setup, which costs us nothing.
+#
+# So: release-03 until either a release branch ships netobserv or the config
+# here is migrated to main's schema.
 mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"
 
 # --- RHOAI 3.5 feature CRs -------------------------------------------------
