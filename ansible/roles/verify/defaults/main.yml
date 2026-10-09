@@ -169,9 +169,19 @@ verify_endpoints:
     gate: "{{ deploy_openrag | default(false) }}"
     url: "https://openrag-api.{{ ocp_apps_domain }}/onboarding-status"
     contains: '"onboarded":true'
+  # /healthz, not /, for the same reason the Gatus probe uses it: with
+  # oauth-proxy in front, / answers 403 and serves the sign-in page, so
+  # probing it measures the proxy rather than the app. /healthz carries no
+  # @login_required and is excluded from the proxy with -skip-auth-regex, so
+  # it reaches Flask.
+  #
+  # Asserting the body too, rather than just widening expect_status to admit
+  # 403. Accepting 403 would pass whether the app behind the proxy was
+  # serving or dead, which is the opposite of what this role is for.
   - label: "Ops Dashboard"
     gate: true
-    url: "https://dashboard.{{ ocp_apps_domain }}/"
+    url: "https://dashboard.{{ ocp_apps_domain }}/healthz"
+    contains: "ok"
   - label: "LiteLLM"
     gate: true
     url: "https://litellm-{{ litellm_namespace | default('litellm') }}.{{ ocp_apps_domain }}/health/liveliness"
