@@ -110,15 +110,33 @@ if [[ $# -eq 0 && -t 0 ]]; then
     echo "  model_preset set to $EXTRA_MODEL in group_vars/all.yml"
   fi
   if [[ -n "$EXTRA_GPU" ]]; then
+    # Appends the chosen type when the file does not already list it. Without
+    # that, picking an instance all.yml had never heard of zeroed every entry
+    # and added nothing: the run then built four MachineSets at 0 replicas and
+    # model_serving sat waiting half an hour for a GPU node nobody had asked
+    # AWS for. Hit on sandbox3270, where all.yml came from the sample and the
+    # sample had no g6e.12xlarge while the menu above offered it.
     awk -v want="$EXTRA_GPU" '
       /^gpu_machinesets:/ { inblock=1; print; next }
-      inblock && /^[^ -]/ { inblock=0 }
-      inblock && /^- instance_type:/ { cur=$3; print; next }
+      inblock && /^[^ -]/ {
+        if (!seen) { print "- instance_type: " want; print "  replicas: 1"; seen=1 }
+        inblock=0
+      }
+      inblock && /^- instance_type:/ { cur=$3; if (cur==want) seen=1; print; next }
       inblock && /^  replicas:/ { print "  replicas: " (cur==want ? 1 : 0); next }
       { print }
+      END {
+        if (inblock && !seen) { print "- instance_type: " want; print "  replicas: 1" }
+      }
     ' group_vars/all.yml > group_vars/all.yml.tmp \
       && mv group_vars/all.yml.tmp group_vars/all.yml
     echo "  gpu_machinesets set to $EXTRA_GPU x1 in group_vars/all.yml"
+    # Say it out loud rather than trusting the edit, because the failure this
+    # replaces was silent in exactly this spot.
+    if ! grep -A1 "^- instance_type: ${EXTRA_GPU}\$" group_vars/all.yml | grep -q "replicas: 1"; then
+      echo "  WARNING: ${EXTRA_GPU} is still not at 1 replica in group_vars/all.yml." >&2
+      echo "           Check the gpu_machinesets block by hand before continuing." >&2
+    fi
   fi
   echo
 fi

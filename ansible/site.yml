@@ -165,6 +165,22 @@
       when: model_preset is defined
       tags: [always]
 
+    # The loop above says nothing at all when every entry is at zero, which
+    # is the one case worth shouting about: the MachineSets get created,
+    # none of them builds anything, and model_serving waits half an hour for
+    # a node that was never requested.
+    - name: Warn when no GPU instance is being created
+      ansible.builtin.debug:
+        msg: >-
+          gpu     : NONE - every gpu_machinesets entry is at 0 replicas
+          ({{ gpu_machinesets | default([]) | map(attribute='instance_type') | join(', ') }}).
+          No GPU node will be built, and model serving will fail unless this
+          cluster already has one. Set replicas in group_vars/all.yml.
+      when:
+        - model_preset is defined
+        - (gpu_machinesets | default([]) | selectattr('replicas', 'gt', 0) | list | length) == 0
+      tags: [always]
+
     # First task that writes to the cluster. Nothing above it mutates.
     - name: Set OAuth access token max age to 90 days
       kubernetes.core.k8s:

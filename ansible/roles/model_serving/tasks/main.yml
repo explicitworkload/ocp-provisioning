@@ -47,6 +47,35 @@
             maxCount: 2
   ignore_errors: true
 
+# Asked before the wait, because the wait below is thirty minutes long and
+# there is one state it can never escape: no GPU node exists and no
+# MachineSet has been told to build one. That is not slowness, it is a
+# configuration that will never converge, and it should not cost half an hour
+# to find out. Seen on sandbox3270, where every gpu_machinesets entry sat at
+# 0 replicas and the run spent its retries waiting for a machine nobody had
+# asked AWS for.
+- name: Look for a GPU node that already exists
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/gpu="
+  register: gpu_nodes_present
+
+- name: Fail early when nothing will ever produce a GPU node
+  ansible.builtin.fail:
+    msg: >-
+      No GPU node exists and no entry in gpu_machinesets asks for one - every
+      one of them is at 0 replicas, so no Machine was ever requested and
+      waiting cannot help. Set replicas on the instance type you want in
+      group_vars/all.yml and re-run with --tags gpu,model-serving.
+      Configured: {{ gpu_machinesets | default([])
+                     | map(attribute='instance_type') | join(', ') | default('none', true) }}.
+  when:
+    - gpu_nodes_present.resources | length == 0
+    - (gpu_machinesets | default([]) | selectattr('replicas', 'gt', 0) | list | length) == 0
+
 - name: Wait for GPU node to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"

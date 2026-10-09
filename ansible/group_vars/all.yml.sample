@@ -52,6 +52,10 @@ gpu_machinesets:
   replicas: 0
 - instance_type: g6e.4xlarge
   replicas: 1
+# Needed by the bf16 qwen3.8-27b preset, which wants four GPUs on one node.
+# Every type run.sh offers has to appear here, even at zero replicas.
+- instance_type: g6e.12xlarge
+  replicas: 0
 - instance_type: p4d.24xlarge
   replicas: 0
 - instance_type: p4de.24xlarge
