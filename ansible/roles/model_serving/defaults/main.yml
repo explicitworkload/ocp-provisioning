@@ -1,13 +1,121 @@
 ---
-model_namespace: qwen3-4b
-model_name: qwen3-4b
-model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
+# Which model to serve. One name here sets the image, the GPU count, the
+# context length and the resource limits together, because getting those four
+# consistent by hand is how a model ends up either refusing to start or
+# quietly serialising every request.
+#
+# The GPU instance type is chosen separately, in gpu_machinesets. That is
+# deliberate - you pick the hardware - but see the fit check the run prints
+# before it changes anything: not every model fits every instance.
+model_preset: qwen3-4b
 
-# Resource limits for the model server
-model_gpu_count: 1
-model_cpu_limit: "4"
-model_memory_limit: "16Gi"
-model_cpu_request: "2"
-model_memory_request: "8Gi"
-model_max_model_len: 32768
+# weights_gb is the on-disk size of the artifact, which is close enough to the
+# VRAM the weights occupy to decide whether a model fits a card. It is what
+# the preflight fit check compares against the instance's total GPU memory.
+#
+# max_model_len is sized per model, not shared. KV cache per token is
+#   2 x layers x kv_heads x head_dim x bytes
+# which varies enormously: qwen3.8-27b has head_dim 256 and 64 layers, so it
+# costs 256 KB per token - 8 GB for a single 32k sequence - where qwen3-4b
+# costs a fraction of that.
+model_presets:
+  qwen3-4b:
+    display: "Qwen3 4B (bf16, modelcar)"
+    name: qwen3-4b
+    uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
+    gpu_count: 1
+    max_model_len: 32768
+    weights_gb: 8
+    cpu_limit: "4"
+    memory_limit: 16Gi
+    cpu_request: "2"
+    memory_request: 8Gi
+
+  qwen3-8b:
+    display: "Qwen3 8B (bf16, modelcar)"
+    name: qwen3-8b
+    uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-8b"
+    gpu_count: 1
+    max_model_len: 32768
+    weights_gb: 16
+    cpu_limit: "8"
+    memory_limit: 24Gi
+    cpu_request: "2"
+    memory_request: 12Gi
+
+  qwen3-14b:
+    display: "Qwen3 14B (bf16, modelcar)"
+    name: qwen3-14b
+    uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-14b"
+    gpu_count: 1
+    max_model_len: 16384
+    weights_gb: 29
+    cpu_limit: "8"
+    memory_limit: 48Gi
+    cpu_request: "4"
+    memory_request: 24Gi
+
+  # bf16, 55 GB of weights: this does not fit one 48 GB L40S at any context
+  # length. Four GPUs on a single node, sharded with tensor parallelism.
+  # g6e.12xlarge is the smallest instance that provides them.
+  qwen3.8-27b:
+    display: "Qwen3.8 27B (bf16, modelcar, 4 GPUs)"
+    # Not qwen38-27b: the MaaS endpoint in litellm_extra_models already serves
+    # a model by that name, and an InferenceService with the same name would
+    # make the AI asset endpoint drop the remote one as a duplicate.
+    name: qwen3-27b
+    uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3.8-27b"
+    gpu_count: 4
+    max_model_len: 32768
+    weights_gb: 55
+    cpu_limit: "16"
+    memory_limit: 96Gi
+    cpu_request: "8"
+    memory_request: 48Gi
+
+  # The same model at FP8, on one GPU. Not from the modelcar catalog - it has
+  # no FP8 Qwen - so this pulls from Hugging Face through KServe's hf://
+  # storage initializer, which the default ClusterStorageContainer supports.
+  #
+  # The trade-off against the modelcar: ~28 GB is downloaded at pod start
+  # rather than pulled as a layer-cached image, so first start is slow and a
+  # restart pays it again. Context is 16384, not 32768: weights leave roughly
+  # 14 GB for KV cache on a 48 GB card, and at 256 KB per token a 32k sequence
+  # alone would take 8 GB of it - vLLM would still start, then serialise.
+  qwen3.8-27b-fp8:
+    display: "Qwen3.8 27B (FP8, Hugging Face, 1 GPU)"
+    name: qwen3-27b-fp8
+    uri: "hf://Qwen/Qwen3.8-27B-FP8"
+    gpu_count: 1
+    max_model_len: 16384
+    weights_gb: 28
+    cpu_limit: "8"
+    memory_limit: 48Gi
+    cpu_request: "4"
+    memory_request: 24Gi
+
+# Everything below is derived from the preset. Override any of it explicitly
+# if you need to; the preset only supplies the default.
+model_selected: "{{ model_presets[model_preset] }}"
+model_name: "{{ model_selected.name }}"
+model_namespace: "{{ model_selected.name }}"
+model_storage_uri: "{{ model_selected.uri }}"
+model_gpu_count: "{{ model_selected.gpu_count }}"
+model_max_model_len: "{{ model_selected.max_model_len }}"
+model_cpu_limit: "{{ model_selected.cpu_limit }}"
+model_memory_limit: "{{ model_selected.memory_limit }}"
+model_cpu_request: "{{ model_selected.cpu_request }}"
+model_memory_request: "{{ model_selected.memory_request }}"
 model_max_output_tokens: 4096
+
+# Hugging Face token, needed only by presets whose uri is hf:// - today just
+# qwen3.8-27b-fp8. Never put a real one here: supply it at run time, the same
+# way the endpoint keys are.
+#
+#     ./run.sh -e hf_token="$HF_TOKEN"
+#
+# Reaches the storage initializer as HF_TOKEN, via a Secret in the model
+# namespace and an optional env reference on KServe's default
+# ClusterStorageContainer. Optional, so every other InferenceService on the
+# cluster keeps starting whether or not that Secret exists.
+hf_token: ""

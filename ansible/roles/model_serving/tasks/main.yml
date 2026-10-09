@@ -380,6 +380,60 @@
       --overwrite
   changed_when: false
 
+# Only the hf:// presets need any of this; the modelcar presets pull an OCI
+# image and never touch Hugging Face.
+- name: Fail early when an hf:// model has no token
+  ansible.builtin.fail:
+    msg: >-
+      Preset {{ model_preset }} pulls from Hugging Face ({{ model_storage_uri }})
+      and hf_token is empty. Supply it at run time with
+      -e hf_token="$HF_TOKEN". Failing now rather than letting the storage
+      initializer download tens of gigabytes and then stop on a 401.
+  when:
+    - model_storage_uri is match('^hf://')
+    - hf_token | default('') | length == 0
+
+- name: Store the Hugging Face token
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: hf-token
+        namespace: "{{ model_namespace }}"
+      type: Opaque
+      stringData:
+        HF_TOKEN: "{{ hf_token }}"
+  when: model_storage_uri is match('^hf://')
+  no_log: true
+
+# Cluster-scoped, so this is deliberately additive and optional: every other
+# InferenceService on the cluster uses the same storage initializer, and a
+# required secretKeyRef would stop any of them whose namespace has no
+# hf-token Secret.
+- name: Let the storage initializer read the Hugging Face token
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: serving.kserve.io/v1alpha1
+    kind: ClusterStorageContainer
+    name: default
+    definition:
+      spec:
+        container:
+          name: storage-initializer
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+                  optional: true
+  when: model_storage_uri is match('^hf://')
+
 - name: Create InferenceService for {{ model_name }}
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -414,9 +468,17 @@
             modelFormat:
               name: vLLM
             runtime: vllm-cuda-runtime
-            storageUri: "oci://{{ model_image }}"
+            # Full URI from the preset rather than an oci:// prefix bolted on
+            # here: the FP8 preset is hf://, which KServe's default storage
+            # container supports alongside oci://.
+            storageUri: "{{ model_storage_uri }}"
             args:
               - "--max-model-len={{ model_max_model_len }}"
+              # Without this vLLM defaults to 1 and puts the whole model on
+              # one card, so a four-GPU preset would reserve four GPUs and
+              # then fail to fit on the first. 1 is the default, so this is
+              # inert for the single-GPU presets.
+              - "--tensor-parallel-size={{ model_gpu_count }}"
               - "--enable-auto-tool-choice"
               - "--tool-call-parser=hermes"
             resources:

@@ -57,10 +57,26 @@ gpu_machinesets:
 - instance_type: p4de.24xlarge
   replicas: 0
 
-# Model serving configuration
-model_namespace: qwen3-4b
-model_name: qwen3-4b
-model_image: "quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
+# --- Model serving -------------------------------------------------------
+# One name sets the image, GPU count, context length and resource limits
+# together. Full definitions, including why each context length is what it
+# is, are in roles/model_serving/defaults/main.yml.
+#
+#   qwen3-4b          bf16, modelcar,  1 GPU,   8 GB weights, 32k context
+#   qwen3-8b          bf16, modelcar,  1 GPU,  16 GB weights, 32k context
+#   qwen3-14b         bf16, modelcar,  1 GPU,  29 GB weights, 16k context
+#   qwen3.8-27b       bf16, modelcar,  4 GPUs, 55 GB weights, 32k context
+#   qwen3.8-27b-fp8   FP8,  HuggingFace, 1 GPU, 28 GB weights, 16k context
+#
+# The GPU instance is chosen separately, in gpu_machinesets above - you pick
+# the hardware. The run prints a fit check before it changes anything, so a
+# model that cannot fit the instance you chose is called out rather than
+# discovered at model load.
+#
+# qwen3.8-27b needs four GPUs on one node: g6e.12xlarge is the smallest that
+# has them. qwen3.8-27b-fp8 fits one L40S but downloads ~28 GB from Hugging
+# Face at pod start instead of pulling a cached image.
+model_preset: qwen3-4b
 
 # Console plugins to enable
 console_plugins:

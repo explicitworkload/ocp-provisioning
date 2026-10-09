@@ -101,6 +101,50 @@
                           else 'none - set ocp_expected_api to hard-fail on the wrong cluster' }}"
       tags: [always]
 
+    # Reported, never enforced. The model and the instance are chosen
+    # independently on purpose, so this says whether the pair works rather
+    # than refusing the combination - a 27B on a 16 GB card is allowed to
+    # proceed and fail at model load, which is the choice that was made.
+    #
+    # Compares the preset's weight size against gpu_count x the instance's
+    # per-GPU memory, with 20% added for KV cache and activations. An
+    # instance missing from gpu_instance_specs is reported as unknown rather
+    # than assumed to fit.
+    - name: Check the model fits the GPU instances being created
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'model   : ' ~ sel.display ~ '  (' ~ sel.weights_gb ~ ' GB weights, '
+             ~ sel.gpu_count ~ ' GPU' ~ ('s' if sel.gpu_count | int > 1 else '')
+             ~ ', ' ~ sel.max_model_len ~ ' context)' }}
+      vars:
+        sel: "{{ model_presets[model_preset] }}"
+      when: model_preset is defined
+      tags: [always]
+
+    - name: Report the fit against each GPU instance
+      ansible.builtin.debug:
+        msg: >-
+          gpu     : {{ item.instance_type }} x{{ item.replicas }} -
+          {{ 'unknown instance type - cannot check fit' if spec is none
+             else (spec.gpus | string ~ ' GPU(s) per node but the model needs '
+                   ~ sel.gpu_count ~ ' - it will not schedule')
+               if spec.gpus | int < sel.gpu_count | int
+             else ('fits: ' ~ have ~ ' GB across ' ~ sel.gpu_count ~ ' x ' ~ spec.gpu
+                   ~ ', model needs about ' ~ need ~ ' GB')
+               if have | int >= need | int
+             else ('DOES NOT FIT: ' ~ have ~ ' GB across ' ~ sel.gpu_count ~ ' x ' ~ spec.gpu
+                   ~ ', model needs about ' ~ need ~ ' GB - it will fail at model load') }}
+      vars:
+        sel: "{{ model_presets[model_preset] }}"
+        spec: "{{ gpu_instance_specs[item.instance_type] | default(none) }}"
+        have: "{{ (sel.gpu_count | int) * (spec.gpu_memory_gb | default(0) | int) }}"
+        need: "{{ ((sel.weights_gb | int) * 1.2) | round | int }}"
+      loop: "{{ gpu_machinesets | default([]) | selectattr('replicas', 'gt', 0) | list }}"
+      loop_control:
+        label: "{{ item.instance_type }}"
+      when: model_preset is defined
+      tags: [always]
+
     # First task that writes to the cluster. Nothing above it mutates.
     - name: Set OAuth access token max age to 90 days
       kubernetes.core.k8s:

@@ -5,3 +5,17 @@ gpu_volume_size: 120
 gpu_machinesets:
   - instance_type: g4dn.4xlarge
     replicas: 1
+
+# What each instance type actually provides, for the preflight fit check.
+# gpu_memory_gb is PER GPU, so a tensor-parallel model's budget is
+# gpu_count x gpu_memory_gb and the maths stays honest for multi-GPU.
+#
+# Only used for reporting - it never changes what is deployed. An instance
+# missing from this table is reported as unknown rather than assumed to fit.
+gpu_instance_specs:
+  g4dn.4xlarge:  {gpus: 1, gpu_memory_gb: 16,  gpu: "T4"}
+  g6e.4xlarge:   {gpus: 1, gpu_memory_gb: 48,  gpu: "L40S"}
+  g6e.12xlarge:  {gpus: 4, gpu_memory_gb: 48,  gpu: "L40S"}
+  g6e.48xlarge:  {gpus: 8, gpu_memory_gb: 48,  gpu: "L40S"}
+  p4d.24xlarge:  {gpus: 8, gpu_memory_gb: 40,  gpu: "A100 40GB"}
+  p4de.24xlarge: {gpus: 8, gpu_memory_gb: 80,  gpu: "A100 80GB"}
