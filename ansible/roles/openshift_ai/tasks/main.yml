@@ -798,6 +798,24 @@
   loop:
     - {suffix: read, role: cluster-reader}
     - {suffix: write, role: mcp-workload-write}
+    # The netobserv plugin enforces Kubernetes RBAC on the token the MCP
+    # server presents, and reading flows means the Loki network tenant -
+    # loki.grafana.com/network/logs - which cluster-reader does not cover.
+    # netobserv-loki-reader is created by the netobserv operator and grants
+    # exactly that one verb on that one resource, so it is bound rather than
+    # reinvented.
+    #
+    # Verify with a SubjectAccessReview, not `oc auth can-i`. loki.grafana.com
+    # /network is a virtual resource that exists only for authorization and
+    # has no API endpoint, so can-i cannot discover it: asking for
+    # `--subresource=logs` silently resolves to networks.config.openshift.io
+    # and answers about a completely different resource. A SAR skips
+    # discovery and answered true for mcp-viewer, false for an unbound
+    # ServiceAccount.
+    #
+    # A binding whose ClusterRole does not exist is legal and grants nothing,
+    # so this stays harmless on a cluster without netobserv.
+    - {suffix: netobserv, role: netobserv-loki-reader}
   loop_control:
     label: "mcp-viewer-{{ item.suffix }} -> {{ item.role }}"
 
@@ -832,6 +850,14 @@
           port = "8080"
           read_only = false
           toolsets = ["core", "config", "kubevirt", "tekton", "openshift", "metrics"]
+
+          # netobserv deliberately has no [toolset_configs.netobserv] block.
+          # In-cluster on OpenShift the toolset defaults to
+          # https://netobserv-plugin.netobserv.svc.cluster.local:9001 with the
+          # projected service CA - exactly where the network_observability
+          # role puts the plugin, verified on sandbox830 and sandbox2009.
+          # Naming it here would only create a second place to keep the
+          # namespace in step.
 
           [toolset_configs.metrics]
           prometheus_url = "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
