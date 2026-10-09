@@ -117,10 +117,18 @@ openrag_deploy_docs: true
 # OpenSearch. The Knowledge page in OpenRAG lists documents; this goes a
 # level down to the chunks they were split into, with Discover and Dev Tools.
 #
-# Off by default - it is a second UI and 2 GB of limits for something most
-# runs never open. Unlike Attu it needs no proxy in front: OpenSearch here
-# runs the security plugin, so Dashboards serves its own login and takes the
-# admin credential the summary prints.
+# On by default. This is the supported way to look inside OpenSearch, and
+# the alternative is not "no UI" - it is someone exposing the REST API on
+# :9200 to curl the indices by hand, which publishes the admin API to do a
+# job a UI already does.
+#
+# It costs a Deployment and 2 GB of limits, and only on runs that set
+# deploy_openrag=true, since there is no OpenSearch to look at otherwise.
+# Set false if the chunks are never inspected on this cluster.
+#
+# Unlike Attu it needs no proxy in front: OpenSearch here runs the security
+# plugin, so Dashboards serves its own login and takes the admin credential
+# the summary prints.
 #
 # The tag must track the OpenSearch server's major line. Dashboards refuses
 # to start against a version it does not match.

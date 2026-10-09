@@ -489,15 +489,21 @@ release.
 ### Seeing what OpenRAG chunked
 
 OpenRAG's Knowledge page lists documents. To see the *chunks* they were split
-into, deploy OpenSearch Dashboards:
+into, use OpenSearch Dashboards, which deploys with OpenRAG by default. Log
+in as `admin` with the OpenSearch password the summary prints, then
+**Discover** on the `documents` index.
+
+To deploy it on a cluster that does not have it yet:
 
 ```bash
-./run.sh --tags opensearch-dashboards -e deploy_openrag=true -e openrag_deploy_dashboards=true
+./run.sh --tags opensearch-dashboards -e deploy_openrag=true
 ```
 
-Off by default — it is a second UI and 2 GB of limits for something most runs
-never open. Log in as `admin` with the OpenSearch password the summary
-prints, then **Discover** on the `documents` index.
+Set `openrag_deploy_dashboards=false` to leave it out; it costs a Deployment
+and 2 GB of limits. Note that the alternative to this UI is not "no UI" —
+it is exposing OpenSearch's REST API on `:9200` through a Route and curling
+the indices by hand, which publishes the admin API to do a job this already
+does. Dashboards is the supported way in.
 
 Each OpenSearch document *is* a chunk: `text`, `page`, `chunk_size`,
 `chunk_overlap`, `filename`, the ACL fields OpenRAG enforces per user, and
