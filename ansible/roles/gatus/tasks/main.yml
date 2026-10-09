@@ -31,10 +31,15 @@
         interval: 60s
         conditions: ["[STATUS] == any(200, 301, 302, 403)"]
         client: {insecure: true}
+      # /healthz, not /. With oauth-proxy in front, / answers 403 with the
+      # sign-in page, so probing it measured the proxy rather than the app and
+      # reported the dashboard down. /healthz is unauthenticated in the app and
+      # excluded from the proxy via -skip-auth-regex, so this reaches Flask and
+      # a 200 means the app really is serving.
       - name: Operations Dashboard
-        url: "https://dashboard.{{ ocp_apps_domain }}"
+        url: "https://dashboard.{{ ocp_apps_domain }}/healthz"
         interval: 60s
-        conditions: ["[STATUS] == 200"]
+        conditions: ["[STATUS] == 200", "[BODY] == ok"]
         client: {insecure: true}
       - name: Dev Spaces
         url: "https://devspaces.{{ ocp_apps_domain }}"
@@ -48,9 +53,9 @@
         client: {insecure: true}
     gatus_dashboard_public:
       - name: Operations Dashboard (public)
-        url: "https://{{ dashboard_custom_host }}"
+        url: "https://{{ dashboard_custom_host }}/healthz"
         interval: 60s
-        conditions: ["[STATUS] == 200"]
+        conditions: ["[STATUS] == 200", "[BODY] == ok"]
         client: {insecure: true}
     gatus_devspaces_public:
       - name: Dev Spaces (public)

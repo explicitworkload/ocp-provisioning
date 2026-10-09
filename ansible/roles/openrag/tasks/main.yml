@@ -557,6 +557,86 @@
 # langflow entry passed with them never becomes an Ingress and Langflow has no
 # way in from a browser. Created directly rather than as an Ingress for
 # ingress-to-route to convert, because there is nothing to convert from.
+# --- openai lazy-import deadlock workaround ------------------------------
+# Langflow builds components in worker threads (asyncio.to_thread), and the
+# openai SDK resolves its sub-resources through functools.cached_property
+# with a lazy import inside. Two threads touching different properties at
+# once each take a different module lock - openai.resources,
+# .resources.beta, .resources.chat - and CPython spots the cycle and raises
+# rather than hanging:
+#
+#   _DeadlockError: deadlock detected by _ModuleLock('openai.resources.chat')
+#
+# which surfaces as "Error building Component OpenRAG Embeddings". It is a
+# cold-start race: once the modules are in sys.modules it cannot recur, so
+# it only bites the first concurrent use after a pod starts. Reproduced on
+# sandbox3270 with Python 3.14.7 / openai 2.48.0 - five threads touching
+# five client properties cold, four of them deadlocked.
+#
+# Importing openai.resources once in the MAIN thread before anything else
+# removes it entirely; the same test then ran seven threads with no errors.
+# sitecustomize is the hook for that: Python's site module imports it at
+# interpreter start if it is anywhere on sys.path.
+#
+# Patched onto the Deployment rather than passed through Helm because the
+# chart exposes no extraEnv or extraVolumes for langflow. Helm therefore
+# reverts it on every upgrade and this re-applies it, which costs a second
+# pod rollout per run. Drop openrag_fix_openai_import_deadlock to false, or
+# delete this whole block, once the chart gains extraEnv or the SDK imports
+# eagerly.
+- name: Create the openai import warm-up
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openrag-import-warmup
+        namespace: "{{ openrag_namespace }}"
+      data:
+        sitecustomize.py: |
+          # Imported automatically by Python's site module at interpreter
+          # start, before Langflow spawns any worker thread. Pulling
+          # openai.resources in here means the lazy imports underneath
+          # openai.OpenAI's cached properties are already resolved, so
+          # concurrent access cannot deadlock on the module locks.
+          try:
+              import openai.resources  # noqa: F401
+          except Exception:  # never stop the interpreter starting
+              pass
+  when: openrag_fix_openai_import_deadlock | bool
+
+# Strategic merge, so the volume, mount and env are added alongside what the
+# chart already set rather than replacing those lists. The container is
+# matched by name.
+- name: Pre-warm the openai imports in Langflow
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_namespace }}"
+    name: openrag-langflow
+    definition:
+      spec:
+        template:
+          spec:
+            volumes:
+              - name: openrag-import-warmup
+                configMap:
+                  name: openrag-import-warmup
+            containers:
+              - name: langflow
+                env:
+                  - name: PYTHONPATH
+                    value: /opt/import-warmup
+                volumeMounts:
+                  - name: openrag-import-warmup
+                    mountPath: /opt/import-warmup
+  when: openrag_fix_openai_import_deadlock | bool
+
 - name: Expose Langflow
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"

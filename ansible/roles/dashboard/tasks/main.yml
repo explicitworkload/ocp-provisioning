@@ -629,6 +629,12 @@
         - -tls-cert=/etc/tls/private/tls.crt
         - -tls-key=/etc/tls/private/tls.key
         - -cookie-secret-file=/etc/proxy/secrets/session_secret
+        # Let the health probe through unauthenticated. Gatus and the
+        # Route's own checks need a real answer from the app; without this
+        # they get the proxy's 403 sign-in page and report the dashboard
+        # down while it is serving perfectly well. /healthz returns the
+        # literal "ok" and exposes nothing.
+        - -skip-auth-regex=^/healthz$
         - -openshift-service-account=default
         - -openshift-sar={{ dashboard_oauth_sar | trim }}
         - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt

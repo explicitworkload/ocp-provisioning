@@ -140,6 +140,12 @@ openrag_deploy_docs: true
 #
 # The tag must track the OpenSearch server's major line. Dashboards refuses
 # to start against a version it does not match.
+# Works around a CPython import deadlock in the openai SDK's lazy imports,
+# which Langflow hits because it builds components in worker threads. See the
+# task in tasks/main.yml for the full diagnosis. Costs an extra pod rollout
+# per run, because the chart has no extraEnv and Helm reverts the patch.
+openrag_fix_openai_import_deadlock: true
+
 openrag_deploy_dashboards: false
 opensearch_dashboards_image: "opensearchproject/opensearch-dashboards:3.8.0"
 openrag_docs_git_version: "{{ openrag_git_version }}"
