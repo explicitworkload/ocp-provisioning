@@ -94,12 +94,31 @@ if [[ $# -eq 0 && -t 0 ]]; then
     *) echo "  not one of the choices - keeping the configured instances" >&2; EXTRA_GPU="" ;;
   esac
 
-  [[ -n "$EXTRA_MODEL" ]] && set -- "$@" -e "model_preset=$EXTRA_MODEL"
-  # One machineset with one replica, replacing the list in all.yml. The
-  # playbook still prints the fit check before changing anything, so a model
-  # that cannot run on this instance is called out rather than refused.
+  # Written into group_vars/all.yml rather than passed as -e, because -e
+  # lasts exactly one run. A later ./run.sh --tags litellm or --tags summary
+  # skips this prompt and reads all.yml, so an unpersisted choice would leave
+  # those roles wiring everything to a model the cluster does not have - the
+  # same class of mismatch that had OpenRAG pointing at a stale model name.
+  #
+  # all.yml is untracked, so this is editing local configuration, not the
+  # repo. Both edits are line-level on purpose: rewriting the file through a
+  # YAML library would strip its comments, which are the only documentation
+  # of what these settings mean.
+  if [[ -n "$EXTRA_MODEL" ]]; then
+    sed -i.bak -E "s|^model_preset: .*$|model_preset: ${EXTRA_MODEL}|" group_vars/all.yml \
+      && rm -f group_vars/all.yml.bak
+    echo "  model_preset set to $EXTRA_MODEL in group_vars/all.yml"
+  fi
   if [[ -n "$EXTRA_GPU" ]]; then
-    set -- "$@" -e "{\"gpu_machinesets\":[{\"instance_type\":\"$EXTRA_GPU\",\"replicas\":1}]}"
+    awk -v want="$EXTRA_GPU" '
+      /^gpu_machinesets:/ { inblock=1; print; next }
+      inblock && /^[^ -]/ { inblock=0 }
+      inblock && /^- instance_type:/ { cur=$3; print; next }
+      inblock && /^  replicas:/ { print "  replicas: " (cur==want ? 1 : 0); next }
+      { print }
+    ' group_vars/all.yml > group_vars/all.yml.tmp \
+      && mv group_vars/all.yml.tmp group_vars/all.yml
+    echo "  gpu_machinesets set to $EXTRA_GPU x1 in group_vars/all.yml"
   fi
   echo
 fi
