@@ -21,7 +21,7 @@ summary_links:
   - {label: "NooBaa console",    ns: openshift-storage,              match: "^noobaa-mgmt"}
   - {label: "Gatus",             ns: gatus,                          match: "^gatus\\."}
   - {label: "MCP server",        ns: mcp-servers,                    match: "^openshift-mcp-server"}
-  - {label: "Model (qwen3-4b)",  ns: qwen3-4b,                       match: "^qwen3-4b"}
+  - {label: "Model ({{ model_name }})", ns: "{{ model_namespace }}", match: "^{{ model_name }}"}
   - {label: "Model catalog",     ns: rhoai-model-registries,         match: "^model-catalog\\."}
   - {label: "OpenShift console", ns: openshift-console,              match: "^console-openshift"}
 

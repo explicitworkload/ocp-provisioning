@@ -517,7 +517,14 @@
     isvc.resources[0].status.conditions is defined and
     isvc.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') |
     selectattr('status', 'equalto', 'True') | list | length > 0
-  retries: 60
+  # 60 minutes. Sized for the image pull, which dominates - with a modelcar
+  # the image is the model. qwen3-4b is 8 GB and reached Running in about
+  # eight minutes on sandbox5164; qwen3.8-27b is 55 GB, so the previous
+  # 30-minute budget would have expired on a perfectly healthy pull.
+  #
+  # A small model still exits the moment it is Ready, so the extra budget
+  # costs nothing except on the runs that need it.
+  retries: 120
   delay: 30
   ignore_errors: true
 

@@ -34,7 +34,14 @@ openrag_embedding_model_name: bge-small-en-v1.5
 openrag_docling_image: quay.io/docling-project/docling-serve:latest
 
 # --- OpenRAG ----------------------------------------------------------------
-openrag_chat_model: qwen3-4b
+# Follows whatever model_preset deploys, rather than naming one. Hardcoding
+# qwen3-4b meant selecting any other preset pointed OpenRAG's agent at a
+# model that does not exist on the cluster - LiteLLM would 400 and the chat
+# would fail while everything else looked healthy.
+#
+# Override to use something else LiteLLM serves, a MaaS model say, if the
+# cluster-hosted one is not what OpenRAG should chat with.
+openrag_chat_model: "{{ model_name }}"
 openrag_chunk_size: 1000
 openrag_chunk_overlap: 200
 # RWO volumes (backend data, langflow, postgres).
