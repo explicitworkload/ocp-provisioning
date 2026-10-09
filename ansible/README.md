@@ -363,10 +363,41 @@ is a derived image doing `chgrp -R 0 /milvus && chmod -R g=u /milvus`, which
 would run unmodified under `restricted-v2` — at the cost of a BuildConfig to
 maintain across Milvus upgrades.
 
-Attu is exposed on a plain edge Route with **no authentication**. It talks to
-Milvus with whatever credentials Milvus has — none — so anyone who reaches the
-route can read and delete collections. Fine for a sandbox; put an
-`oauth-proxy` in front before it is anything else.
+**Attu sits behind OpenShift's `oauth-proxy`** (`milvus_attu_auth`, on by
+default). Attu has no authentication of its own and talks to Milvus with the
+credentials Milvus has — none — so an open route would let anyone who found it
+read and drop collections.
+
+The proxy runs as a sidecar, the Service publishes only its HTTPS port so the
+Route cannot reach Attu directly, the certificate comes from `service-ca` and
+the Route reencrypts. The image is resolved from the cluster's own
+`oauth-proxy` imagestream so it tracks the OpenShift version. Access is gated
+on a SubjectAccessReview — as shipped, "can you `get` the `attu` Service in
+its namespace", which admins pass and a random authenticated user does not;
+widen or narrow it with `milvus_attu_oauth_sar`. Note that an unauthenticated
+request returns **403 with the sign-in page in the body**, which is
+oauth-proxy's normal behaviour rather than a misconfiguration.
+
+Attu still listens on 3000 inside the pod, so it is reachable by pod IP from
+within the cluster; a NetworkPolicy is the next step if that matters.
+
+### Where Milvus keeps its data
+
+Split, deliberately:
+
+| Data | Where | ODF? |
+|---|---|---|
+| Segments (the bulk) | NooBaa bucket via `ObjectBucketClaim` | yes |
+| etcd metadata | PVC, cluster default storage class | no — `gp3-csi`, AWS EBS |
+| Milvus scratch | `emptyDir` | n/a, ephemeral |
+
+The Milvus pod mounts no PVC at all. Only etcd has one, and its contents are
+not incidental: collection schemas and segment indexes live there, so losing
+it loses the database logically even though every segment is still in the
+bucket. Set `milvus_etcd_storage_class: ocs-storagecluster-ceph-rbd` to put it
+on ODF as well — but a storage class cannot be changed on an existing PVC, so
+switching on a live cluster means deleting `data-milvus-etcd-0` and with it
+every collection definition.
 
 The vector store is registered under `gen-ai-aa-vector-stores`, which is one
 of exactly three ConfigMap names the Gen AI BFF has compiled in. Note the
@@ -481,6 +512,10 @@ All variables are in `group_vars/all.yml`:
 | `milvus_attu_image` | `zilliz/attu:v2.6.5` | Attu image, matched to the Milvus 2.6 line |
 | `milvus_embedding_model` | `bge-small-en-v1.5` | Embedding model the vector store is registered against |
 | `milvus_embedding_dimension` | `384` | Must match the embedding model's width |
+| `milvus_attu_auth` | `true` | Put OpenShift `oauth-proxy` in front of Attu |
+| `milvus_attu_oauth_sar` | `get` on the `attu` Service | SubjectAccessReview a user must pass to reach Attu |
+| `milvus_attu_oauth_image` | (empty) | Empty resolves from the cluster's `oauth-proxy` imagestream |
+| `milvus_etcd_storage_class` | (empty) | Empty uses the cluster default (`gp3-csi`, EBS). `ocs-storagecluster-ceph-rbd` puts etcd on ODF |
 | `model_rope_override` | `{}` | Rope scaling passed through as `--hf-overrides`, to go past the native context. Off by default |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |

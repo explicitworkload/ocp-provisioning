@@ -1,9 +1,10 @@
 ---
-# Attu, the Milvus web UI, in its own namespace.
+# Attu, the Milvus web UI, in its own namespace, behind OpenShift's
+# oauth-proxy unless milvus_attu_auth is turned off.
 #
-# Nothing special is needed for it: unlike the Milvus image it runs happily
-# under restricted-v2, so there is no SCC binding here and there should not
-# be one. MILVUS_URL is host:port with no scheme - Attu adds that itself.
+# Attu itself needs no SCC accommodation - unlike the Milvus image it runs
+# happily under restricted-v2, so there is no binding here and there should
+# not be one. MILVUS_URL is host:port with no scheme; Attu adds that itself.
 
 - name: Create the Attu namespace
   kubernetes.core.k8s:
@@ -15,6 +16,85 @@
       kind: Namespace
       metadata:
         name: "{{ milvus_attu_namespace }}"
+
+# --- oauth-proxy plumbing --------------------------------------------------
+
+# Resolved from the cluster rather than pinned, so the proxy matches the
+# OpenShift release. The imagestream's tag name differs between versions, so
+# take whichever tag it publishes rather than assuming one.
+- name: Find the cluster's oauth-proxy image
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: image.openshift.io/v1
+    kind: ImageStream
+    namespace: openshift
+    name: oauth-proxy
+  register: milvus_oauth_is
+  when:
+    - milvus_attu_auth | bool
+    - milvus_attu_oauth_image | length == 0
+
+- name: Settle on the oauth-proxy image
+  ansible.builtin.set_fact:
+    milvus_attu_oauth_image_resolved: >-
+      {{ milvus_attu_oauth_image
+         if milvus_attu_oauth_image | length > 0
+         else (milvus_oauth_is.resources[0].spec.tags[0].from.name
+               | default('registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:latest')) }}
+  when: milvus_attu_auth | bool
+
+# The cookie secret has to survive a re-run: regenerating it on every run
+# would invalidate every session the proxy has issued. Read first, create
+# only when absent - the same shape the other generated credentials use.
+- name: Look for an existing proxy session secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ milvus_attu_namespace }}"
+    name: attu-oauth-session
+  register: milvus_attu_session
+  when: milvus_attu_auth | bool
+  no_log: true
+
+- name: Generate the proxy session secret on first run
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: attu-oauth-session
+        namespace: "{{ milvus_attu_namespace }}"
+      type: Opaque
+      stringData:
+        session_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=43') }}"
+  when:
+    - milvus_attu_auth | bool
+    - milvus_attu_session.resources | default([]) | length == 0
+  no_log: true
+
+# The redirect reference is what lets the proxy use the ServiceAccount as an
+# OAuth client: without it the OAuth server rejects the callback as an
+# unregistered redirect URI, and the only symptom is a failed login.
+- name: Create the Attu service account
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: attu
+        namespace: "{{ milvus_attu_namespace }}"
+        annotations:
+          serviceaccounts.openshift.io/oauth-redirectreference.attu: >-
+            {"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"attu"}}
+  when: milvus_attu_auth | bool
+
+# --- Workload --------------------------------------------------------------
 
 - name: Deploy Attu
   kubernetes.core.k8s:
@@ -39,23 +119,61 @@
             labels:
               app: attu
           spec:
-            containers:
-              - name: attu
-                image: "{{ milvus_attu_image }}"
-                ports:
-                  - containerPort: 3000
-                    name: http
-                env:
-                  - name: MILVUS_URL
-                    value: "{{ milvus_name }}-milvus.{{ milvus_namespace }}.svc.cluster.local:19530"
-                resources:
-                  requests:
-                    cpu: 100m
-                    memory: 256Mi
-                  limits:
-                    cpu: "1"
-                    memory: 1Gi
+            serviceAccountName: "{{ 'attu' if milvus_attu_auth | bool else 'default' }}"
+            containers: "{{ [attu_container] + ([oauth_container] if milvus_attu_auth | bool else []) }}"
+            volumes: "{{ oauth_volumes if milvus_attu_auth | bool else [] }}"
+  vars:
+    attu_container:
+      name: attu
+      image: "{{ milvus_attu_image }}"
+      ports:
+        - containerPort: 3000
+          name: http
+      env:
+        - name: MILVUS_URL
+          value: "{{ milvus_name }}-milvus.{{ milvus_namespace }}.svc.cluster.local:19530"
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 1Gi}
+    oauth_container:
+      name: oauth-proxy
+      image: "{{ milvus_attu_oauth_image_resolved }}"
+      ports:
+        - containerPort: 8443
+          name: https
+      args:
+        - -provider=openshift
+        - -https-address=:8443
+        # Empty, so the proxy serves no plaintext listener at all.
+        - -http-address=
+        - -email-domain=*
+        - -upstream=http://localhost:3000/
+        - -tls-cert=/etc/tls/private/tls.crt
+        - -tls-key=/etc/tls/private/tls.key
+        - -cookie-secret-file=/etc/proxy/secrets/session_secret
+        - -openshift-service-account=attu
+        - -openshift-sar={{ milvus_attu_oauth_sar | trim }}
+        - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      volumeMounts:
+        - name: attu-tls
+          mountPath: /etc/tls/private
+        - name: attu-oauth-session
+          mountPath: /etc/proxy/secrets
+      resources:
+        requests: {cpu: 10m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 256Mi}
+    oauth_volumes:
+      - name: attu-tls
+        secret:
+          secretName: attu-tls
+      - name: attu-oauth-session
+        secret:
+          secretName: attu-oauth-session
 
+# Only the proxy's port is published when auth is on, so the Route has no way
+# to reach Attu directly. The serving-cert annotation makes service-ca mint
+# the certificate the proxy serves, which is also what lets the Route
+# reencrypt rather than passthrough.
 - name: Expose Attu
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -69,18 +187,14 @@
         namespace: "{{ milvus_attu_namespace }}"
         labels:
           app: attu
+        annotations: "{{ {'service.beta.openshift.io/serving-cert-secret-name': 'attu-tls'} if milvus_attu_auth | bool else {} }}"
       spec:
         selector:
           app: attu
-        ports:
-          - name: http
-            port: 3000
-            targetPort: 3000
+        ports: "{{ [{'name': 'https', 'port': 8443, 'targetPort': 8443}]
+                   if milvus_attu_auth | bool
+                   else [{'name': 'http', 'port': 3000, 'targetPort': 3000}] }}"
 
-# No authentication in front of this. Attu talks to Milvus with whatever
-# credentials Milvus is configured for - none, here - so anyone who reaches
-# the route can read and delete collections. Fine for a sandbox, not for
-# anything else; put an oauth-proxy in front before it matters.
 - name: Create the Attu route
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -99,10 +213,10 @@
           kind: Service
           name: attu
         port:
-          targetPort: http
-        tls:
-          termination: edge
-          insecureEdgeTerminationPolicy: Redirect
+          targetPort: "{{ 'https' if milvus_attu_auth | bool else 'http' }}"
+        tls: "{{ {'termination': 'reencrypt', 'insecureEdgeTerminationPolicy': 'Redirect'}
+                 if milvus_attu_auth | bool
+                 else {'termination': 'edge', 'insecureEdgeTerminationPolicy': 'Redirect'} }}"
 
 - name: Wait for Attu to be ready
   kubernetes.core.k8s_info:
@@ -116,3 +230,12 @@
   retries: 30
   delay: 10
   ignore_errors: true
+
+- name: Report how Attu is protected
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Attu is behind oauth-proxy; access needs: ' ~ (milvus_attu_oauth_sar | trim)
+         if milvus_attu_auth | bool
+         else 'Attu is exposed with NO authentication - anyone who reaches the
+               route can read and delete Milvus collections. Set
+               milvus_attu_auth=true to put oauth-proxy in front.' }}

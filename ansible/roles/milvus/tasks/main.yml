@@ -247,8 +247,14 @@
               pvcDeletion: true
               values:
                 replicaCount: 1
-                persistence:
-                  size: "{{ milvus_etcd_storage }}"
+                # storageClass is only set when asked for: passing an empty
+                # string is not the same as omitting it, and the chart would
+                # render storageClass: "" rather than letting the cluster
+                # default apply.
+                persistence: >-
+                  {{ {'size': milvus_etcd_storage}
+                     | combine({'storageClass': milvus_etcd_storage_class}
+                               if milvus_etcd_storage_class | length > 0 else {}) }}
           storage:
             external: true
             type: S3

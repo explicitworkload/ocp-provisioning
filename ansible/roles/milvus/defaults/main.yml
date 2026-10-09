@@ -51,6 +51,26 @@ milvus_s3_ssl: false
 
 milvus_etcd_storage: 10Gi
 
+# Which storage class etcd's PVC uses. Empty = the cluster default, which on
+# these clusters is gp3-csi: AWS EBS, not ODF.
+#
+# So the data is split, deliberately. Milvus's segments - the bulk of it -
+# are in NooBaa, which is ODF. Only etcd's metadata sits on a PV, and that
+# metadata is not incidental: collection schemas and segment indexes live
+# there, so losing it loses the database logically even though every segment
+# is still in the bucket.
+#
+# ocs-storagecluster-ceph-rbd puts it on ODF too, replicated by Ceph rather
+# than pinned to one EBS volume in one AZ. The argument for leaving it on
+# EBS is that etcd is a latency-sensitive consensus store and a local block
+# device suits it; the argument against is that nothing else stateful here
+# is on EBS. Either is defensible on a sandbox with one etcd replica.
+#
+# A storage class cannot be changed on an existing PVC. Switching this on a
+# live cluster means deleting data-milvus-etcd-0, which discards every
+# collection definition - fine before you have loaded anything, not after.
+milvus_etcd_storage_class: ""
+
 # --- Attu ------------------------------------------------------------------
 # The Milvus web UI. Its own namespace, as asked for.
 milvus_deploy_attu: true
@@ -58,6 +78,31 @@ milvus_attu_namespace: milvus-attu
 # v2.6 line, matching Milvus 2.6.x. v3.0 exists but pairing the UI with the
 # server's own minor line is the safer default.
 milvus_attu_image: "zilliz/attu:v2.6.5"
+
+# Put OpenShift's oauth-proxy in front of Attu. On by default, because Attu
+# has no authentication of its own and talks to Milvus with the credentials
+# Milvus has - none - so an unprotected route lets anyone who finds it read
+# and drop collections.
+#
+# With this on, the Service publishes only the proxy's HTTPS port, so the
+# Route cannot reach Attu directly. Attu still listens on 3000 inside the
+# pod, reachable by pod IP from inside the cluster; a NetworkPolicy would be
+# the next step if that matters.
+milvus_attu_auth: true
+
+# Empty = resolve from the cluster's own oauth-proxy imagestream, so the
+# proxy always matches the OpenShift version rather than drifting against a
+# tag pinned here. Set a pullspec to override.
+milvus_attu_oauth_image: ""
+
+# Who gets in. A SubjectAccessReview the user must pass - as written, "can
+# you read the attu Service in its namespace", which admins and anyone with
+# namespace access satisfy and a random authenticated user does not.
+#
+# Deliberately not the usual selfsubjectaccessreviews/create check, which
+# every authenticated user passes and so amounts to "is anyone logged in".
+milvus_attu_oauth_sar: >-
+  {"namespace":"{{ milvus_attu_namespace }}","resource":"services","name":"attu","verb":"get"}
 
 # --- Publishing to RHOAI ---------------------------------------------------
 # Whether Milvus is published to RHOAI's AI asset endpoints, which is what
