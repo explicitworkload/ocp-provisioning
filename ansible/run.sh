@@ -60,11 +60,11 @@ fi
 if [[ $# -eq 0 && -t 0 ]]; then
   echo
   echo "Model to serve (Enter keeps the value in group_vars/all.yml):"
-  echo "    1) qwen3-4b          bf16  1 GPU    8 GB   32k context"
-  echo "    2) qwen3-8b          bf16  1 GPU   16 GB   32k context"
-  echo "    3) qwen3-14b         bf16  1 GPU   29 GB   16k context"
-  echo "    4) qwen3.8-27b       bf16  4 GPUs  55 GB   32k context   (needs g6e.12xlarge)"
-  echo "    5) qwen3.8-27b-fp8   FP8   1 GPU   28 GB   16k context   (Hugging Face, needs hf_token)"
+  echo "    1) qwen3-4b          bf16  1 GPU    8 GB    32k context"
+  echo "    2) qwen3-8b          bf16  1 GPU   16 GB    40k context"
+  echo "    3) qwen3-14b         bf16  1 GPU   29 GB    40k context"
+  echo "    4) qwen3.8-27b       bf16  4 GPUs  56 GB   256k context   (needs g6e.12xlarge)"
+  echo "    5) qwen3.8-27b-fp8   FP8   1 GPU   31 GB    64k context   (Hugging Face, needs hf_token)"
   read -r -p "  choice [Enter to keep current]: " MODEL_CHOICE
   case "${MODEL_CHOICE:-}" in
     1) EXTRA_MODEL="qwen3-4b" ;;
@@ -141,8 +141,30 @@ if [[ $# -eq 0 && -t 0 ]]; then
   echo
 fi
 
-# Install required collections if not present
-ansible-galaxy collection install -r requirements.yml 2>/dev/null || true
+# Install required collections if not present.
+#
+# Deliberately not fatal. On a disconnected host this cannot reach Galaxy,
+# but the collections may already be in ansible/collections from a pre-seed,
+# in which case the run is fine and aborting would be wrong.
+#
+# What was wrong was saying nothing. "2>/dev/null || true" hid both the
+# error and the cause, and because ansible.cfg narrows collections_paths to
+# the gitignored ./collections, a fresh clone that fails here has no system
+# fallback to fall back to - it resurfaces much later as "couldn't resolve
+# module kubernetes.core.k8s", which reads like a bug in the playbook.
+if ! ansible-galaxy collection install -r requirements.yml; then
+  echo
+  echo "WARNING: ansible-galaxy could not install the collections in" >&2
+  echo "         requirements.yml. If this host is offline that is expected," >&2
+  echo "         and the run will work provided they are already present in" >&2
+  echo "         ansible/collections. If they are not, the run will fail later" >&2
+  echo "         with 'couldn't resolve module kubernetes.core.k8s'. Pre-seed" >&2
+  echo "         them on a connected host with:" >&2
+  echo "             ansible-galaxy collection download -r requirements.yml" >&2
+  echo "         then, here:" >&2
+  echo "             ansible-galaxy collection install <tarball> -p collections" >&2
+  echo
+fi
 
 # Run playbook with blocking IO wrapper.
 # -e/--return makes script exit with the playbook's status; without it a
