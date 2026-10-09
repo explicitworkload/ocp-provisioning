@@ -378,15 +378,8 @@
     - role: network_observability
       tags: [network-observability]
 
-    - role: quay
-      tags: [quay]
-
     - role: openshift_ai
       tags: [openshift-ai]
-
-    - role: ztwim
-      tags: [ztwim, spire, zero-trust]
-      when: deploy_ztwim | bool
 
     - role: console_plugins
       tags: [console]
@@ -415,25 +408,43 @@
     # embeddings, and registers its embedding model there.
     - role: openrag
       tags: [openrag, rag]
-      when: deploy_openrag | bool
+      when: deploy_openrag | default(false) | bool
 
     # After openrag, because the vector store is registered against the
     # embedding model litellm serves and openrag is what deploys it.
     - role: milvus
       tags: [milvus, vector-store]
-      when: deploy_milvus | bool
+      when: deploy_milvus | default(false) | bool
 
-    # Late, and after openrag. It needs LiteLLM's master key for its AI page,
-    # and its Access page lists the Routes of everything else - so the later
-    # it runs, the fewer of them are missing when someone opens it on a
-    # freshly built cluster. It is a view over the rest of the platform, so
-    # it goes after the platform.
+    # Late, and after openrag: it needs LiteLLM's master key for its AI page.
+    #
+    # Its Access page does NOT depend on this position. That page renders the
+    # summary.json the summary role publishes into a Secret, not a live Route
+    # listing, so what it shows is decided by where summary runs - last - and
+    # not by where this does.
     #
     # Still ahead of external_dns, which only publishes DNS for Routes that
-    # already exist, and ahead of summary, which publishes the Access page's
-    # own data.
+    # already exist.
     - role: dashboard
       tags: [dashboard]
+
+    # Both deliberately behind the dashboard. Nothing else in the playbook
+    # consumes either - no role reads the in-cluster Quay (the other quay
+    # references are all public quay.io image pulls) and ztwim has no
+    # dependents at all - so they are self-contained tails rather than
+    # platform the rest is built on. Running them here gets the cluster's
+    # main surfaces, through to the dashboard, up sooner.
+    #
+    # Constraints that still bind: after odf, because Quay's registry
+    # storage comes from NooBaa; after operators, which subscribes the Quay
+    # operator this creates a QuayRegistry for; and ahead of external_dns
+    # and summary, so their Routes are published and listed.
+    - role: quay
+      tags: [quay]
+
+    - role: ztwim
+      tags: [ztwim, spire, zero-trust]
+      when: deploy_ztwim | default(false) | bool
 
     # Last: publishes live DNS records to Cloudflare. Opt-in only, and runs
     # after every Route it might need to publish already exists.
