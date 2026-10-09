@@ -25,6 +25,11 @@ BOOKINFO_URL = os.environ.get(
 GATUS_URL = os.environ.get("GATUS_URL", "")
 GATUS_HOST = os.environ.get("GATUS_HOST", "")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+# "oauth-proxy" when an OpenShift oauth-proxy sidecar fronts this app, in
+# which case DASHBOARD_PASSWORD is empty and login_required below is a
+# pass-through - the proxy has already authenticated the request. Anything
+# else means the app's own password login is in use.
+DASHBOARD_AUTH_MODE = os.environ.get("DASHBOARD_AUTH_MODE", "password")
 LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm.litellm.svc.cluster.local:4000")
 LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
 BOOKINFO_NS = "bookinfo"
@@ -259,6 +264,18 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear()
+    # Behind oauth-proxy the Flask session is not what keeps you signed in -
+    # the proxy's own cookie is. Clearing only the session and bouncing to
+    # /login made the button look broken: you landed straight back on the
+    # dashboard, still authenticated. /oauth/sign_out is the proxy's own
+    # endpoint and drops that cookie.
+    #
+    # It ends the session with this dashboard, not with the cluster. The
+    # OpenShift SSO cookie survives, so signing back in will usually not
+    # re-prompt. A full logout would have to POST to the OAuth server's
+    # /logout, which answers 405 to the GET a redirect produces.
+    if DASHBOARD_AUTH_MODE == "oauth-proxy":
+        return redirect("/oauth/sign_out")
     return redirect(url_for("login"))
 
 

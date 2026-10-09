@@ -10,6 +10,38 @@ dashboard_image_tag: latest
 # Set either explicitly to pin a value:
 #   ansible-playbook site.yml -e dashboard_password=...
 dashboard_password: ""
+
+# How the dashboard is protected.
+#
+#   oauth-proxy  OpenShift's oauth-proxy as a sidecar. You log in with your
+#                cluster identity, and the app's own password login is turned
+#                off - DASHBOARD_PASSWORD is set empty, which makes Flask's
+#                login_required decorator pass straight through, so there is
+#                one login rather than two stacked on each other.
+#   password     The app's own login page, with the generated password the
+#                deployment summary prints. No proxy.
+#
+# oauth-proxy by default. This dashboard can scale MachineSets, delete
+# Machines, shift mesh traffic and shut the cluster down; a single shared
+# password in a summary is thin cover for that.
+#
+# Note the Service then publishes only the proxy's HTTPS port, so neither
+# Route can reach the app directly. The app still listens on 8080 inside the
+# pod and is reachable by pod IP from within the cluster - a NetworkPolicy is
+# the next step if that matters.
+dashboard_auth_mode: oauth-proxy
+
+# Empty = resolve from the cluster's own oauth-proxy imagestream, so the proxy
+# tracks the OpenShift version instead of a tag pinned here.
+dashboard_oauth_image: ""
+
+# Who gets in. A SubjectAccessReview the user must pass. This one asks "can
+# you patch MachineSets", which is deliberately close to what the dashboard
+# itself can do - the proxy should not hand someone authority they do not
+# already hold. Loosen it to the usual services/get check if you want a wider
+# audience for the read-only pages.
+dashboard_oauth_sar: >-
+  {"namespace":"openshift-machine-api","resource":"machinesets","group":"machine.openshift.io","verb":"patch"}
 dashboard_secret_key: ""
 
 # Extra Route on a domain managed by ExternalDNS. Set empty to skip.

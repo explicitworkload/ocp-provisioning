@@ -19,6 +19,9 @@
   loop: "{{ summary_credentials }}"
   loop_control:
     label: "{{ item.ns }}/{{ item.name }}"
+  # A gated-off entry is skipped here and then falls out of the render loop
+  # below on its "no resources" guard, so nothing else needs to know.
+  when: item.gate | default(true) | bool
   register: summary_secret_reads
   no_log: true
 

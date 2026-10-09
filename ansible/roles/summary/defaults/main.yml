@@ -31,7 +31,10 @@ summary_links:
 # omitted where the login takes a password only, and may instead be given as
 # user_literal when the username is fixed in config rather than stored.
 summary_credentials:
-  - {label: "Ops Dashboard",   ns: dashboard,               name: ops-dashboard-auth,        pass: password}
+  # Skipped in oauth-proxy mode: the app has no password then, and printing
+  # an empty one reads as a broken credential rather than an absent one.
+  - {label: "Ops Dashboard",   ns: dashboard,               name: ops-dashboard-auth,        pass: password,
+     gate: "{{ (dashboard_auth_mode | default('oauth-proxy')) != 'oauth-proxy' }}"}
   - {label: "LiteLLM UI",      ns: litellm,                 name: litellm-proxy-credentials, pass: UI_PASSWORD, user_literal: admin}
   - {label: "LiteLLM key",     ns: litellm,                 name: litellm-proxy-credentials, pass: LITELLM_MASTER_KEY}
   - {label: "LiteLLM DB",      ns: litellm,                 name: litellm-db-credentials,    pass: POSTGRES_PASSWORD, user: POSTGRES_USER}

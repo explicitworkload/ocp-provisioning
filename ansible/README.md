@@ -190,9 +190,48 @@ Deploys the Istio Bookinfo sample application with sidecar injection, all four m
 
 ### Operations Dashboard
 
-A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`. Password-protected via cluster Secret. Features:
+A self-service operations dashboard built with Flask and deployed via OpenShift BuildConfig from this repo's `dashboard/` directory. Exposed at `dashboard.<apps-domain>`.
+
+**Authentication — `dashboard_auth_mode`, default `oauth-proxy`.** You sign in
+with your OpenShift identity; the app's own password login is turned off. The
+integration is one line of behaviour: the app's `login_required` decorator
+passes straight through when `DASHBOARD_PASSWORD` is empty, so the role blanks
+it and the proxy becomes the only login rather than a second one stacked in
+front. No shared password then exists, and the summary stops printing one.
+
+Set `dashboard_auth_mode=password` for the old behaviour — the app's own login
+page with a generated password. That is also the rollback if SSO misbehaves:
+
+```bash
+./run.sh --tags dashboard -e dashboard_auth_mode=password
+```
+
+In `oauth-proxy` mode the Service publishes **only** the proxy's HTTPS port, so
+neither Route can reach the app directly; the certificate comes from
+`service-ca` and the Routes reencrypt. Access is gated on a SubjectAccessReview
+for **`patch` on MachineSets** (`dashboard_oauth_sar`) rather than a softer
+"can you read this Service" check — this dashboard scales MachineSets, deletes
+Machines, shifts mesh traffic and can shut the cluster down, and the proxy
+should not hand anyone authority they do not already hold.
+
+Three things that are easy to get wrong and are handled in the role: **both**
+Routes need their own `oauth-redirectreference` annotation (miss the
+custom-domain one and its login silently never completes); the annotation goes
+on the **`default`** ServiceAccount, because the role already binds all four of
+the dashboard's ClusterRoles to it; and the session secret is generated once
+and read back, since regenerating it would invalidate every live session.
+
+Caveats worth knowing. An unauthenticated request returns **403 with the
+sign-in page in the body** — that is oauth-proxy's normal behaviour, not a
+fault. The app still listens on 8080 inside the pod, so it is reachable by pod
+IP from within the cluster; a NetworkPolicy is the next step if that matters.
+And `/logout` hits the proxy's `/oauth/sign_out`, which ends the session with
+*this dashboard* but not with the cluster — the OpenShift SSO cookie survives,
+so signing back in usually will not re-prompt. A full logout would need a POST
+to the OAuth server's `/logout`, which answers 405 to a redirect's GET.
+
+Features:
 - **Sidebar navigation** — Dashboard, Platform Admin, AI, Health, Access, Help, and Logout
-- **Login page** — session-based authentication with password stored in Kubernetes Secret
 - **Traffic generator** — burst mode (fixed request count) or sustained mode (continuous for up to 60 minutes) with configurable concurrency (1–50 threads)
 - **Traffic shifting** — route traffic across Reviews v1/v2/v3 by percentage for canary deployment demos
 - **Fault injection** — inject delays or HTTP errors into the ratings service to test resilience

@@ -375,17 +375,109 @@
 # password rotating out from under a logged-in user on every run.
 - name: Resolve the dashboard password and secret key
   ansible.builtin.set_fact:
+    # Empty in oauth-proxy mode, and that is the whole integration: the app
+    # reads DASHBOARD_PASSWORD and its login_required decorator passes
+    # straight through when the value is blank. So the proxy becomes the only
+    # login instead of stacking a second one behind it, and no shared
+    # password exists to leak. Switching back to password mode generates a
+    # fresh one, because the stored value is then empty.
     dashboard_password_effective: >-
-      {{ dashboard_password if dashboard_password | length > 0
+      {{ '' if dashboard_auth_mode == 'oauth-proxy'
+         else (dashboard_password if dashboard_password | length > 0
          else ((dashboard_auth_secret.resources | first).data.password | b64decode
                if dashboard_auth_secret.resources | default([]) | length > 0
-               else lookup('password', '/dev/null length=16 chars=ascii_letters,digits')) }}
+               else lookup('password', '/dev/null length=16 chars=ascii_letters,digits'))) }}
     dashboard_secret_key_effective: >-
       {{ dashboard_secret_key if dashboard_secret_key | length > 0
          else ((dashboard_auth_secret.resources | first).data['secret-key'] | b64decode
                if dashboard_auth_secret.resources | default([]) | length > 0
                else lookup('password', '/dev/null length=32 chars=ascii_letters,digits')) }}
   no_log: true
+
+# --- oauth-proxy prerequisites -------------------------------------------
+# Before the Deployment, so the sidecar's Secret and the SA's OAuth client
+# registration already exist when the pod first schedules.
+
+- name: Find the cluster's oauth-proxy image
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: image.openshift.io/v1
+    kind: ImageStream
+    namespace: openshift
+    name: oauth-proxy
+  register: dashboard_oauth_is
+  when:
+    - dashboard_auth_mode == 'oauth-proxy'
+    - dashboard_oauth_image | length == 0
+
+- name: Settle on the oauth-proxy image
+  ansible.builtin.set_fact:
+    dashboard_oauth_image_resolved: >-
+      {{ dashboard_oauth_image
+         if dashboard_oauth_image | length > 0
+         else (dashboard_oauth_is.resources[0].spec.tags[0].from.name
+               | default('registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:latest')) }}
+  when: dashboard_auth_mode == 'oauth-proxy'
+
+- name: Look for an existing proxy session secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ dashboard_namespace }}"
+    name: ops-dashboard-oauth-session
+  register: dashboard_oauth_session
+  when: dashboard_auth_mode == 'oauth-proxy'
+  no_log: true
+
+# Generated once and read back on later runs: regenerating it would
+# invalidate every session the proxy has issued.
+- name: Generate the proxy session secret on first run
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ops-dashboard-oauth-session
+        namespace: "{{ dashboard_namespace }}"
+      type: Opaque
+      stringData:
+        session_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=43') }}"
+  when:
+    - dashboard_auth_mode == 'oauth-proxy'
+    - dashboard_oauth_session.resources | default([]) | length == 0
+  no_log: true
+
+# The redirect reference is what lets the proxy use the ServiceAccount as an
+# OAuth client. Without it the OAuth server rejects the callback as an
+# unregistered redirect URI, and the only symptom is a login that never
+# completes. One annotation per Route, so the custom-domain Route needs its
+# own.
+#
+# This annotates the DEFAULT account rather than a dedicated one, because the
+# role already binds all four of the dashboard's ClusterRoles to default.
+# Introducing a separate account would mean moving those bindings and risking
+# the dashboard's cluster access for a cosmetic gain.
+- name: Register the dashboard routes as OAuth redirect targets
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: default
+        namespace: "{{ dashboard_namespace }}"
+        annotations: >-
+          {{ {'serviceaccounts.openshift.io/oauth-redirectreference.dashboard':
+               '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ops-dashboard"}}'}
+             | combine({'serviceaccounts.openshift.io/oauth-redirectreference.dashboard-ext':
+                 '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"ops-dashboard-ext"}}'}
+               if ((deploy_external_dns | default(false) | bool) and (dashboard_custom_host | default('') | length > 0)) else {}) }}
+  when: dashboard_auth_mode == 'oauth-proxy'
 
 - name: Create dashboard password Secret
   kubernetes.core.k8s:
@@ -447,62 +539,107 @@
               # silently never reaches the pod.
               checksum/auth: "{{ (dashboard_password_effective ~ dashboard_secret_key_effective) | hash('sha256') }}"
           spec:
-            containers:
-              - name: dashboard
-                image: "image-registry.openshift-image-registry.svc:5000/{{ dashboard_namespace }}/ops-dashboard:{{ dashboard_image_tag }}"
-                ports:
-                  - containerPort: 8080
-                env:
-                  - name: BOOKINFO_URL
-                    value: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
-                  - name: GATUS_URL
-                    value: ""
-                  - name: GATUS_HOST
-                    value: "gatus.{{ ocp_apps_domain }}"
-                  - name: DASHBOARD_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: ops-dashboard-auth
-                        key: password
-                  - name: SECRET_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: ops-dashboard-auth
-                        key: secret-key
-                  - name: LITELLM_URL
-                    value: "http://litellm.litellm.svc.cluster.local:4000"
-                  - name: LITELLM_API_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: ops-dashboard-ai
-                        key: litellm-api-key
-                        optional: true
-                  - name: AWS_REGION
-                    value: "{{ dashboard_aws_region }}"
-                  - name: AWS_ACCESS_KEY_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: ops-dashboard-aws
-                        key: aws_access_key_id
-                        optional: true
-                  - name: AWS_SECRET_ACCESS_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: ops-dashboard-aws
-                        key: aws_secret_access_key
-                        optional: true
-                readinessProbe:
-                  httpGet:
-                    path: /healthz
-                    port: 8080
-                  initialDelaySeconds: 5
-                  periodSeconds: 10
-                livenessProbe:
-                  httpGet:
-                    path: /healthz
-                    port: 8080
-                  initialDelaySeconds: 10
-                  periodSeconds: 30
+            # The proxy is appended rather than written inline, so the
+            # password mode keeps byte-for-byte the pod it had before.
+            volumes: "{{ dashboard_oauth_volumes if dashboard_auth_mode == 'oauth-proxy' else [] }}"
+            containers: >-
+              {{ [dashboard_container]
+                 + ([dashboard_oauth_container] if dashboard_auth_mode == 'oauth-proxy' else []) }}
+  vars:
+    dashboard_container:
+      name: dashboard
+      image: "image-registry.openshift-image-registry.svc:5000/{{ dashboard_namespace }}/ops-dashboard:{{ dashboard_image_tag }}"
+      ports:
+        - containerPort: 8080
+      env:
+        # Tells the app it is fronted by oauth-proxy, so /logout bounces to
+        # the proxy's /oauth/sign_out instead of its own inert login page.
+        - name: DASHBOARD_AUTH_MODE
+          value: "{{ dashboard_auth_mode }}"
+        - name: BOOKINFO_URL
+          value: "http://productpage.bookinfo.svc.cluster.local:9080/productpage"
+        - name: GATUS_URL
+          value: ""
+        - name: GATUS_HOST
+          value: "gatus.{{ ocp_apps_domain }}"
+        - name: DASHBOARD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ops-dashboard-auth
+              key: password
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ops-dashboard-auth
+              key: secret-key
+        - name: LITELLM_URL
+          value: "http://litellm.litellm.svc.cluster.local:4000"
+        - name: LITELLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ops-dashboard-ai
+              key: litellm-api-key
+              optional: true
+        - name: AWS_REGION
+          value: "{{ dashboard_aws_region }}"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: ops-dashboard-aws
+              key: aws_access_key_id
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ops-dashboard-aws
+              key: aws_secret_access_key
+              optional: true
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 30
+    dashboard_oauth_volumes:
+      - name: ops-dashboard-tls
+        secret:
+          secretName: ops-dashboard-tls
+      - name: ops-dashboard-oauth-session
+        secret:
+          secretName: ops-dashboard-oauth-session
+    dashboard_oauth_container:
+      name: oauth-proxy
+      image: "{{ dashboard_oauth_image_resolved | default('') }}"
+      ports:
+        - containerPort: 8443
+          name: https
+      args:
+        - -provider=openshift
+        - -https-address=:8443
+        # Empty, so the proxy serves no plaintext listener at all.
+        - -http-address=
+        - -email-domain=*
+        - -upstream=http://localhost:8080/
+        - -tls-cert=/etc/tls/private/tls.crt
+        - -tls-key=/etc/tls/private/tls.key
+        - -cookie-secret-file=/etc/proxy/secrets/session_secret
+        - -openshift-service-account=default
+        - -openshift-sar={{ dashboard_oauth_sar | trim }}
+        - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      volumeMounts:
+        - name: ops-dashboard-tls
+          mountPath: /etc/tls/private
+        - name: ops-dashboard-oauth-session
+          mountPath: /etc/proxy/secrets
+      resources:
+        requests: {cpu: 10m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 256Mi}
 
 - name: Create dashboard Service
   kubernetes.core.k8s:
@@ -515,13 +652,20 @@
       metadata:
         name: ops-dashboard
         namespace: "{{ dashboard_namespace }}"
+        # service-ca mints the certificate the proxy serves, which is also
+        # what lets the Routes reencrypt rather than passthrough.
+        annotations: >-
+          {{ {'service.beta.openshift.io/serving-cert-secret-name': 'ops-dashboard-tls'}
+             if dashboard_auth_mode == 'oauth-proxy' else {} }}
       spec:
         selector:
           app: ops-dashboard
-        ports:
-          - port: 8080
-            targetPort: 8080
-            name: http
+        # Only the proxy's port is published in oauth-proxy mode, so neither
+        # Route has any way to reach the app directly.
+        ports: >-
+          {{ [{'port': 8443, 'targetPort': 8443, 'name': 'https'}]
+             if dashboard_auth_mode == 'oauth-proxy'
+             else [{'port': 8080, 'targetPort': 8080, 'name': 'http'}] }}
 
 - name: Create dashboard Route
   kubernetes.core.k8s:
@@ -540,9 +684,11 @@
           kind: Service
           name: ops-dashboard
         port:
-          targetPort: http
-        tls:
-          termination: edge
+          targetPort: "{{ 'https' if dashboard_auth_mode == 'oauth-proxy' else 'http' }}"
+        tls: >-
+          {{ {'termination': 'reencrypt', 'insecureEdgeTerminationPolicy': 'Redirect'}
+             if dashboard_auth_mode == 'oauth-proxy'
+             else {'termination': 'edge'} }}
 
 - name: Create dashboard Route on the custom domain
   kubernetes.core.k8s:
@@ -561,10 +707,11 @@
           kind: Service
           name: ops-dashboard
         port:
-          targetPort: http
-        tls:
-          termination: edge
-          insecureEdgeTerminationPolicy: Redirect
+          targetPort: "{{ 'https' if dashboard_auth_mode == 'oauth-proxy' else 'http' }}"
+        tls: >-
+          {{ {'termination': 'reencrypt', 'insecureEdgeTerminationPolicy': 'Redirect'}
+             if dashboard_auth_mode == 'oauth-proxy'
+             else {'termination': 'edge', 'insecureEdgeTerminationPolicy': 'Redirect'} }}
   when:
     - deploy_external_dns | bool
     - dashboard_custom_host | length > 0
