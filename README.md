@@ -45,8 +45,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
 - Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, p4d.24xlarge, p4de.24xlarge) with dedicated MachineConfigPool by auto-discovering cluster config
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
-- Deploys Qwen3-4B on vLLM via a modelcar OCI image with external endpoint, bearer token auth, and GenAI Studio playground
-- Deploys LiteLLM proxy with PostgreSQL backend, proxying Qwen3-4B and Azure GPT-4 via reusable credentials
+- Serves one model of your choosing on vLLM — `model_preset` picks from Qwen3 4B/8B/14B and a 27B in bf16 (4 GPUs) or FP8 (1 GPU) — with external endpoint, bearer token auth, and GenAI Studio playground. The run asks which model and which GPU instance, and reports whether the pair fits before creating anything
+- Deploys LiteLLM proxy with PostgreSQL backend, proxying the cluster's own model, Azure GPT-4 and any external OpenAI-compatible endpoints via reusable credentials
 - Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring (probes in-cluster service DNS, with the Gatus UI embedded in the dashboard)
 - Deploys OpenShift Dev Spaces with a `CheCluster` and registers this repo as a one-click workspace sample; workspaces install the Claude Code CLI and the Kubernetes extension on start
 - Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), node resiliency testing (stop/start the backing EC2 instance, or destroy a Machine and let its MachineSet rebuild it), AI Assistant (chat with MCP server tool use), embedded health monitor, floating task log with toast notifications, and sustained traffic generator

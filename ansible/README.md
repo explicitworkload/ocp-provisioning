@@ -59,7 +59,13 @@ Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, 
 
 ### ODF (OpenShift Data Foundation)
 
-Deploys ODF with Ceph storage on all non-GPU worker nodes using dynamically provisioned gp3 EBS volumes (1Ti per OSD). Automatically excludes GPU nodes via label filtering. Device set count scales with the number of eligible workers. Configures NooBaa with PV-pool backing store for object storage. Provides `ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, and NooBaa storage classes.
+Deploys ODF with Ceph storage on all non-GPU worker nodes using dynamically provisioned gp3 EBS volumes (512Gi per OSD by default, `odf_storage_size`). Automatically excludes GPU nodes via label filtering. Device set count scales with the number of eligible workers. NooBaa is left alone to bootstrap and choose its own default backing store —
+the role creates the StorageCluster and then only watches. Earlier revisions
+patched `manualDefaultBackingStore`, created a sized pv-pool BackingStore and
+repointed the default BucketClass while NooBaa was still coming up; that is
+gone, along with a workaround for what turned out not to be a bug. ODF 4.22
+is CNPG-native, so `noobaa-db-pg-0` never starts at all and its absence is
+expected. Provides `ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, and NooBaa storage classes.
 
 ### OpenShift AI 3.5
 
@@ -72,7 +78,44 @@ Configures DSCInitialization, DataScienceCluster (v2 API), and OdhDashboardConfi
 
 ### Model Serving
 
-Deploys Qwen3-4B (`quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b`) using the pre-installed RHOAI vLLM CUDA ServingRuntime on a GPU node. The InferenceService is configured with:
+Deploys one model, chosen with `model_preset`, using the pre-installed RHOAI
+vLLM CUDA ServingRuntime on a GPU node. One name sets the image, the GPU
+count, the context length and the resource limits together:
+
+| Preset | Source | GPUs | Weights | Context | Instance needed |
+|--------|--------|------|---------|---------|-----------------|
+| `qwen3-4b` | modelcar, bf16 | 1 | 8 GB | 32k | any GPU node |
+| `qwen3-8b` | modelcar, bf16 | 1 | 16 GB | 32k | 48 GB card |
+| `qwen3-14b` | modelcar, bf16 | 1 | 29 GB | 16k | 48 GB card |
+| `qwen3.8-27b` | modelcar, bf16 | 4 | 55 GB | 32k | `g6e.12xlarge` |
+| `qwen3.8-27b-fp8` | Hugging Face | 1 | 28 GB | 16k | 48 GB card + `hf_token` |
+
+Context length is sized per model rather than shared. KV cache per token is
+`2 x layers x kv_heads x head_dim x bytes`, which varies enormously:
+`qwen3.8-27b` has `head_dim` 256 over 64 layers, so it costs 256 KB per
+token — 8 GB for a single 32k sequence — where `qwen3-4b` costs a fraction
+of that. The FP8 preset is capped at 16k for the same reason: its weights
+leave roughly 14 GB of KV on a 48 GB card, and at 32k one sequence would
+take 8 GB of it. vLLM would start and then serialise, which is harder to
+diagnose than a smaller limit.
+
+The modelcar catalog has no FP8 Qwen, so that preset pulls from Hugging Face
+through KServe's `hf://` storage initializer and needs `hf_token`. Selecting
+it without one fails before anything is created rather than after a 28 GB
+download returns 401.
+
+`--tensor-parallel-size` follows the preset's GPU count, so the four-GPU
+preset actually shards rather than trying to load 55 GB onto one card.
+
+The 27B presets are named `qwen38-27b-selfhosted` and
+`qwen38-27b-fp8-selfhosted`, with the readable form in
+`openshift.io/display-name`. A dot is not valid in a DNS-1123 object name,
+and plain `qwen38-27b` would collide with the model the MaaS endpoint serves
+through LiteLLM — the AI asset endpoint drops a remote model when an
+InferenceService claims the same name or display name, so the remote one
+would have vanished from the picker.
+
+The InferenceService is configured with:
 - External endpoint via `networking.kserve.io/visibility: exposed`
 - Bearer token auth via `security.opendatahub.io/enable-auth`
 - GenAI Studio integration via `opendatahub.io/genai-asset` label
@@ -91,7 +134,7 @@ Prepares the pgvector resources for the GenAI Studio playground provisioner:
 Deploys a LiteLLM proxy with PostgreSQL backend for unified OpenAI-compatible API access:
 - **PostgreSQL** — persistent storage for API keys, teams, budgets, and usage logs
 - **LiteLLM proxy** — routes requests to multiple LLM backends via a single endpoint
-- **Qwen3-4B** — proxied from the cluster's InferenceService
+- **The cluster's own model** — whichever `model_preset` deployed, proxied from its InferenceService
 - **Azure GPT-4** — via Azure AD client credentials with reusable credential stored in LiteLLM DB
 - **Admin user** — `proxy_admin` role created via API for UI access
 - **AI Asset Endpoint** — registers Azure model in GenAI Studio via `gen-ai-aa-custom-model-endpoints` ConfigMap with virtual key
@@ -290,6 +333,28 @@ from the upstream project:
    ./run.sh
    ```
 
+   With no arguments and a terminal attached, this asks which model to serve
+   and which GPU instance to create, defaulting to whatever `all.yml` already
+   says — press Enter twice to keep it. Your answers are written back into
+   `group_vars/all.yml`, not just applied to that one run, so a later
+   `./run.sh --tags litellm` reads the same values rather than wiring
+   everything to a model the cluster does not have.
+
+   The prompt is skipped whenever any argument is given, and when stdin is
+   not a terminal, so partial runs and unattended runs are unaffected.
+
+   Before anything is created, the run prints the target cluster and whether
+   the model fits the instance:
+
+   ```
+   model   : Qwen3.8 27B (bf16, modelcar, 4 GPUs)  (55 GB weights, 4 GPUs, 32768 context)
+   gpu     : g6e.12xlarge x1 - fits: 192 GB across 4 x L40S, model needs about 66 GB
+   ```
+
+   The model and the instance are chosen independently on purpose, so this
+   reports rather than refuses: a combination that cannot work is called out
+   and allowed to proceed, failing at model load rather than being blocked.
+
 ## Configuration
 
 All variables are in `group_vars/all.yml`:
@@ -300,10 +365,11 @@ All variables are in `group_vars/all.yml`:
 | `gpu_machinesets` | `[{instance_type: g4dn.4xlarge, replicas: 1}]` | List of GPU MachineSets to create (instance type + replica count) |
 | `gpu_availability_zone` | `us-east-2a` | AZ for GPU MachineSets |
 | `gpu_volume_size` | `120` | Root volume size (GB) for GPU workers |
-| `model_namespace` | `qwen3-4b` | Namespace for the model deployment |
-| `model_name` | `qwen3-4b` | InferenceService name |
-| `model_image` | `quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b` | Modelcar OCI image |
-| `model_max_model_len` | `32768` | vLLM max model context length (must fit GPU VRAM) |
+| `model_preset` | `qwen3-4b` | Which model to serve. Sets image, GPU count, context length and limits together — see Model Serving above |
+| `hf_token` | (empty) | Hugging Face token, needed only by `hf://` presets. Supply at run time or in the untracked `all.yml` |
+| `model_namespace` | from preset | Namespace for the model deployment. Derived; override only to place it elsewhere |
+| `model_name` | from preset | InferenceService name. Derived |
+| `model_max_model_len` | from preset | vLLM max context length. Derived, and sized per model |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console, odf-client-console]` | Console plugins to enable |
