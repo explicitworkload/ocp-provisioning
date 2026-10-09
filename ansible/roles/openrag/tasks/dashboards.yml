@@ -1,0 +1,152 @@
+---
+# OpenSearch Dashboards, so what OpenRAG has chunked into OpenSearch can be
+# looked at rather than queried for.
+#
+# OpenRAG's own Knowledge page lists documents; this works a level down, at
+# the chunk each document was split into - Discover for browsing and
+# filtering them, Dev Tools for raw queries, and the index management views.
+#
+# No oauth-proxy here, unlike Attu. This OpenSearch runs the security plugin
+# - nothing answers without credentials - so Dashboards serves its own login
+# page and authenticates against it. The credential is the same admin one the
+# deployment summary prints.
+
+# Must track the server's major line: Dashboards refuses to start against an
+# OpenSearch it does not match, and the error names a version rather than the
+# mismatch. Both are 3.8.0 as shipped.
+- name: Deploy OpenSearch Dashboards
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: opensearch-dashboards
+        namespace: "{{ openrag_opensearch_namespace }}"
+        labels:
+          app: opensearch-dashboards
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: opensearch-dashboards
+        template:
+          metadata:
+            labels:
+              app: opensearch-dashboards
+          spec:
+            # Asked for explicitly, and that is the whole point. The image
+            # declares USER 1000 and owns its files as 1000, but with no
+            # securityContext OpenShift picks restricted-v2 and assigns an
+            # arbitrary UID from the namespace range - which then cannot
+            # execute the entrypoint, and the pod crash-loops on
+            # "Permission denied" with nothing to say it was an SCC problem.
+            #
+            # Naming 1000 forces nonroot-v2 instead, which the openrag role
+            # has already granted to this namespace's default account for
+            # the OpenSearch StatefulSet, and which the StatefulSet itself
+            # relies on in exactly the same way.
+            securityContext:
+              runAsUser: 1000
+              runAsGroup: 1000
+              fsGroup: 1000
+            containers:
+              - name: dashboards
+                image: "{{ opensearch_dashboards_image }}"
+                ports:
+                  - containerPort: 5601
+                    name: http
+                env:
+                  # A JSON array, not a bare host. A plain string is accepted
+                  # and then silently ignored, leaving Dashboards looking for
+                  # localhost:9200 and reporting the cluster as red.
+                  - name: OPENSEARCH_HOSTS
+                    value: '["https://opensearch-node.{{ openrag_opensearch_namespace }}.svc.cluster.local:9200"]'
+                  - name: SERVER_HOST
+                    value: "0.0.0.0"
+                  # The cluster's certificates are self-signed by the chart.
+                  - name: OPENSEARCH_SSL_VERIFICATIONMODE
+                    value: "none"
+                  - name: OPENSEARCH_USERNAME
+                    value: admin
+                  - name: OPENSEARCH_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: opensearch-admin
+                        key: password
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+
+- name: Expose OpenSearch Dashboards
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: opensearch-dashboards
+        namespace: "{{ openrag_opensearch_namespace }}"
+        labels:
+          app: opensearch-dashboards
+      spec:
+        selector:
+          app: opensearch-dashboards
+        ports:
+          - name: http
+            port: 5601
+            targetPort: 5601
+
+- name: Create the OpenSearch Dashboards route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: opensearch-dashboards
+        namespace: "{{ openrag_opensearch_namespace }}"
+        labels:
+          app: opensearch-dashboards
+      spec:
+        to:
+          kind: Service
+          name: opensearch-dashboards
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+
+- name: Wait for OpenSearch Dashboards to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ openrag_opensearch_namespace }}"
+    name: opensearch-dashboards
+  register: openrag_dashboards_deploy
+  until: (openrag_dashboards_deploy.resources[0].status.readyReplicas | default(0)) > 0
+  # Dashboards spends its first minutes optimising browser bundles before it
+  # answers anything, so this is longer than the workload warrants.
+  retries: 40
+  delay: 15
+  ignore_errors: true
+
+- name: Report where to see the chunks
+  ansible.builtin.debug:
+    msg: >-
+      OpenSearch Dashboards is at
+      https://opensearch-dashboards-{{ openrag_opensearch_namespace }}.{{ ocp_apps_domain }}
+      - log in as admin with the OpenSearch password from the deployment
+      summary, then Discover on the "documents" index to see OpenRAG's chunks.

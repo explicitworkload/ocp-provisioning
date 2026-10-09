@@ -21,6 +21,7 @@ summary_links:
   - {label: "NooBaa console",    ns: openshift-storage,              match: "^noobaa-mgmt"}
   - {label: "Gatus",             ns: gatus,                          match: "^gatus\\."}
   - {label: "MCP server",        ns: mcp-servers,                    match: "^openshift-mcp-server"}
+  - {label: "OpenSearch Dashboards", ns: "{{ openrag_opensearch_namespace | default('opensearch') }}", match: "^opensearch-dashboards"}
   - {label: "Attu (Milvus UI)",  ns: "{{ milvus_attu_namespace | default('milvus-attu') }}", match: "^attu"}
   - {label: "Model ({{ model_name }})", ns: "{{ model_namespace }}", match: "^{{ model_name }}"}
   - {label: "Model catalog",     ns: rhoai-model-registries,         match: "^model-catalog\\."}

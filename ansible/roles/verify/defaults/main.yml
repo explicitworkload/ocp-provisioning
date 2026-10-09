@@ -153,6 +153,7 @@ verify_workloads:
   - {label: "OpenRAG docs",       gate: "{{ (deploy_openrag | default(false)) and (openrag_deploy_docs | default(true)) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: openrag-docs}
   - {label: "Docling",            gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: docling-serve}
   - {label: "Text embeddings",    gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: text-embeddings}
+  - {label: "OpenSearch Dashboards", gate: "{{ (deploy_openrag | default(false)) and (openrag_deploy_dashboards | default(false)) }}", ns: "{{ openrag_opensearch_namespace | default('opensearch') }}", name: opensearch-dashboards}
   - {label: "MLflow PostgreSQL",  gate: "{{ deploy_mlflow_server | default(true) }}", ns: "{{ rhoai_feature_namespace | default('redhat-ods-applications') }}", name: mlflow-db}
   - {label: "Milvus operator",    gate: "{{ deploy_milvus | default(false) }}", ns: "{{ milvus_operator_namespace | default('milvus-operator') }}", name: milvus-operator}
   # The operator names the Deployment <cr>-milvus-<component>, so a standalone
@@ -178,6 +179,9 @@ verify_endpoints:
   # its sign-in page with that status rather than redirecting, so a 403 here
   # means the proxy is up and refusing anonymous access, which is the point.
   # 200 covers the unauthenticated case, where Attu answers directly.
+  - label: "OpenSearch Dashboards"
+    gate: "{{ (deploy_openrag | default(false)) and (openrag_deploy_dashboards | default(false)) }}"
+    url: "https://opensearch-dashboards-{{ openrag_opensearch_namespace | default('opensearch') }}.{{ ocp_apps_domain }}/"
   - label: "Attu"
     gate: "{{ (deploy_milvus | default(false)) and (milvus_deploy_attu | default(true)) }}"
     url: "https://attu-{{ milvus_attu_namespace | default('milvus-attu') }}.{{ ocp_apps_domain }}/"

@@ -412,6 +412,38 @@ the built-in pgvector.
 `milvus_embedding_model` and `milvus_embedding_dimension` must agree with each
 other and with whatever writes the vectors — `bge-small-en-v1.5` is 384-wide.
 
+### Seeing what OpenRAG chunked
+
+OpenRAG's Knowledge page lists documents. To see the *chunks* they were split
+into, deploy OpenSearch Dashboards:
+
+```bash
+./run.sh --tags opensearch-dashboards -e deploy_openrag=true -e openrag_deploy_dashboards=true
+```
+
+Off by default — it is a second UI and 2 GB of limits for something most runs
+never open. Log in as `admin` with the OpenSearch password the summary
+prints, then **Discover** on the `documents` index.
+
+Each OpenSearch document *is* a chunk: `text`, `page`, `chunk_size`,
+`chunk_overlap`, `filename`, the ACL fields OpenRAG enforces per user, and
+the embedding vector. Note the mapping carries one vector field *per
+embedding model* — `chunk_embedding` at 1536 dims alongside
+`chunk_embedding_rhoai_bge_small_en_v1_5` at 384 — so which field is
+populated tells you which model actually did the embedding.
+
+Unlike Attu this needs no proxy in front: OpenSearch runs the security
+plugin, so Dashboards serves its own login. Two things that will otherwise
+cost an afternoon, both handled in the role: `OPENSEARCH_HOSTS` must be a
+JSON **array** or it is silently ignored and Dashboards looks for
+`localhost:9200`; and the pod must ask for `runAsUser: 1000` explicitly, or
+OpenShift assigns an arbitrary UID that cannot execute the image's
+entrypoint and it crash-loops on `Permission denied` with nothing naming SCC
+as the cause.
+
+The image tag must track the OpenSearch server's major line — both are
+3.8.0 as shipped.
+
 ## Prerequisites
 
 - An existing OpenShift 4.22+ cluster on AWS

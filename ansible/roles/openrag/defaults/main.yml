@@ -105,6 +105,20 @@ openrag_onboarding_final_step: 4
 # served beside the app. Upstream ships the site but no container recipe, so
 # the Dockerfile is inlined into the BuildConfig.
 openrag_deploy_docs: true
+
+# OpenSearch Dashboards, for looking at what OpenRAG has chunked into
+# OpenSearch. The Knowledge page in OpenRAG lists documents; this goes a
+# level down to the chunks they were split into, with Discover and Dev Tools.
+#
+# Off by default - it is a second UI and 2 GB of limits for something most
+# runs never open. Unlike Attu it needs no proxy in front: OpenSearch here
+# runs the security plugin, so Dashboards serves its own login and takes the
+# admin credential the summary prints.
+#
+# The tag must track the OpenSearch server's major line. Dashboards refuses
+# to start against a version it does not match.
+openrag_deploy_dashboards: false
+opensearch_dashboards_image: "opensearchproject/opensearch-dashboards:3.8.0"
 openrag_docs_git_version: "{{ openrag_git_version }}"
 # baseUrl is baked into every generated link at build time, so it has to match
 # where the site is actually served. Its own Route serves at the root.

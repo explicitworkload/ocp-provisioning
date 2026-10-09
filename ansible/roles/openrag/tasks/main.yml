@@ -1047,3 +1047,11 @@
       tags: [openrag-docs]
   when: openrag_deploy_docs | bool
   tags: [openrag-docs]
+
+- name: Deploy OpenSearch Dashboards
+  ansible.builtin.include_tasks:
+    file: dashboards.yml
+    apply:
+      tags: [opensearch-dashboards]
+  when: openrag_deploy_dashboards | bool
+  tags: [opensearch-dashboards]
