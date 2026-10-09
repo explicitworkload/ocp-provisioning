@@ -69,6 +69,34 @@
   loop_control:
     label: "{{ item.1 }} ({{ item.0.name }})"
 
+# A name declared twice - the same model under two endpoints, or listed twice
+# under one - is a typo, not a request for two deployments. LiteLLM registers
+# both without complaint, and they are indistinguishable in its UI and in
+# everything downstream that reads /v1/models. Seen on sandbox307, where
+# all.yml named qwen38-27b twice in a single endpoint's models list.
+#
+# First declaration wins. The duplicate is reported rather than dropped
+# silently, because the fix belongs in all.yml.
+#
+# groupby gives (name, [entries]); '1.1' is the second entry of that list and
+# is only defined when the name was declared more than once.
+- name: Note any name declared more than once
+  ansible.builtin.set_fact:
+    litellm_dupe_names: >-
+      {{ litellm_desired_models | groupby('model_name')
+         | selectattr('1.1', 'defined') | map(attribute='0') | list }}
+
+- name: Drop duplicate declarations, keeping the first
+  ansible.builtin.set_fact:
+    litellm_desired_models: "{{ litellm_desired_models | unique(attribute='model_name') | list }}"
+
+- name: Report the duplicate declarations
+  ansible.builtin.debug:
+    msg: >-
+      Declared more than once, registered once: {{ litellm_dupe_names | join(', ') }}
+      - remove the repeat from litellm_extra_models in group_vars/all.yml.
+  when: litellm_dupe_names | length > 0
+
 # Each desired model carries a hash of its own definition, so a run can tell
 # at a glance whether what is registered still matches what is declared.
 # model_name is inside the hashed JSON, so a matching hash also means a
@@ -93,9 +121,13 @@
   register: litellm_live_models
   no_log: true
 
+# What to drop is decided by id, not by name. By name, a second row sharing a
+# kept name looked kept too, so a duplicate that reached the database could
+# never be collected by a later run - it survived every reconcile and had to
+# be deleted by hand. Keeping exactly one id per name collects the rest.
 - name: Work out what to leave alone, what to drop and what to add
   ansible.builtin.set_fact:
-    litellm_drop: "{{ litellm_ours | rejectattr('model_name', 'in', keep_names) | list }}"
+    litellm_drop: "{{ litellm_ours | rejectattr('model_info.id', 'in', keep_ids) | list }}"
     litellm_add: "{{ litellm_wanted | rejectattr('model_name', 'in', keep_names) | list }}"
   vars:
     # Only the ones this role registered. A model added by hand in the UI has
@@ -105,10 +137,18 @@
       {{ litellm_live_models.json.data | default([])
          | selectattr('model_info.managed_by', 'defined')
          | selectattr('model_info.managed_by', 'equalto', 'ansible') | list }}
-    keep_names: >-
+    # Rows whose stored hash still matches a declaration.
+    litellm_current: >-
       {{ litellm_ours | selectattr('model_info.spec_hash', 'defined')
          | selectattr('model_info.spec_hash', 'in', litellm_wanted | map(attribute='hash') | list)
-         | map(attribute='model_name') | list }}
+         | list }}
+    # One id per name, and it has to come from the current rows rather than
+    # from all of them: where a stale row and a fresh one share a name, the
+    # fresh one is the keeper and the stale one still has to go.
+    keep_ids: >-
+      {{ litellm_current | unique(attribute='model_name')
+         | map(attribute='model_info.id') | list }}
+    keep_names: "{{ litellm_current | map(attribute='model_name') | list }}"
 
 # Changed definitions are dropped and re-added rather than updated in place.
 # /model/update answers 200 and silently discards model_info - a sentinel

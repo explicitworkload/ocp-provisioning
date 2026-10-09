@@ -31,6 +31,21 @@ litellm_ui_password: >-
 
 litellm_admin_email: admin@example.com
 
+# LiteLLM benches a deployment for 60 seconds after a couple of failures, so
+# the router can send traffic to another deployment of the same model. Nothing
+# here has another deployment: every model group in this proxy is a single
+# upstream, so a cooldown has nowhere to fail over to and can only turn a
+# momentary failure into an outage of something that is healthy.
+#
+# Seen on sandbox307. The OpenRAG backend called bge-small-en-v1.5 on
+# /chat/completions - it builds its model picker from /v1/models, which is a
+# flat list carrying no mode, so the embedding model is offered as a language
+# model. text-embeddings has no chat route and answered 404. Two of those
+# benched bge-small, and OpenRAG's real embedding traffic then got 429 "All
+# deployments for selected model are in cooldown" until it expired - surfacing
+# in Langflow as the failure of a model that was serving fine throughout.
+litellm_disable_cooldowns: true
+
 litellm_azure_endpoint: "https://llm-gpt4-lightspeed.cognitiveservices.azure.com"
 litellm_azure_api_version: "2024-06-01"
 litellm_azure_model_name: "Mistral-Small-4-119B-2603"
@@ -67,20 +82,27 @@ rhoai_extra_ai_endpoints: []
 # warns about it in a banner across the top of its own UI, and the warning is
 # fair: it is a shared static secret.
 #
-# Off by default all the same, because on LiteLLM v1.106.0 turning it on from
-# here leaves no way in at all. A password cannot be set at /user/new ("users
-# set their own password through an invitation link"), and one set through
+# Off all the same, because on LiteLLM v1.106.0 turning it on from here
+# leaves no way in at all. A password cannot be set at /user/new ("users set
+# their own password through an invitation link"), and one set through
 # /user/update comes back with password_reset_required: true, which /login
 # rejects - with no API on this build to clear the flag and no /invitation
 # endpoints published. So the playbook cannot hand you a working password,
-# and this setting would remove the only one that works.
+# and this setting removes the only one that works.
+#
+# It was briefly defaulted to true, and did exactly that: on sandbox307 the
+# password in litellm-proxy-credentials - the one the deployment summary
+# prints - was rejected by /login with "Invalid credentials used to access
+# UI", because this flag tells LiteLLM to ignore UI_USERNAME/UI_PASSWORD and
+# nothing had replaced them. Setting it back to false and restarting took the
+# same password from 401 to a 303 into the UI.
 #
 # LiteLLM's own banner says to create a regular admin account with its own
 # password first. That is a person at the UI, not a run. Once you have done
 # it, set this true and re-run:
 #
 #     ./run.sh --tags litellm -e litellm_disable_env_credential_login=true
-litellm_disable_env_credential_login: true
+litellm_disable_env_credential_login: false
 
 # --- Publishing to RHOAI --------------------------------------------------
 # Whether LiteLLM is published to RHOAI as an AI asset endpoint, which is
