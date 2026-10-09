@@ -167,7 +167,7 @@ Use this to provision a complete cluster from nothing, including the bastion hos
 
 - An AWS account with credentials configured (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
 - An existing Route53 hosted zone for your base domain (e.g. `sandbox199.opentlc.com`)
-- Sufficient EC2 quotas: 3x `m5.xlarge`, 6x `m5.4xlarge`, 1x `g4dn.4xlarge`, plus 1x `t3.xlarge` for the bastion
+- Sufficient EC2 quotas: 3x `m5.xlarge`, 6x `m5.4xlarge`, 1x `g4dn.4xlarge`, plus 1x `c6i.2xlarge` for the bastion
 - Elastic IP quota of at least 10 in your target region
 
 #### Red Hat Pull Secret
@@ -205,7 +205,7 @@ Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 
 **What it creates:**
 
-- EC2 instance running RHEL 10 (`t3.xlarge` by default) with a 100 GB gp3 root volume
+- EC2 instance running RHEL 10 (`c6i.2xlarge` by default — 8 vCPU / 16 GB, compute-optimised rather than burstable so long mirror and install runs are not throttled) with a 100 GB gp3 root volume
 - Security group allowing inbound SSH and all outbound traffic
 - SSH key pair imported from your local machine
 

@@ -4,9 +4,14 @@ variable "aws_region" {
   description = "AWS region for deployment"
 }
 
+# 8 vCPU / 16 GB. Compute-optimised rather than burstable: a t3 earns CPU
+# credits and spends them under load, so a long oc-mirror or openshift-install
+# run - exactly what this host exists for - can exhaust the balance and then
+# crawl at the baseline until it recovers. Same memory as the t3.xlarge it
+# replaces, twice the vCPU, no throttling.
 variable "instance_type" {
   type        = string
-  default     = "t3.xlarge" # 4 vCPU / 16GB RAM recommended for mirroring / heavy CLI tasks
+  default     = "c6i.2xlarge"
   description = "EC2 instance size for RHEL 10 Bastion"
 }
 
