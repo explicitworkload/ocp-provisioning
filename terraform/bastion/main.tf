@@ -28,9 +28,21 @@ data "aws_ami" "rhel10" {
   most_recent = true
   owners      = ["309956199498"] # Red Hat Official Owner ID
 
+  # Hourly2, not Access2. Red Hat publishes both, and most_recent kept
+  # picking Access2 because it is published minutes later. Access2 is the
+  # Cloud Access / BYOS image: it ships with no RHUI repositories, so dnf
+  # has nothing to install from until the host is registered with
+  # subscription-manager. The bootstrap below then failed on its first
+  # "dnf install" and, because of set -euo pipefail, took everything after
+  # it with it - no tmux, no wget, no Homebrew, no oc-mirror, no
+  # openshift-install, and no obvious reason why.
+  #
+  # Hourly2 is pay-as-you-go with RHUI preconfigured, so dnf works on first
+  # boot with no credentials anywhere. Registering instead would mean an org
+  # ID and activation key, which do not belong in this repo.
   filter {
     name   = "name"
-    values = ["RHEL-10.*_HVM-*-x86_64-*"]
+    values = ["RHEL-10.*_HVM-*-x86_64-*-Hourly2-*"]
   }
 
   filter {
@@ -93,9 +105,17 @@ resource "aws_instance" "bastion" {
 	set -euo pipefail
 	exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
+	# set -e aborts on the first failure and says nothing about where, which
+	# is how a failed dnf silently cost us tmux, Homebrew and every CLI tool
+	# below it. Name the line instead.
+	trap 'echo "BOOTSTRAP FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
+
 	echo "Updating system packages..."
 	dnf update -y
-	dnf install -y git wget curl tar jq gcc libffi-devel python3-devel tmux
+	# --allowerasing because RHEL ships curl-minimal, and plain
+	# "dnf install curl" is a conflict rather than an upgrade: it fails the
+	# whole transaction, taking wget, tmux and the rest down with it.
+	dnf install -y --allowerasing git wget curl tar jq gcc libffi-devel python3-devel tmux
 
 	# Determine target user
 	TARGET_USER="ec2-user"
