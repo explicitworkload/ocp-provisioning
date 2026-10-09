@@ -37,9 +37,12 @@
 - name: Collect the links
   ansible.builtin.set_fact:
     summary_link_lines: >-
-      {{ summary_link_lines + ['%-18s'|format(item.label) ~ 'https://' ~ hosts[0]] }}
+      {{ summary_link_lines + ['%-18s'|format(item.label) ~ 'https://' ~ matched_hosts[0]] }}
   vars:
-    hosts: >-
+    # Not "hosts": that is a reserved name in Ansible - it is the play key
+    # naming the inventory pattern - and shadowing it logged a warning on
+    # every run of this task.
+    matched_hosts: >-
       {{ summary_routes.resources
          | selectattr('metadata.namespace', 'equalto', item.ns)
          | map(attribute='spec.host')
@@ -48,7 +51,7 @@
   loop: "{{ summary_links }}"
   loop_control:
     label: "{{ item.label }}"
-  when: hosts | length > 0
+  when: matched_hosts | length > 0
 
 - name: Collect the credentials
   ansible.builtin.set_fact:
@@ -77,9 +80,9 @@
   ansible.builtin.set_fact:
     summary_links_data: >-
       {{ summary_links_data | default([])
-         + [{'label': item.label, 'url': 'https://' ~ hosts[0]}] }}
+         + [{'label': item.label, 'url': 'https://' ~ matched_hosts[0]}] }}
   vars:
-    hosts: >-
+    matched_hosts: >-
       {{ summary_routes.resources
          | selectattr('metadata.namespace', 'equalto', item.ns)
          | map(attribute='spec.host')
@@ -88,7 +91,7 @@
   loop: "{{ summary_links }}"
   loop_control:
     label: "{{ item.label }}"
-  when: hosts | length > 0
+  when: matched_hosts | length > 0
 
 - name: Collect the credentials for the dashboard
   ansible.builtin.set_fact:
