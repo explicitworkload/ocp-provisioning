@@ -5,30 +5,7 @@ openrag_opensearch_namespace: opensearch
 # OpenRAG ships its chart in-repo rather than a Helm repository, so the role
 # checks the source out to build from.
 openrag_git_repo: https://github.com/langflow-ai/openrag.git
-# Pinned to a release, not main, because the chart and the image have to come
-# from the same version and the image does not float.
-#
-# The chart carries the starter flows, and each flow embeds a snapshot of its
-# components' source. The image carries the components that actually execute -
-# LANGFLOW_ALLOW_CUSTOM_COMPONENTS is false, so the server always runs its own
-# copy and ignores the flow's. Track main and the two drift apart: on
-# sandbox3270 the chart's flow was 8 days ahead of langflowai/openrag-langflow
-# :latest, which Langflow reports on every run as
-#
-#   Custom components are disabled on this server ... This run uses the
-#   server's component code instead of the code saved in the flow
-#
-# and the newer code in the flow - a CJK normalisation fix, there - never
-# runs. Worse, the obvious remedy is a trap: clicking Update in the flow
-# editor rewrites the node's type from
-# ext:openrag:<Class>@extra to the bare <Class>, which stops Langflow
-# resolving it to a bundled component at all, and the flow then fails to
-# build with "custom components are not allowed".
-#
-# v0.8.0's custom_components/openrag/opensearch_multimodal.py is byte-identical
-# to the one inside the :latest image, so chart and image agree at this pin.
-# When bumping, check the image first and move both together.
-openrag_git_version: v0.8.0
+openrag_git_version: main
 openrag_checkout_dir: /tmp/openrag-chart
 
 # --- OpenSearch -------------------------------------------------------------
@@ -140,12 +117,6 @@ openrag_deploy_docs: true
 #
 # The tag must track the OpenSearch server's major line. Dashboards refuses
 # to start against a version it does not match.
-# Works around a CPython import deadlock in the openai SDK's lazy imports,
-# which Langflow hits because it builds components in worker threads. See the
-# task in tasks/main.yml for the full diagnosis. Costs an extra pod rollout
-# per run, because the chart has no extraEnv and Helm reverts the patch.
-openrag_fix_openai_import_deadlock: true
-
 openrag_deploy_dashboards: false
 opensearch_dashboards_image: "opensearchproject/opensearch-dashboards:3.8.0"
 openrag_docs_git_version: "{{ openrag_git_version }}"
