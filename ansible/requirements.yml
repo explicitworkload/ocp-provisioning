@@ -2,3 +2,11 @@
 collections:
   - name: kubernetes.core
     version: ">=3.0.0"
+  # For the ansible.posix.profile_tasks callback enabled in ansible.cfg.
+  # Declared rather than relied on: it ships inside the "ansible" package,
+  # but ansible.cfg narrows collections_paths to ./collections, so on a host
+  # where that directory exists the bundled copy can be shadowed - and a
+  # callback that cannot be loaded fails silently, with no timings and no
+  # error to explain their absence.
+  - name: ansible.posix
+    version: ">=1.5.0"
