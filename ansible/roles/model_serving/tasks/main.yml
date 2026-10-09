@@ -497,7 +497,9 @@
               {{ ['--max-model-len=' ~ model_max_model_len,
                   '--tensor-parallel-size=' ~ model_gpu_count,
                   '--enable-auto-tool-choice',
-                  '--tool-call-parser=hermes']
+                  '--tool-call-parser=' ~ model_tool_call_parser]
+                 + (['--reasoning-parser=' ~ model_reasoning_parser]
+                    if model_reasoning_parser | length > 0 else [])
                  + (['--max-num-seqs=' ~ model_max_num_seqs]
                     if model_max_num_seqs | int > 0 else [])
                  + (['--hf-overrides=' ~ (model_rope_override | to_json)]

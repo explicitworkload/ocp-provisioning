@@ -47,6 +47,8 @@ model_presets:
     uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3-4b"
     gpu_count: 1
     max_model_len: 32768
+    tool_call_parser: hermes
+    reasoning_parser: qwen3
     kv_kb_per_token: 144
     state_mb_per_seq: 0
     max_num_seqs: 0
@@ -64,6 +66,8 @@ model_presets:
     # 40960 is this model's whole native length. 5.6 GiB of KV, against the
     # 24 GiB a 48 GB card has left once the weights are in.
     max_model_len: 40960
+    tool_call_parser: hermes
+    reasoning_parser: qwen3
     kv_kb_per_token: 144
     state_mb_per_seq: 0
     max_num_seqs: 0
@@ -81,6 +85,8 @@ model_presets:
     # Also the full native 40960, which was being left on the table: 6.3 GiB
     # of KV against roughly 11 GiB free after 27 GiB of weights.
     max_model_len: 40960
+    tool_call_parser: hermes
+    reasoning_parser: qwen3
     kv_kb_per_token: 160
     state_mb_per_seq: 0
     max_num_seqs: 0
@@ -113,6 +119,8 @@ model_presets:
     # weights take 52 and a full 256k sequence only 16, because the hybrid
     # costs 64 KB per token rather than the 256 KB this table used to claim.
     max_model_len: 262144
+    tool_call_parser: qwen3_xml
+    reasoning_parser: qwen3
     kv_kb_per_token: 64
     state_mb_per_seq: 148
     # 18 GiB of DeltaNet state. vLLM's default of 256 would ask for 37 GiB,
@@ -145,6 +153,8 @@ model_presets:
     uri: "hf://Qwen/Qwen3.8-27B-FP8"
     gpu_count: 1
     max_model_len: 65536
+    tool_call_parser: qwen3_xml
+    reasoning_parser: qwen3
     kv_kb_per_token: 64
     state_mb_per_seq: 148
     # 2.3 GiB of DeltaNet state. The default 256 would want 37 GiB on a card
@@ -165,6 +175,13 @@ model_namespace: "{{ model_selected.name }}"
 model_storage_uri: "{{ model_selected.uri }}"
 model_gpu_count: "{{ model_selected.gpu_count }}"
 model_max_model_len: "{{ model_selected.max_model_len }}"
+# How vLLM reads the model's tool calls and its thinking. Both are per-model:
+# a parser that does not match the format the model emits fails silently, and
+# the failure looks like a hang rather than an error - vLLM returns
+# finish_reason "stop" with the unparsed markup sitting in content, so the
+# caller waits for a tool call that was made but never recognised.
+model_tool_call_parser: "{{ model_selected.tool_call_parser | default('hermes') }}"
+model_reasoning_parser: "{{ model_selected.reasoning_parser | default('') }}"
 # 0 = do not pass --max-num-seqs and let vLLM pick. Only the hybrid presets
 # set it, because only they pay per-sequence state.
 model_max_num_seqs: "{{ model_selected.max_num_seqs | default(0) }}"
