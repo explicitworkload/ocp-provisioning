@@ -412,6 +412,39 @@ the built-in pgvector.
 `milvus_embedding_model` and `milvus_embedding_dimension` must agree with each
 other and with whatever writes the vectors — `bge-small-en-v1.5` is 384-wide.
 
+### Why the OpenRAG chart is pinned
+
+`openrag_git_version` is a release tag (`v0.8.0`), not `main`, and that matters
+more than it looks.
+
+The chart carries OpenRAG's starter flows, and **each flow embeds a snapshot of
+its components' Python source**. The image carries the components that actually
+execute. `LANGFLOW_ALLOW_CUSTOM_COMPONENTS=false`, so the server always runs its
+own copy and ignores the flow's — which is the right security posture, but it
+means the two must agree.
+
+Track `main` and they drift, because `langflowai/openrag-langflow:latest` is
+rebuilt far less often than the repo moves. Observed on sandbox3270: the chart's
+flow was 8 days ahead of the image, so every run logged
+
+> Custom components are disabled on this server … This run uses the server's
+> component code instead of the code saved in the flow
+
+and the newer code in the flow — a CJK normalisation fix for PDF text — never
+ran at all.
+
+**Do not fix this by clicking Update in the flow editor.** It rewrites the
+node's type from `ext:openrag:<Class>@extra` to a bare `<Class>`, Langflow then
+cannot resolve it to a bundled component, and the flow stops building entirely
+with `custom components are not allowed`. A cosmetic warning becomes a dead
+flow. Recovery is restoring the flow's previous `data` JSON.
+
+At `v0.8.0` the chart's four starter flows embed code byte-identical to the
+image's `custom_components/openrag/opensearch_multimodal.py`, so there is no
+warning and no skew. When bumping, check the published image first and move the
+tag and the image together — `opensearch_image_tag` is already on the same
+release.
+
 ### Seeing what OpenRAG chunked
 
 OpenRAG's Knowledge page lists documents. To see the *chunks* they were split
