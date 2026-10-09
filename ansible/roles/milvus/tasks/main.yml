@@ -1,0 +1,295 @@
+---
+# Milvus via the upstream milvus-operator, backed by NooBaa for object
+# storage, with Attu as the UI and the result published to RHOAI's Vector
+# stores tab.
+#
+# Most of what follows is OpenShift accommodation. None of these images were
+# built for the restricted SCC and each fails differently, so the bindings
+# below are deliberate and individually justified rather than one blanket
+# grant.
+
+- name: Check that the helm CLI is available
+  ansible.builtin.command:
+    cmd: helm version --short
+  register: milvus_helm
+  changed_when: false
+  failed_when: false
+
+- name: Fail with install instructions when helm is missing
+  ansible.builtin.fail:
+    msg: >-
+      The milvus role needs the helm CLI on this host and it is not on PATH.
+      Milvus is in no operator catalog, so the operator comes from the
+      zilliztech Helm chart. Install it with "brew install helm", or
+      "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash".
+  when: milvus_helm.rc | default(1) != 0
+
+- name: Create the Milvus namespaces
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  loop:
+    - "{{ milvus_operator_namespace }}"
+    - "{{ milvus_namespace }}"
+
+# Before the chart, not after. A RoleBinding may name a ServiceAccount that
+# does not exist yet, and doing it in this order means the operator's
+# ReplicaSet never gets refused - refused once, it backs off exponentially and
+# the chart's --wait then expires on a Deployment that would have worked.
+#
+# nonroot-v2, not anyuid: the operator image asks for UID 65532, which
+# restricted-v2 rejects only because it is outside the namespace's assigned
+# range. nonroot-v2 permits any non-root UID and still forbids root.
+- name: Let the operator run as its own non-root UID
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: milvus-operator-nonroot-v2
+        namespace: "{{ milvus_operator_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:nonroot-v2
+      subjects:
+        - kind: ServiceAccount
+          name: milvus-operator
+          namespace: "{{ milvus_operator_namespace }}"
+
+# etcd runs as UID 1001 with fsGroup 1001, both outside the namespace range.
+# nonroot-v2's fsGroup strategy is RunAsAny, which is what it needs, and it
+# runs under the namespace default ServiceAccount.
+- name: Let etcd run as its own non-root UID
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: milvus-nonroot-v2
+        namespace: "{{ milvus_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:nonroot-v2
+      subjects:
+        - kind: ServiceAccount
+          name: default
+          namespace: "{{ milvus_namespace }}"
+
+# Milvus itself is the one that genuinely needs root. The image declares no
+# USER, /milvus is root-owned and not world-readable, and an arbitrary UID
+# dies on "cd: /milvus/configs: Permission denied" before the binary starts.
+#
+# So: its own ServiceAccount with anyuid, rather than anyuid on default. etcd
+# and anything else in the namespace stay on nonroot-v2, and the grant covers
+# exactly the one workload that cannot do without it.
+#
+# The alternative is a derived image doing the usual chgrp -R 0 /milvus &&
+# chmod -R g=u /milvus, which would run unmodified under restricted-v2. That
+# is the correct fix and it costs a BuildConfig to maintain across Milvus
+# upgrades; this is the cheaper one.
+- name: Create the Milvus service account
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: milvus
+        namespace: "{{ milvus_namespace }}"
+
+- name: Let Milvus run as root, which its image requires
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: milvus-anyuid
+        namespace: "{{ milvus_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:anyuid
+      subjects:
+        - kind: ServiceAccount
+          name: milvus
+          namespace: "{{ milvus_namespace }}"
+
+- name: Install the milvus-operator chart
+  kubernetes.core.helm:
+    kubeconfig: "{{ ansible_env.KUBECONFIG | default(omit) }}"
+    context: "{{ ocp_context or omit }}"
+    name: milvus-operator
+    chart_ref: "{{ milvus_operator_chart }}"
+    release_namespace: "{{ milvus_operator_namespace }}"
+    wait: true
+    wait_timeout: 10m
+
+# The chart's own --wait covers the Deployment, but the CRD is what the next
+# task needs and it is registered separately.
+- name: Wait for the Milvus CRD to register
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: milvuses.milvus.io
+  register: milvus_crd
+  until: milvus_crd.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Claim a NooBaa bucket for Milvus
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: "{{ milvus_bucket_claim }}"
+        namespace: "{{ milvus_namespace }}"
+      spec:
+        generateBucketName: milvus
+        storageClassName: "{{ milvus_bucket_storage_class }}"
+
+- name: Wait for the bucket to be provisioned
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: objectbucket.io/v1alpha1
+    kind: ObjectBucketClaim
+    namespace: "{{ milvus_namespace }}"
+    name: "{{ milvus_bucket_claim }}"
+  register: milvus_obc
+  until: (milvus_obc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 10
+
+- name: Read the bucket name the claim generated
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ milvus_namespace }}"
+    name: "{{ milvus_bucket_claim }}"
+  register: milvus_bucket_cm
+
+- name: Read the bucket credentials the claim generated
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ milvus_namespace }}"
+    name: "{{ milvus_bucket_claim }}"
+  register: milvus_bucket_secret
+  no_log: true
+
+# The OBC writes AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY; Milvus reads
+# accesskey/secretkey. Same values under the names each side expects.
+- name: Give Milvus the bucket credentials under the names it reads
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ milvus_s3_secret }}"
+        namespace: "{{ milvus_namespace }}"
+      type: Opaque
+      stringData:
+        accesskey: "{{ milvus_bucket_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
+        secretkey: "{{ milvus_bucket_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
+  no_log: true
+
+# No securityContext here on purpose. Setting one makes the operator stamp
+# runAsUser onto the Deployment, and because the operator merges rather than
+# replaces, a value set once cannot be taken back off without deleting the
+# Deployment by hand. serviceAccountName carries the anyuid grant instead.
+- name: Create the Milvus instance
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: milvus.io/v1beta1
+      kind: Milvus
+      metadata:
+        name: "{{ milvus_name }}"
+        namespace: "{{ milvus_namespace }}"
+      spec:
+        mode: "{{ milvus_mode }}"
+        components:
+          serviceAccountName: milvus
+        dependencies:
+          etcd:
+            inCluster:
+              deletionPolicy: Delete
+              pvcDeletion: true
+              values:
+                replicaCount: 1
+                persistence:
+                  size: "{{ milvus_etcd_storage }}"
+          storage:
+            external: true
+            type: S3
+            endpoint: "{{ milvus_s3_endpoint }}"
+            secretRef: "{{ milvus_s3_secret }}"
+            ssl:
+              enabled: "{{ milvus_s3_ssl | bool }}"
+        config:
+          minio:
+            bucketName: "{{ milvus_bucket_cm.resources[0].data.BUCKET_NAME }}"
+            useSSL: "{{ milvus_s3_ssl | bool }}"
+
+- name: Wait for Milvus to become healthy
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: milvus.io/v1beta1
+    kind: Milvus
+    namespace: "{{ milvus_namespace }}"
+    name: "{{ milvus_name }}"
+  register: milvus_cr
+  until: (milvus_cr.resources[0].status.status | default('')) == 'Healthy'
+  # 10 minutes. etcd comes up in under a minute; Milvus itself spends most of
+  # the wait pulling a 374 MB image and reconciling against etcd and S3.
+  retries: 60
+  delay: 10
+  ignore_errors: true
+
+- name: Report that Milvus did not reach Healthy
+  ansible.builtin.debug:
+    msg: >-
+      Milvus is still {{ milvus_cr.resources[0].status.status | default('unknown') }}
+      after 10 minutes. The run continues; check
+      "oc get milvus -n {{ milvus_namespace }}" and the standalone pod's logs.
+      A stuck etcd connection or an unreachable S3 endpoint are the usual
+      causes, and both leave the pod Running rather than crashing.
+  when: (milvus_cr.resources[0].status.status | default('')) != 'Healthy'
+
+- name: Deploy Attu
+  ansible.builtin.include_tasks: attu.yml
+  when: milvus_deploy_attu | bool
+
+- name: Publish Milvus to RHOAI
+  ansible.builtin.include_tasks: ai_asset.yml
+  when: milvus_publish_ai_assets | bool

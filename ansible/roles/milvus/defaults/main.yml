@@ -1,0 +1,89 @@
+---
+# Milvus, a vector database, via the upstream milvus-operator.
+#
+# Not an OLM subscription like the other thirteen operators: Milvus is in no
+# catalog on this cluster - not certified, not community, not Red Hat - so it
+# comes from the zilliztech Helm chart and carries no Red Hat support path.
+# That is the trade for having it at all.
+#
+# Off by default. It is a third vector store on a cluster that already has
+# OpenSearch (from openrag) and the pgvector the Gen AI playground ships with,
+# so turning it on should be a decision rather than a default.
+deploy_milvus: false
+
+milvus_namespace: milvus
+milvus_operator_namespace: milvus-operator
+
+# Pinned rather than "latest": the chart URL is a release asset, and an
+# unpinned operator would silently change the Milvus version underneath a
+# cluster that was working.
+milvus_operator_version: "1.3.11"
+milvus_operator_chart: >-
+  https://github.com/zilliztech/milvus-operator/releases/download/milvus-operator-{{ milvus_operator_version }}/milvus-operator-{{ milvus_operator_version }}.tgz
+
+milvus_name: milvus
+# standalone, not cluster. Cluster mode is rootcoord/proxy/querynode/datanode/
+# indexnode as separate deployments; on a sandbox that is a dozen pods to
+# demonstrate an architecture rather than a database. Milvus 2.6 also embeds
+# its own WAL (woodpecker), so neither mode needs Pulsar or Kafka any more.
+milvus_mode: standalone
+
+# --- Object storage --------------------------------------------------------
+# Milvus keeps its segments in object storage. The chart will deploy its own
+# MinIO, but this cluster already has one: NooBaa, via ODF. Using it avoids a
+# second MinIO and a second SCC argument, and matches how Quay is backed.
+#
+# An ObjectBucketClaim yields the bucket, the endpoint and a credentials
+# Secret; the keys it writes are AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY and
+# Milvus wants accesskey/secretkey, so the role copies them across.
+milvus_bucket_claim: milvus-bucket
+milvus_bucket_storage_class: openshift-storage.noobaa.io
+milvus_s3_secret: milvus-s3
+
+# Port 80 on the in-cluster NooBaa service, not 443. The S3 endpoint presents
+# a service-signed certificate that Milvus has no CA for, and the CR's
+# ssl.caCertificateRef would need that bundle plumbed in. Traffic here never
+# leaves the cluster SDN and the bucket credentials are still required. To use
+# TLS instead, set the endpoint to s3.openshift-storage.svc:443 and fill in
+# milvus_s3_ssl.
+milvus_s3_endpoint: s3.openshift-storage.svc:80
+milvus_s3_ssl: false
+
+milvus_etcd_storage: 10Gi
+
+# --- Attu ------------------------------------------------------------------
+# The Milvus web UI. Its own namespace, as asked for.
+milvus_deploy_attu: true
+milvus_attu_namespace: milvus-attu
+# v2.6 line, matching Milvus 2.6.x. v3.0 exists but pairing the UI with the
+# server's own minor line is the safer default.
+milvus_attu_image: "zilliz/attu:v2.6.5"
+
+# --- Publishing to RHOAI ---------------------------------------------------
+# Whether Milvus is published to RHOAI's AI asset endpoints, which is what
+# puts it on the Gen AI studio's Vector stores tab.
+milvus_publish_ai_assets: true
+
+# NOT a free-form name. The Gen AI BFF has exactly three ConfigMap names
+# compiled into it - gen-ai-aa-custom-model-endpoints, gen-ai-aa-mcp-servers
+# and gen-ai-aa-vector-stores - and reads nothing else. Published under any
+# other name it is simply never seen, with no error to say so.
+milvus_ai_asset_configmap: gen-ai-aa-vector-stores
+
+# Where it is published. Same default as the model endpoints, because the tab
+# is per-project and these should line up in the picker.
+milvus_ai_endpoint_namespace: "{{ model_namespace | default('qwen3-4b') }}"
+
+# The provider and the store it holds are named separately, as the schema
+# expects: the provider is the Milvus server, the store is a collection
+# registered against it.
+milvus_provider_id: milvus
+milvus_vector_store_id: milvus-default
+milvus_vector_store_name: "Milvus (standalone)"
+
+# The embedding model the store is registered against, and its width. These
+# have to agree with each other and with whatever actually writes vectors:
+# bge-small-en-v1.5 is 384-dimensional, and is the embedding model the litellm
+# role registers. Change both together or the store is unusable.
+milvus_embedding_model: "{{ litellm_embedding_model_name | default('bge-small-en-v1.5') }}"
+milvus_embedding_dimension: 384

@@ -1,0 +1,54 @@
+---
+# Publishes Milvus to RHOAI's AI asset endpoints, which is what fills the Gen
+# AI studio's Vector stores tab.
+#
+# The ConfigMap name is fixed, not conventional: the Gen AI BFF has
+# gen-ai-aa-custom-model-endpoints, gen-ai-aa-mcp-servers and
+# gen-ai-aa-vector-stores compiled into it and reads nothing else. Note also
+# that these three do NOT share a schema - the MCP one is keyed by server
+# name with a JSON body, while this one and the model one are llama-stack
+# shaped under a single config.yaml key.
+#
+# Worth knowing what this does and does not do. The BFF reads this ConfigMap
+# directly to render the tab; it is not merged into the llama-stack
+# distribution's own config, which on this cluster still lists only the
+# built-in pgvector. So this registers the store for the dashboard, in the
+# same way the model endpoints are registered.
+
+- name: Make sure the publishing namespace is visible to the dashboard
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ milvus_ai_endpoint_namespace }}"
+        # apply merges, so this costs nothing where model_serving already
+        # labelled it - and without the label the dashboard shows nothing in
+        # the namespace at all.
+        labels:
+          opendatahub.io/dashboard: "true"
+
+- name: Publish Milvus as a vector store
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ milvus_ai_asset_configmap }}"
+        namespace: "{{ milvus_ai_endpoint_namespace }}"
+      data:
+        config.yaml: "{{ lookup('template', 'gen-ai-aa-vector-stores.yaml.j2') }}"
+
+- name: Report the published vector store
+  ansible.builtin.debug:
+    msg: >-
+      {{ milvus_ai_asset_configmap }} published to
+      {{ milvus_ai_endpoint_namespace }}: {{ milvus_vector_store_name }}
+      ({{ milvus_vector_store_id }}) on {{ milvus_embedding_model }},
+      {{ milvus_embedding_dimension }} dimensions.

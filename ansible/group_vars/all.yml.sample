@@ -183,6 +183,22 @@ openrag_auto_configure: true
 
 deploy_openrag: false
 
+# --- Milvus ----------------------------------------------------------------
+# A vector database, with Attu as its UI, published to RHOAI's Vector stores
+# tab. Off by default: it is a third vector store next to the OpenSearch that
+# openrag deploys and the pgvector the Gen AI playground ships with, so it
+# should be a choice.
+#
+# Milvus is in no operator catalog, so this comes from the upstream zilliztech
+# Helm chart - needs the helm CLI, like openrag - and carries no Red Hat
+# support path. Object storage is the cluster's own NooBaa rather than a
+# bundled MinIO, so ODF has to be up.
+#
+# The Milvus image declares no USER and will not run as anything but root, so
+# the role grants anyuid to a dedicated service account in the milvus
+# namespace. Everything else there stays non-root.
+deploy_milvus: false
+
 # -------------------------------------------------------------------
 #
 #

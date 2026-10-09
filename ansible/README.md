@@ -132,6 +132,16 @@ Static YaRN applies at every length, so it costs some accuracy on short
 prompts too — Qwen suggest enabling it only when long inputs are genuinely
 expected. Neither 27B preset needs it.
 
+**Tool-call and reasoning parsers are per-model, and a mismatch is silent.**
+The dense Qwen3 models emit Hermes JSON inside `<tool_call>`; Qwen3.8 emits
+Qwen's XML form, `<tool_call><function=name>`. Parse the second with `hermes`
+and vLLM finds no tool call, returns `finish_reason: "stop"`, and leaves the
+unparsed markup in `content` — so a caller that was waiting on a tool result
+simply hangs, with nothing in any log to say why. This was seen in the Gen AI
+playground against the MCP server: the model called `pods_top`, and the
+answer never came. `qwen3_xml` fixes it. `--reasoning-parser=qwen3` is set
+alongside so `</think>` stops leaking into `content`.
+
 The modelcar catalog has no FP8 Qwen, so that preset pulls from Hugging Face
 through KServe's `hf://` storage initializer and needs `hf_token`. Selecting
 it without one fails before anything is created rather than after a 28 GB
@@ -311,6 +321,66 @@ from the upstream project:
   rejected the credential", which is misleading: ingestion works, because
   that path uses basic auth.
 
+### Milvus — optional, off by default
+
+A vector database with [Attu](https://github.com/zilliztech/attu) as its UI,
+published to RHOAI's **Gen AI studio → AI asset endpoints → Vector stores**.
+Enable with `deploy_milvus=true`; needs the `helm` CLI, like OpenRAG.
+
+```bash
+./run.sh --tags milvus -e deploy_milvus=true
+```
+
+Milvus is **in no operator catalog** on OpenShift — not certified, not
+community, not Red Hat — so the operator comes from the upstream zilliztech
+Helm chart (pinned, `milvus_operator_version`) and carries no Red Hat support
+path. That is the trade for having it.
+
+It runs in `standalone` mode: one Milvus pod plus one etcd. Cluster mode would
+be rootcoord/proxy/querynode/datanode/indexnode as separate deployments, which
+on a sandbox demonstrates an architecture rather than a database. Milvus 2.6
+embeds its own WAL (woodpecker), so neither mode needs Pulsar or Kafka.
+
+Object storage is the cluster's **NooBaa**, claimed with an
+`ObjectBucketClaim`, rather than the MinIO the chart would otherwise deploy —
+one less MinIO and one less SCC argument. The OBC writes
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` and Milvus reads
+`accesskey`/`secretkey`, so the role copies them across. The S3 endpoint is
+NooBaa's in-cluster HTTP port; see `milvus_s3_endpoint` for the TLS note.
+
+**Three SCC bindings, each for a different reason.** None of these images were
+built for OpenShift's restricted SCC:
+
+| Workload | Needs | Why |
+|---|---|---|
+| operator | `nonroot-v2` | image asks for UID 65532, outside the namespace range |
+| etcd | `nonroot-v2` | runs as UID 1001 with `fsGroup` 1001 |
+| Milvus | `anyuid` | image declares no `USER`; `/milvus` is root-owned |
+
+Only Milvus genuinely needs root, so it gets its own ServiceAccount and
+everything else in the namespace stays non-root. The proper fix for that one
+is a derived image doing `chgrp -R 0 /milvus && chmod -R g=u /milvus`, which
+would run unmodified under `restricted-v2` — at the cost of a BuildConfig to
+maintain across Milvus upgrades.
+
+Attu is exposed on a plain edge Route with **no authentication**. It talks to
+Milvus with whatever credentials Milvus has — none — so anyone who reaches the
+route can read and delete collections. Fine for a sandbox; put an
+`oauth-proxy` in front before it is anything else.
+
+The vector store is registered under `gen-ai-aa-vector-stores`, which is one
+of exactly three ConfigMap names the Gen AI BFF has compiled in. Note the
+three do **not** share a schema: the MCP one is keyed by server name with a
+JSON body, while this and the model endpoints are llama-stack shaped under a
+single `config.yaml`. `vector_store_name` is what the tab displays —
+`metadata.display_name` is read for models but not here, and without it the
+row renders nameless. This registers the store with the dashboard; it is not
+merged into the llama-stack distribution's own config, which still lists only
+the built-in pgvector.
+
+`milvus_embedding_model` and `milvus_embedding_dimension` must agree with each
+other and with whatever writes the vectors — `bge-small-en-v1.5` is 384-wide.
+
 ## Prerequisites
 
 - An existing OpenShift 4.22+ cluster on AWS
@@ -404,6 +474,13 @@ All variables are in `group_vars/all.yml`:
 | `model_name` | from preset | InferenceService name. Derived |
 | `model_max_model_len` | from preset | vLLM max context length. Derived, and sized per model against both the native max and the KV cache |
 | `model_max_num_seqs` | from preset | `--max-num-seqs`. Derived; `0` leaves it to vLLM, and only the hybrid 27B presets set it |
+| `model_tool_call_parser` | from preset | `--tool-call-parser`. `hermes` for the dense Qwen3 models, `qwen3_xml` for the 3.8 pair |
+| `model_reasoning_parser` | from preset | `--reasoning-parser`. `qwen3`; empty omits the flag |
+| `deploy_milvus` | `false` | Deploy Milvus, Attu, and register the vector store with RHOAI. Needs `helm` |
+| `milvus_operator_version` | `1.3.11` | Pinned milvus-operator chart release |
+| `milvus_attu_image` | `zilliz/attu:v2.6.5` | Attu image, matched to the Milvus 2.6 line |
+| `milvus_embedding_model` | `bge-small-en-v1.5` | Embedding model the vector store is registered against |
+| `milvus_embedding_dimension` | `384` | Must match the embedding model's width |
 | `model_rope_override` | `{}` | Rope scaling passed through as `--hf-overrides`, to go past the native context. Off by default |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
 | `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
@@ -537,6 +614,7 @@ ansible-playbook site.yml --tags gatus              # Gatus health monitoring
 ansible-playbook site.yml --tags external-dns       # External DNS + Cloudflare
 ansible-playbook site.yml --tags devspaces          # OpenShift Dev Spaces
 ansible-playbook site.yml --tags ztwim              # SPIFFE/SPIRE workload identity
+ansible-playbook site.yml --tags milvus             # Milvus + Attu + vector store
 ```
 
 ## Playbook structure

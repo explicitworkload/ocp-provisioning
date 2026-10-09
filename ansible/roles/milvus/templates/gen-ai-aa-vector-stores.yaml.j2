@@ -1,0 +1,28 @@
+{#
+  Milvus as an AI asset vector store, in the shape RHOAI's Gen AI BFF reads.
+
+  The same llama-stack layout the model endpoints use - providers plus
+  registered_resources - but under vector_io and vector_stores rather than
+  inference and models. remote::milvus is one of the provider types this
+  build supports; the others are remote::pgvector, remote::qdrant and
+  inline::faiss.
+
+  uri carries a scheme, unlike Attu's MILVUS_URL which does not.
+
+  vector_store_name is what the tab displays. Without it the row renders with
+  an empty name, which is how this was first published; metadata.display_name
+  is NOT read here, though it is for models.
+-#}
+providers:
+  vector_io:
+    - provider_id: {{ milvus_provider_id }}
+      provider_type: remote::milvus
+      config:
+        uri: http://{{ milvus_name }}-milvus.{{ milvus_namespace }}.svc.cluster.local:19530
+registered_resources:
+  vector_stores:
+    - vector_store_id: {{ milvus_vector_store_id }}
+      vector_store_name: {{ milvus_vector_store_name }}
+      provider_id: {{ milvus_provider_id }}
+      embedding_model: {{ milvus_embedding_model }}
+      embedding_dimension: {{ milvus_embedding_dimension }}

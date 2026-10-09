@@ -1,0 +1,118 @@
+---
+# Attu, the Milvus web UI, in its own namespace.
+#
+# Nothing special is needed for it: unlike the Milvus image it runs happily
+# under restricted-v2, so there is no SCC binding here and there should not
+# be one. MILVUS_URL is host:port with no scheme - Attu adds that itself.
+
+- name: Create the Attu namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ milvus_attu_namespace }}"
+
+- name: Deploy Attu
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: attu
+        namespace: "{{ milvus_attu_namespace }}"
+        labels:
+          app: attu
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: attu
+        template:
+          metadata:
+            labels:
+              app: attu
+          spec:
+            containers:
+              - name: attu
+                image: "{{ milvus_attu_image }}"
+                ports:
+                  - containerPort: 3000
+                    name: http
+                env:
+                  - name: MILVUS_URL
+                    value: "{{ milvus_name }}-milvus.{{ milvus_namespace }}.svc.cluster.local:19530"
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: "1"
+                    memory: 1Gi
+
+- name: Expose Attu
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: attu
+        namespace: "{{ milvus_attu_namespace }}"
+        labels:
+          app: attu
+      spec:
+        selector:
+          app: attu
+        ports:
+          - name: http
+            port: 3000
+            targetPort: 3000
+
+# No authentication in front of this. Attu talks to Milvus with whatever
+# credentials Milvus is configured for - none, here - so anyone who reaches
+# the route can read and delete collections. Fine for a sandbox, not for
+# anything else; put an oauth-proxy in front before it matters.
+- name: Create the Attu route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: attu
+        namespace: "{{ milvus_attu_namespace }}"
+        labels:
+          app: attu
+      spec:
+        to:
+          kind: Service
+          name: attu
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+
+- name: Wait for Attu to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ milvus_attu_namespace }}"
+    name: attu
+  register: milvus_attu_deploy
+  until: (milvus_attu_deploy.resources[0].status.readyReplicas | default(0)) > 0
+  retries: 30
+  delay: 10
+  ignore_errors: true

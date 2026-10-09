@@ -119,6 +119,29 @@ verify_resources:
     name: devspaces
     check: exists
 
+  - label: "Milvus instance"
+    gate: "{{ deploy_milvus | default(false) }}"
+    api_version: milvus.io/v1beta1
+    kind: Milvus
+    namespace: "{{ milvus_namespace | default('milvus') }}"
+    name: "{{ milvus_name | default('milvus') }}"
+    check: condition
+    condition: MilvusReady
+    expect: "True"
+
+  # Checked separately from MilvusReady because it is the one that fails when
+  # the NooBaa bucket, its credentials or the S3 endpoint are wrong - and
+  # that failure leaves the pod Running, so nothing else catches it.
+  - label: "Milvus object storage"
+    gate: "{{ deploy_milvus | default(false) }}"
+    api_version: milvus.io/v1beta1
+    kind: Milvus
+    namespace: "{{ milvus_namespace | default('milvus') }}"
+    name: "{{ milvus_name | default('milvus') }}"
+    check: condition
+    condition: StorageReady
+    expect: "True"
+
 # --- Deployments and StatefulSets that must have a ready replica -----------
 verify_workloads:
   - {label: "LiteLLM proxy",      gate: true, ns: "{{ litellm_namespace | default('litellm') }}", name: litellm}
@@ -131,6 +154,11 @@ verify_workloads:
   - {label: "Docling",            gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: docling-serve}
   - {label: "Text embeddings",    gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: text-embeddings}
   - {label: "MLflow PostgreSQL",  gate: "{{ deploy_mlflow_server | default(true) }}", ns: "{{ rhoai_feature_namespace | default('redhat-ods-applications') }}", name: mlflow-db}
+  - {label: "Milvus operator",    gate: "{{ deploy_milvus | default(false) }}", ns: "{{ milvus_operator_namespace | default('milvus-operator') }}", name: milvus-operator}
+  # The operator names the Deployment <cr>-milvus-<component>, so a standalone
+  # instance called milvus gives milvus-milvus-standalone.
+  - {label: "Milvus standalone",  gate: "{{ deploy_milvus | default(false) }}", ns: "{{ milvus_namespace | default('milvus') }}", name: "{{ milvus_name | default('milvus') }}-milvus-standalone"}
+  - {label: "Attu",               gate: "{{ (deploy_milvus | default(false)) and (milvus_deploy_attu | default(true)) }}", ns: "{{ milvus_attu_namespace | default('milvus-attu') }}", name: attu}
 
 # --- HTTP endpoints that must actually answer ------------------------------
 # Reachability, not just "a Route object exists". `contains` is optional and
@@ -146,3 +174,6 @@ verify_endpoints:
   - label: "LiteLLM"
     gate: true
     url: "https://litellm-{{ litellm_namespace | default('litellm') }}.{{ ocp_apps_domain }}/health/liveliness"
+  - label: "Attu"
+    gate: "{{ (deploy_milvus | default(false)) and (milvus_deploy_attu | default(true)) }}"
+    url: "https://attu-{{ milvus_attu_namespace | default('milvus-attu') }}.{{ ocp_apps_domain }}/"
