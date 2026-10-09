@@ -16,14 +16,14 @@ ocp-provisioning/
 │   └── cluster/            # OpenShift cluster provisioning (IPI)
 │       ├── manifests/      # GPU worker MachineSet templates
 │       ├── operators/      # Operator namespaces, groups, subscriptions, and configs
-│       ├── main.tf         # Cluster install orchestration (11 phases)
+│       ├── main.tf         # Cluster install orchestration (9 phases)
 │       ├── variables.tf    # Cluster configuration variables
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook (21 roles)
+│   ├── site.yml            # Main playbook (22 roles)
 │   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
-│   ├── roles/              # operators, service_mesh, network_observability, gpu_worker, odf, quay, etc.
+│   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, verify, etc.
 │   └── README.md           # Ansible-specific docs
 ├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
 ├── devfile.yaml            # Dev Spaces workspace definition (installs Claude CLI)
@@ -43,7 +43,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Service Mesh 3 (Istio + Kiali) with Thanos Querier integration and Network Observability (eBPF FlowCollector, with flow records stored in a LokiStack backed by NooBaa so the console's Traffic flows table is populated)
 - Deploys ODF with gp3 EBS-backed Ceph storage and NooBaa object storage
 - Deploys Quay Registry backed by ODF managed storage (or S3 fallback)
-- Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, p4d.24xlarge, p4de.24xlarge) with dedicated MachineConfigPool by auto-discovering cluster config
+- Creates GPU MachineSets (g4dn.4xlarge, g6e.4xlarge, g6e.12xlarge, p4d.24xlarge, p4de.24xlarge) with dedicated MachineConfigPool by auto-discovering cluster config. Only the ones you set a replica count on are built, and every type the run offers has to be listed — the 4-GPU g6e.12xlarge is what the bf16 27B needs
 - Configures OpenShift AI with KServe, OGX (GenAI Studio playground), AI Gateway, and MCP server
 - Serves one model of your choosing on vLLM — `model_preset` picks from Qwen3 4B/8B/14B and a 27B in bf16 (4 GPUs, 256k context) or FP8 (1 GPU, 64k) — with external endpoint, bearer token auth, and GenAI Studio playground. The run asks which model and which GPU instance, then prints the full VRAM budget (weights, KV cache at the chosen context, per-sequence state) against each instance before creating anything
 - Deploys LiteLLM proxy with PostgreSQL backend, proxying the cluster's own model, Azure GPT-4 and any external OpenAI-compatible endpoints via reusable credentials
@@ -60,11 +60,12 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 |------|------------|---------|
 | `oc` | everything | [OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html) |
 | `python3` | everything | system package |
-| `helm` | the `openrag` role **only** | `brew install helm` |
+| `helm` | the `openrag` and `milvus` roles **only** | `brew install helm` |
 
-`helm` is worth installing up front if you plan to use `deploy_openrag=true`:
-it is the one tool a single role needs, so a host without it runs the other
-twenty roles to completion and only then fails.
+`helm` is worth installing up front if you plan to set `deploy_openrag=true`
+or `deploy_milvus=true`. Both are off by default and both check for it before
+doing anything, but neither check runs until its role does — so a host
+without `helm` gets twenty roles deep before it stops.
 
 ### Quick Start
 
@@ -105,10 +106,10 @@ that single object by name, so it gains no ability to read secrets generally.
 A reprint refreshes it after a rotation.
 
 The run then ends by *asserting* that state, rather than trusting a green
-`PLAY RECAP`. 63 of this playbook's tasks are `until:` loops waiting on
-operators to converge; seven swallow their expiry and seven more are one-shot
-probes feeding a `when:`, so a run could previously finish successfully having
-silently skipped work. The `verify` role checks every expected custom
+`PLAY RECAP`. 62 of this playbook's tasks are `until:` loops waiting on
+operators to converge; six swallow their expiry outright and others are
+one-shot probes feeding a `when:`, so a run could previously finish
+successfully having silently skipped work. The `verify` role checks every expected custom
 resource, workload and HTTP endpoint, collects *all* the failures, and reports
 them together:
 
@@ -130,7 +131,7 @@ the target's API URL contains the string you give it:
 ./run.sh -e ocp_expected_api=sandbox1234
 ```
 
-**Optional extras**, both off by default and never requiring secrets in the repo:
+**Optional extras**, all off by default and none of them requiring a secret in the repo:
 
 ```bash
 # Publish public DNS for the dashboard and Dev Spaces via Cloudflare.
@@ -151,6 +152,11 @@ ansible-playbook site.yml --tags dashboard \
 # against a cluster where the litellm role has already completed - it reads
 # the LiteLLM key from the cluster rather than inheriting it.
 ./run.sh --tags openrag -e deploy_openrag=true
+
+# Milvus, Attu and the RHOAI vector store registration. Needs helm, and ODF
+# up - the bucket comes from NooBaa. Registers against the embedding model
+# LiteLLM serves, so run it after openrag on a cluster that has one.
+./run.sh --tags milvus -e deploy_milvus=true
 ```
 
 See [ansible/README.md](ansible/README.md) for full variable reference, tags, Cloudflare and TLS notes, node resiliency testing, and Quay S3 configuration.
@@ -251,8 +257,12 @@ Provisions an OpenShift cluster via IPI (`openshift-install`) orchestrated by Op
 | 5 | `nfd_instance` | Create NodeFeatureDiscovery instance for hardware detection |
 | 6 | `gpu_clusterpolicy` | Create NVIDIA ClusterPolicy for container AI workloads |
 | 7 | `openshift_ai` | Configure OpenShift AI (DataScienceCluster + Dashboard) |
-| 8 | `console_plugins` | Enable console plugins |
-| 9 | `lightspeed_config` | Configure Lightspeed against Azure OpenAI (skipped unless the `azure-api-keys` Secret exists) |
+| 7 | `console_plugins` | Enable console plugins |
+| 7 | `lightspeed_config` | Configure Lightspeed against Azure OpenAI (skipped unless the `azure-api-keys` Secret exists) |
+
+The last three share a number because they share a dependency: each one waits
+only on `operators`, so OpenTofu runs them concurrently rather than in the
+order they happen to be written in `main.tf`.
 
 #### Operators
 
