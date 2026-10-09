@@ -60,10 +60,18 @@ model_presets:
   # g6e.12xlarge is the smallest instance that provides them.
   qwen3.8-27b:
     display: "Qwen3.8 27B (bf16, modelcar, 4 GPUs)"
-    # Not qwen38-27b: the MaaS endpoint in litellm_extra_models already serves
-    # a model by that name, and an InferenceService with the same name would
-    # make the AI asset endpoint drop the remote one as a duplicate.
-    name: qwen3-27b
+    # qwen38-27b-selfhosted, not qwen38-27b. The MaaS endpoint in
+    # litellm_extra_models already serves a model called qwen38-27b, and an
+    # InferenceService of the same name would make the AI asset endpoint drop
+    # the remote one as a duplicate - they would also be indistinguishable in
+    # the picker. The -selfhosted suffix keeps both listed and says which is
+    # which.
+    #
+    # It cannot be qwen38-27b(selfhosted): object names are DNS-1123 labels,
+    # [a-z0-9]([-a-z0-9]*[a-z0-9])?, so brackets and spaces are rejected by
+    # the API server. display_name carries the readable form instead.
+    name: qwen38-27b-selfhosted
+    display_name: "qwen38-27b (self-hosted)"
     uri: "oci://quay.io/redhat-ai-services/modelcar-catalog:qwen3.8-27b"
     gpu_count: 4
     max_model_len: 32768
@@ -84,7 +92,8 @@ model_presets:
   # alone would take 8 GB of it - vLLM would still start, then serialise.
   qwen3.8-27b-fp8:
     display: "Qwen3.8 27B (FP8, Hugging Face, 1 GPU)"
-    name: qwen3-27b-fp8
+    name: qwen38-27b-fp8-selfhosted
+    display_name: "qwen38-27b FP8 (self-hosted)"
     uri: "hf://Qwen/Qwen3.8-27B-FP8"
     gpu_count: 1
     max_model_len: 16384
@@ -98,6 +107,7 @@ model_presets:
 # if you need to; the preset only supplies the default.
 model_selected: "{{ model_presets[model_preset] }}"
 model_name: "{{ model_selected.name }}"
+model_display_name: "{{ model_selected.display_name | default(model_selected.name) }}"
 model_namespace: "{{ model_selected.name }}"
 model_storage_uri: "{{ model_selected.uri }}"
 model_gpu_count: "{{ model_selected.gpu_count }}"

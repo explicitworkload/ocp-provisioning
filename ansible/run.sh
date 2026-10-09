@@ -47,6 +47,63 @@ MSG
   exit 1
 fi
 
+# Interactive choice of model and GPU instance, but only for a full run.
+#
+# Deliberately here rather than in Ansible's vars_prompt: vars_prompt is
+# evaluated at play start, before tags are filtered, so it would also stop
+# and ask on `./run.sh --tags summary` and on every other partial re-run.
+# Here the prompt is skipped whenever any argument is passed, which is
+# exactly the case where someone is not doing a full deploy.
+#
+# Skipped as well when stdin is not a terminal, so CI and nohup keep working,
+# and when the caller already set either value with -e.
+if [[ $# -eq 0 && -t 0 ]]; then
+  echo
+  echo "Model to serve (Enter keeps the value in group_vars/all.yml):"
+  echo "    1) qwen3-4b          bf16  1 GPU    8 GB   32k context"
+  echo "    2) qwen3-8b          bf16  1 GPU   16 GB   32k context"
+  echo "    3) qwen3-14b         bf16  1 GPU   29 GB   16k context"
+  echo "    4) qwen3.8-27b       bf16  4 GPUs  55 GB   32k context   (needs g6e.12xlarge)"
+  echo "    5) qwen3.8-27b-fp8   FP8   1 GPU   28 GB   16k context   (Hugging Face, needs hf_token)"
+  read -r -p "  choice [Enter to keep current]: " MODEL_CHOICE
+  case "${MODEL_CHOICE:-}" in
+    1) EXTRA_MODEL="qwen3-4b" ;;
+    2) EXTRA_MODEL="qwen3-8b" ;;
+    3) EXTRA_MODEL="qwen3-14b" ;;
+    4) EXTRA_MODEL="qwen3.8-27b" ;;
+    5) EXTRA_MODEL="qwen3.8-27b-fp8" ;;
+    "") EXTRA_MODEL="" ;;
+    *) echo "  not one of the choices - keeping the configured model" >&2; EXTRA_MODEL="" ;;
+  esac
+
+  echo
+  echo "GPU instance to create (Enter keeps gpu_machinesets in all.yml):"
+  echo "    1) g4dn.4xlarge   1 x T4         16 GB"
+  echo "    2) g6e.4xlarge    1 x L40S       48 GB"
+  echo "    3) g6e.12xlarge   4 x L40S      192 GB"
+  echo "    4) p4d.24xlarge   8 x A100 40G  320 GB"
+  echo "    5) p4de.24xlarge  8 x A100 80G  640 GB"
+  read -r -p "  choice [Enter to keep current]: " GPU_CHOICE
+  case "${GPU_CHOICE:-}" in
+    1) EXTRA_GPU="g4dn.4xlarge" ;;
+    2) EXTRA_GPU="g6e.4xlarge" ;;
+    3) EXTRA_GPU="g6e.12xlarge" ;;
+    4) EXTRA_GPU="p4d.24xlarge" ;;
+    5) EXTRA_GPU="p4de.24xlarge" ;;
+    "") EXTRA_GPU="" ;;
+    *) echo "  not one of the choices - keeping the configured instances" >&2; EXTRA_GPU="" ;;
+  esac
+
+  [[ -n "$EXTRA_MODEL" ]] && set -- "$@" -e "model_preset=$EXTRA_MODEL"
+  # One machineset with one replica, replacing the list in all.yml. The
+  # playbook still prints the fit check before changing anything, so a model
+  # that cannot run on this instance is called out rather than refused.
+  if [[ -n "$EXTRA_GPU" ]]; then
+    set -- "$@" -e "{\"gpu_machinesets\":[{\"instance_type\":\"$EXTRA_GPU\",\"replicas\":1}]}"
+  fi
+  echo
+fi
+
 # Install required collections if not present
 ansible-galaxy collection install -r requirements.yml 2>/dev/null || true
 

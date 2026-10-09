@@ -78,6 +78,14 @@ gpu_machinesets:
 # Face at pod start instead of pulling a cached image.
 model_preset: qwen3-4b
 
+# Hugging Face token. Only the hf:// presets need it - today just
+# qwen3.8-27b-fp8 - and a run that selects one without it fails before
+# anything is created rather than after a 28 GB download returns 401.
+#
+# Safe to put a real token here: this file is untracked. all.yml.sample is
+# what the repo carries, and it keeps this empty.
+hf_token: ""
+
 # Console plugins to enable
 console_plugins:
 - pipelines-console-plugin

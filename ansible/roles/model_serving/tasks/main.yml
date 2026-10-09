@@ -452,8 +452,14 @@
           opendatahub.io/template-display-name: "vLLM NVIDIA GPU ServingRuntime for KServe"
           opendatahub.io/model-type: generative
           opendatahub.io/genai-use-case: genai
-          openshift.io/display-name: "{{ model_name }}"
-          openshift.io/description: "{{ model_name }} language model served via vLLM on GPU"
+          # The readable form, which for the 27B presets differs from the
+          # object name: a DNS-1123 label cannot carry brackets or spaces.
+          # It must also not be exactly a model name LiteLLM serves from
+          # elsewhere - the AI asset endpoint excludes a remote model when an
+          # InferenceService claims the same name or display name, so
+          # "qwen38-27b (self-hosted)" keeps the MaaS qwen38-27b listed too.
+          openshift.io/display-name: "{{ model_display_name }}"
+          openshift.io/description: "{{ model_display_name }} language model served via vLLM on GPU"
           security.opendatahub.io/enable-auth: "true"
         labels:
           opendatahub.io/dashboard: "true"
