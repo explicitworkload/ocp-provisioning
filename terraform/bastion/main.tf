@@ -135,8 +135,14 @@ resource "aws_instance" "bastion" {
 	eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
 
 	# Install CLI tools via Homebrew
-	echo "Installing AWS CLI, kubectx, OpenTofu, OpenShift CLI, and kubectl via Homebrew..."
-	sudo -u $TARGET_USER /home/linuxbrew/.linuxbrew/bin/brew install awscli kubectx opentofu openshift-cli kubernetes-cli
+	#
+	# helm is here because the ansible playbook shells out to it: the openrag
+	# and milvus roles use kubernetes.core.helm, which does not bundle the
+	# binary. Leaving it out cost a full run on sandbox2156 - the playbook got
+	# 258 tasks deep, through ODF, RHOAI and GPU model serving, before the
+	# openrag role found no helm on PATH and stopped.
+	echo "Installing AWS CLI, kubectx, OpenTofu, OpenShift CLI, kubectl, and helm via Homebrew..."
+	sudo -u $TARGET_USER /home/linuxbrew/.linuxbrew/bin/brew install awscli kubectx opentofu openshift-cli kubernetes-cli helm
 
 	# Install OpenShift tools not available via Homebrew
 	echo "Downloading and installing additional OpenShift tools..."
@@ -174,7 +180,7 @@ resource "aws_instance" "bastion" {
 	for t in git wget curl tar jq tmux gcc; do
 	  printf '%-18s %s\n' "$t" "$(command -v $t || echo MISSING)" >> /var/log/bastion-tools.txt
 	done
-	for t in aws kubectx tofu oc kubectl; do
+	for t in aws kubectx tofu oc kubectl helm; do
 	  printf '%-18s %s\n' "$t" "$(sudo -u $TARGET_USER bash -lc "command -v $t" || echo MISSING)" >> /var/log/bastion-tools.txt
 	done
 	for t in oc-mirror openshift-install; do
