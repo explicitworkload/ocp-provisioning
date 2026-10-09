@@ -80,7 +80,7 @@ rhoai_extra_ai_endpoints: []
 # it, set this true and re-run:
 #
 #     ./run.sh --tags litellm -e litellm_disable_env_credential_login=true
-litellm_disable_env_credential_login: false
+litellm_disable_env_credential_login: true
 
 # --- Publishing to RHOAI --------------------------------------------------
 # Whether LiteLLM is published to RHOAI as an AI asset endpoint, which is
@@ -109,11 +109,11 @@ litellm_ai_asset_key_secret: endpoint-api-key-1
 # model_type: embedding so RHOAI's vector stores and AutoRAG can use them,
 # and llama-stack keeps them out of the chat picker itself.
 litellm_ai_asset_reject_modes:
-  - rerank
-  - image_generation
-  - audio_transcription
-  - audio_speech
-  - moderation
+- rerank
+- image_generation
+- audio_transcription
+- audio_speech
+- moderation
 
 # Model names to keep out of the endpoint whatever LiteLLM says. Models with
 # an InferenceService on this cluster are excluded already, by lookup - RHOAI
