@@ -32,6 +32,116 @@
         quiet: true
       tags: [always]
 
+    # The control host's own prerequisites, demanded here rather than when
+    # the role that needs them finally runs.
+    #
+    # oc first, because it is the one with no guard at all today and the
+    # worst landing. Most roles reach the cluster through kubernetes.core.k8s,
+    # which uses the python client and never touches the binary - so the
+    # first shell-out is openshift_ai, and the heaviest user is model_serving
+    # ("oc process" to instantiate the vLLM ServingRuntime template, which
+    # kubectl cannot substitute for). The one early oc call this play already
+    # makes, "Resolve the kubeconfig context" below, looks like it covers
+    # this and does not: it is gated on `ocp_context | length == 0`, so
+    # pinning a context in group_vars - which is the normal thing to do -
+    # skips it silently and nothing verifies oc until roughly task 170.
+    - name: Look for the oc CLI
+      ansible.builtin.command:
+        cmd: oc version --client
+      register: preflight_oc
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [openshift-ai, model-serving, litellm, openrag, rag]
+
+    - name: Require the oc CLI
+      ansible.builtin.assert:
+        that: preflight_oc.rc | default(1) == 0
+        fail_msg: >-
+          oc is not on PATH. Several roles shell out to it - openshift_ai,
+          model_serving, litellm and openrag - and model_serving uses
+          "oc process", which is OpenShift-only, so kubectl is not a
+          substitute. Install the OpenShift CLI from
+          https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/
+          or with "brew install openshift-cli".
+        quiet: true
+      tags: [openshift-ai, model-serving, litellm, openrag, rag]
+    #
+    # helm is why this block exists. kubernetes.core.helm shells out to the
+    # binary and does not bundle it, and the only two roles that use it,
+    # openrag and milvus, are the fifteenth and sixteenth of twenty-two.
+    # So a control host without helm built ODF, RHOAI, the GPU stack and the
+    # model - an hour of work - and then stopped at task 258 of 258 on a
+    # missing CLI that was knowable before task 1. That is the whole failure
+    # this block removes. git has the same shape ten tasks further on:
+    # openrag checks its chart out with ansible.builtin.git.
+    #
+    # Gated two ways, and deliberately NOT tags: [always] like the rest of
+    # this section. The variable gate means a run that deploys neither role
+    # is never asked for a tool it will not use; the tag gate means
+    # ./run.sh --tags summary does not demand helm either, which "always"
+    # would have made it do. Each guard carries the tags of the roles that
+    # actually need the tool, so a full run (no tags, everything runs) and a
+    # --tags openrag run are both covered while a summary reprint is not.
+    #
+    # The in-role checks stay as a backstop: --skip-tags openrag drops these
+    # guards along with the role, but the milvus role still runs and still
+    # needs helm.
+    #
+    # check_mode: false on the probes because a command that reports nothing
+    # under --check turns the assert below into a guess.
+    - name: Look for the helm CLI
+      ansible.builtin.command:
+        cmd: helm version --short
+      register: preflight_helm
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: (deploy_openrag | default(false) | bool) or (deploy_milvus | default(false) | bool)
+      tags: [openrag, rag, milvus, vector-store]
+
+    - name: Require helm when openrag or milvus is deployed
+      ansible.builtin.assert:
+        that: preflight_helm.rc | default(1) == 0
+        fail_msg: >-
+          helm is not on PATH. This run deploys openrag and/or milvus, the
+          only two roles that need it - both use kubernetes.core.helm, which
+          shells out to the binary rather than bundling it.
+          On a RHEL control host, which the bastion usually is, take Red Hat's
+          build from the same mirror this repo already uses for oc-mirror:
+          "sudo curl -fsSL -o /usr/local/bin/helm
+          https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/helm/latest/helm-linux-amd64
+          && sudo chmod +x /usr/local/bin/helm".
+          On macOS, "brew install helm". Then re-run.
+          To deploy everything else and leave these two out instead, set
+          deploy_openrag=false and deploy_milvus=false.
+        quiet: true
+      when: (deploy_openrag | default(false) | bool) or (deploy_milvus | default(false) | bool)
+      tags: [openrag, rag, milvus, vector-store]
+
+    - name: Look for the git CLI
+      ansible.builtin.command:
+        cmd: git --version
+      register: preflight_git
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: deploy_openrag | default(false) | bool
+      tags: [openrag, rag]
+
+    - name: Require git when openrag is deployed
+      ansible.builtin.assert:
+        that: preflight_git.rc | default(1) == 0
+        fail_msg: >-
+          git is not on PATH. The openrag role needs it: OpenRAG ships its
+          Helm chart in-repo rather than in a chart repository, so the role
+          checks the source out with ansible.builtin.git, which shells out to
+          the binary. Install it with "sudo dnf install -y git" on RHEL, or
+          "brew install git" on macOS. Then re-run.
+        quiet: true
+      when: deploy_openrag | default(false) | bool
+      tags: [openrag, rag]
+
     # Everything down to the banner is read-only, and runs before the first
     # task that changes the cluster. ocp_context defaults to empty, meaning
     # follow the current kubeconfig context, so what this play is pointed at

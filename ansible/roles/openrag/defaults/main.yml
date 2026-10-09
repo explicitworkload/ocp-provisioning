@@ -1,4 +1,11 @@
 ---
+# Off by default, and declared here rather than only in group_vars so that
+# site.yml's `when: deploy_openrag` has something to read. milvus already
+# does this; openrag did not, so a control host whose untracked
+# group_vars/all.yml predates this role died on "'deploy_openrag' is
+# undefined" - and died at the role, roughly task 250, not at the top.
+deploy_openrag: false
+
 openrag_namespace: openrag
 openrag_opensearch_namespace: opensearch
 

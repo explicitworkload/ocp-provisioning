@@ -1,26 +1,40 @@
 ---
-# kubernetes.core.helm and helm_repository shell out to the helm binary on the
-# controller - the collection does not bundle it. openrag is the only role in
-# this playbook that needs it, so a host can run everything else happily and
-# still fail here. Without this check that failure lands on the first Helm
-# task, which on a full run is task ~256, after ODF, RHOAI, model serving and
-# the rest have already been created. Check before anything is created.
-- name: Check that the helm CLI is available
+# A backstop. site.yml's pre_tasks demand helm before the run touches the
+# cluster at all, which is where this should surface; what is left here
+# covers the paths that skip pre_tasks - a --skip-tags run, or this role
+# being invoked from another playbook.
+#
+# kubernetes.core.helm and helm_repository shell out to the helm binary on
+# the controller - the collection does not bundle it. openrag and milvus are
+# the only roles here that need it.
+#
+# "Look for" rather than "Check that ... is available", because
+# failed_when: false means the probe reports ok: [localhost] whether or not
+# helm is there. Under the old name that ok read as "helm is available", and
+# the next task failing anyway was baffling.
+- name: Look for the helm CLI
   ansible.builtin.command:
     cmd: helm version --short
   register: openrag_helm
   changed_when: false
   failed_when: false
+  check_mode: false
 
-- name: Fail with install instructions when helm is missing
-  ansible.builtin.fail:
-    msg: >-
+- name: Require the helm CLI
+  ansible.builtin.assert:
+    that: openrag_helm.rc | default(1) == 0
+    fail_msg: >-
       The openrag role needs the helm CLI on this host and it is not on PATH.
-      No other role does, which is why the rest of the run succeeded. Install
-      it with "brew install helm", or
-      "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash",
-      then re-run with --tags openrag.
-  when: openrag_helm.rc | default(1) != 0
+      The milvus role needs it too; no other role does.
+      On a RHEL control host, take Red Hat's build from the same mirror this
+      repo already uses for oc-mirror: "sudo curl -fsSL -o /usr/local/bin/helm
+      https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/helm/latest/helm-linux-amd64
+      && sudo chmod +x /usr/local/bin/helm".
+      On macOS, "brew install helm".
+      Then re-run ./run.sh - the whole playbook is idempotent, and a
+      --tags openrag re-run would leave milvus, the dashboard, verify and
+      the summary undone.
+    quiet: true
 
 - name: Create the OpenRAG and OpenSearch namespaces
   kubernetes.core.k8s:
@@ -125,7 +139,10 @@
     chart_version: "{{ opensearch_chart_version }}"
     release_namespace: "{{ openrag_opensearch_namespace }}"
     wait: true
-    wait_timeout: 15m
+    # timeout, not wait_timeout: the latter is deprecated and goes away in
+    # kubernetes.core 7.0.0. Available since 2.4.0, so well inside the
+    # ">=3.0.0" requirements.yml asks for.
+    timeout: 15m
     values:
       # NOT opensearchproject/opensearch. OpenRAG creates its documents index
       # with the jvector k-NN engine, hardcoded at

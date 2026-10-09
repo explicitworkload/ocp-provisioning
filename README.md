@@ -60,12 +60,24 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 |------|------------|---------|
 | `oc` | everything | [OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html) |
 | `python3` | everything | system package |
-| `helm` | the `openrag` and `milvus` roles **only** | `brew install helm` |
+| `helm` | the `openrag` and `milvus` roles **only** | `brew install helm`, or see below on RHEL |
+| `git` | the `openrag` role **only** | `brew install git` / `sudo dnf install -y git` |
 
-`helm` is worth installing up front if you plan to set `deploy_openrag=true`
-or `deploy_milvus=true`. Both are off by default and both check for it before
-doing anything, but neither check runs until its role does — so a host
-without `helm` gets twenty roles deep before it stops.
+`helm` and `git` are checked in `site.yml`'s `pre_tasks`, before the run
+touches the cluster, and only when the roles that need them are actually
+enabled. That ordering is deliberate: the checks used to live inside the
+roles, which are the fifteenth and sixteenth of twenty-two, so a host
+without `helm` built ODF, RHOAI, the GPU stack and the model — about an
+hour — and then stopped at the last task on a missing CLI.
+
+On a RHEL control host there is no Homebrew, so take Red Hat's build of Helm
+from the same mirror this repo already uses for `oc-mirror`:
+
+```bash
+sudo curl -fsSL -o /usr/local/bin/helm \
+  https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/helm/latest/helm-linux-amd64
+sudo chmod +x /usr/local/bin/helm
+```
 
 ### Quick Start
 
@@ -218,7 +230,7 @@ Provisions a RHEL 10 bastion host on AWS pre-loaded with OpenShift tooling.
 **Pre-installed tools:**
 
 - OpenShift CLI (`oc`), `oc-mirror`, and `openshift-install`
-- AWS CLI, `kubectx`, `kubectl`, and OpenTofu (via Homebrew)
+- AWS CLI, `kubectx`, `kubectl`, OpenTofu, and `helm` (via Homebrew)
 - tmux with [TPM](https://github.com/tmux-plugins/tpm) and powerline
 - Git, wget, curl, jq, and other common utilities
 

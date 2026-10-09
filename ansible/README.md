@@ -332,8 +332,10 @@ a three-node OpenSearch cluster, docling-serve for document conversion,
 text-embeddings-inference serving `BAAI/bge-small-en-v1.5` on CPU, Langflow,
 Postgres, and the OpenRAG chart itself.
 
-Needs `helm` on the control host — the only role that does. Enable with
-`deploy_openrag=true`.
+Needs `helm` and `git` on the control host — `helm` is shared with the
+Milvus role, `git` is needed by this one alone, to check the chart out.
+Both are asserted in `site.yml`'s `pre_tasks` before the run touches the
+cluster. Enable with `deploy_openrag=true`.
 
 Chat and embeddings both go through LiteLLM rather than straight to a model,
 so OpenRAG, the Gen AI playground and the Ops Dashboard all serve the same
@@ -521,6 +523,11 @@ The image tag must track the OpenSearch server's major line — both are
 - An existing OpenShift 4.22+ cluster on AWS
 - `oc` CLI authenticated (`oc login`)
 - Python 3.x
+- `helm` — only for the `openrag` and `milvus` roles
+- `git` — only for the `openrag` role
+
+The last two are asserted up front by `site.yml`, and only when the role
+that needs them is enabled.
 
 ## Quick start
 
@@ -786,6 +793,7 @@ ansible/
     ├── ztwim/                  # SPIFFE/SPIRE workload identity (server, agent, CSI, OIDC)
     ├── gatus/                  # Gatus health monitoring
     ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings (opt-in)
+    ├── milvus/                 # Milvus operator, standalone instance, Attu UI (opt-in)
     ├── verify/                 # Asserts the deployment; collects every failure
     └── summary/                # Prints URLs, credentials and total run time
 ```

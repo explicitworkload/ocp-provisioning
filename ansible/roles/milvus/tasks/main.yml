@@ -8,21 +8,32 @@
 # below are deliberate and individually justified rather than one blanket
 # grant.
 
-- name: Check that the helm CLI is available
+# A backstop; site.yml's pre_tasks demand helm before the run touches the
+# cluster. See the longer note on the same pair in the openrag role.
+#
+# "Look for" rather than "Check that ... is available": failed_when: false
+# makes the probe print ok: [localhost] even when helm is absent.
+- name: Look for the helm CLI
   ansible.builtin.command:
     cmd: helm version --short
   register: milvus_helm
   changed_when: false
   failed_when: false
+  check_mode: false
 
-- name: Fail with install instructions when helm is missing
-  ansible.builtin.fail:
-    msg: >-
+- name: Require the helm CLI
+  ansible.builtin.assert:
+    that: milvus_helm.rc | default(1) == 0
+    fail_msg: >-
       The milvus role needs the helm CLI on this host and it is not on PATH.
       Milvus is in no operator catalog, so the operator comes from the
-      zilliztech Helm chart. Install it with "brew install helm", or
-      "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash".
-  when: milvus_helm.rc | default(1) != 0
+      zilliztech Helm chart. The openrag role needs helm too; no other role
+      does.
+      On a RHEL control host: "sudo curl -fsSL -o /usr/local/bin/helm
+      https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/helm/latest/helm-linux-amd64
+      && sudo chmod +x /usr/local/bin/helm".
+      On macOS, "brew install helm".
+    quiet: true
 
 - name: Create the Milvus namespaces
   kubernetes.core.k8s:
@@ -141,7 +152,9 @@
     chart_ref: "{{ milvus_operator_chart }}"
     release_namespace: "{{ milvus_operator_namespace }}"
     wait: true
-    wait_timeout: 10m
+    # timeout, not wait_timeout - see the note on the same pair in the
+    # openrag role. Deprecated, removed in kubernetes.core 7.0.0.
+    timeout: 10m
 
 # The chart's own --wait covers the Deployment, but the CRD is what the next
 # task needs and it is registered separately.
