@@ -132,7 +132,14 @@ openrag_deploy_docs: true
 #
 # The tag must track the OpenSearch server's major line. Dashboards refuses
 # to start against a version it does not match.
-openrag_deploy_dashboards: false
+openrag_deploy_dashboards: true
+
+# Workspaces, Datasources and Explore - the "Enhanced Discover experience"
+# Dashboards prompts for on first login. Enabled through a mounted
+# opensearch_dashboards.yml rather than env vars, because explore.enabled is
+# not one of the settings the image's entrypoint can translate; see the note
+# in tasks/dashboards.yml. Set false for the classic Discover.
+opensearch_dashboards_enhanced_discover: true
 opensearch_dashboards_image: "opensearchproject/opensearch-dashboards:3.8.0"
 openrag_docs_git_version: "{{ openrag_git_version }}"
 # baseUrl is baked into every generated link at build time, so it has to match

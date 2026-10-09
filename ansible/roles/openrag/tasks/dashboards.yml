@@ -11,6 +11,63 @@
 # page and authenticates against it. The credential is the same admin one the
 # deployment summary prints.
 
+# The Workspaces/Datasources/Explore trio, which Dashboards itself prompts
+# for with "New! Enhanced Discover experience available".
+#
+# This has to be a mounted config file; the env vars everything else here
+# uses cannot do it. The image's entrypoint translates env vars to CLI args
+# from a fixed allowlist of 162 settings - which is how OPENSEARCH_HOSTS and
+# OPENSEARCH_SSL_VERIFICATIONMODE reach opensearch.ssl.verificationMode with
+# its camel case intact - and explore.enabled is not in that list.
+# EXPLORE_ENABLED=true is therefore accepted by the pod, mapped to nothing,
+# and dropped: no error, no setting, no Explore. workspace.enabled and
+# data_source.enabled are in the list, so an env-var attempt would half
+# work, which is worse than not working.
+#
+# data_source.enabled is included because the dialog names Datasources as
+# part of the same trio; Explore reads its data through it.
+- name: Build the OpenSearch Dashboards configuration
+  ansible.builtin.set_fact:
+    opensearch_dashboards_config: |
+      ---
+      server.host: '0.0.0.0'
+
+      # Carried over verbatim from the config the image ships. A subPath
+      # mount replaces that file wholesale rather than merging with it, so
+      # anything omitted here is silently lost - and these four are what
+      # make the security plugin's login and tenant switching work.
+      opensearch.ssl.verificationMode: none
+      opensearch.requestHeadersWhitelist: [authorization, securitytenant]
+      opensearch_security.multitenancy.enabled: true
+      opensearch_security.multitenancy.tenants.preferred: [Private, Global]
+      opensearch_security.readonly_mode.roles: [kibana_read_only]
+      opensearch_security.cookie.secure: false
+
+      # The enhanced Discover experience.
+      data_source.enabled: {{ opensearch_dashboards_enhanced_discover | bool | lower }}
+      workspace.enabled: {{ opensearch_dashboards_enhanced_discover | bool | lower }}
+      explore.enabled: {{ opensearch_dashboards_enhanced_discover | bool | lower }}
+  # opensearch.hosts, username and password are deliberately NOT here. They
+  # stay as env vars: the password comes from a Secret, and a ConfigMap is
+  # world-readable in the namespace. The entrypoint turns them into CLI
+  # args, which outrank this file, so the two cannot disagree.
+
+- name: Store the OpenSearch Dashboards configuration
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: opensearch-dashboards-config
+        namespace: "{{ openrag_opensearch_namespace }}"
+        labels:
+          app: opensearch-dashboards
+      data:
+        opensearch_dashboards.yml: "{{ opensearch_dashboards_config }}"
+
 # Must track the server's major line: Dashboards refuses to start against an
 # OpenSearch it does not match, and the error names a version rather than the
 # mismatch. Both are 3.8.0 as shipped.
@@ -36,6 +93,12 @@
           metadata:
             labels:
               app: opensearch-dashboards
+            annotations:
+              # Rolls the pod when the config changes. A ConfigMap edit on
+              # its own does not restart anything, and a subPath mount does
+              # not even pick the new content up live - without this the
+              # settings would land in the cluster and not in the process.
+              checksum/config: "{{ opensearch_dashboards_config | hash('sha1') }}"
           spec:
             # Asked for explicitly, and that is the whole point. The image
             # declares USER 1000 and owns its files as 1000, but with no
@@ -76,6 +139,13 @@
                       secretKeyRef:
                         name: opensearch-admin
                         key: password
+                volumeMounts:
+                  # subPath, so only this one file is replaced. A plain
+                  # mount would shadow the whole config directory and take
+                  # node.options and the bundled certs with it.
+                  - name: config
+                    mountPath: /usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+                    subPath: opensearch_dashboards.yml
                 resources:
                   requests:
                     cpu: 100m
@@ -83,6 +153,10 @@
                   limits:
                     cpu: "1"
                     memory: 2Gi
+            volumes:
+              - name: config
+                configMap:
+                  name: opensearch-dashboards-config
 
 - name: Expose OpenSearch Dashboards
   kubernetes.core.k8s:
