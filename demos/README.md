@@ -4,6 +4,23 @@ Six things this cluster can be shown doing, all built against a live
 deployment and all runnable from a checkout. Every one of them answers a
 question with evidence rather than asserting a capability.
 
+## In plain English
+
+Most of these demos are about one idea: **when you build something with AI,
+you are making choices you cannot eyeball.** Which search engine finds the
+right document? Is the answer any good? Which wording of the instruction
+works best? People normally settle those by argument, or by whoever is most
+confident in the room.
+
+MLflow is the tool that turns those arguments into measurements. It records
+what you tried, what the conditions were, and what came out — so the answer
+survives the meeting, and you can check it again in six months.
+
+The demos below each pick one such question and answer it properly. Two of
+them (4 and 5) are about a different thing: getting a trained model out of
+somebody's laptop and onto the cluster where it can actually serve
+requests.
+
 They are Kubernetes Jobs rather than notebooks, deliberately: a Job is
 reproducible, lives in git, and re-runs with one command. The two
 workbenches exist for the interactive half of the story.

@@ -129,6 +129,42 @@ verify_resources:
     condition: MilvusReady
     expect: "True"
 
+  # The model this whole platform exists to serve, and it was unchecked.
+  # model_serving's readiness wait carries ignore_errors: true, so a model
+  # that never comes up does not fail the play - it just leaves a dead
+  # InferenceService behind a green PLAY RECAP. This is the check that
+  # closes that hole.
+  - label: "Served model"
+    gate: true
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace | default('qwen3-4b') }}"
+    name: "{{ model_name }}"
+    check: condition
+    condition: Ready
+    expect: "True"
+
+  # Created by model_serving for the Gen AI playground's own storage.
+  # Nothing else notices if it is down.
+  - label: "Gen AI playground"
+    # Created from the dashboard on first use, NOT by this playbook, so an
+    # ungated entry would report "not found" on every cluster where nobody
+    # has opened the Gen AI studio. Set genai_playground_name in
+    # group_vars/all.yml on clusters that have one.
+    #
+    # HealthCheck rather than the Deployment: it is what the ogx operator
+    # flips when the pod fails to serve. That distinction matters here -
+    # this component validates its whole config at startup and exits 0 on
+    # failure, so it can sit in CrashLoopBackOff looking like a clean exit.
+    gate: "{{ (genai_playground_name | default('')) | length > 0 }}"
+    api_version: ogx.io/v1beta1
+    kind: OGXServer
+    namespace: "{{ model_namespace | default('qwen3-4b') }}"
+    name: "{{ genai_playground_name | default('') }}"
+    check: condition
+    condition: HealthCheck
+    expect: "True"
+
   # Checked separately from MilvusReady because it is the one that fails when
   # the NooBaa bucket, its credentials or the S3 endpoint are wrong - and
   # that failure leaves the pod Running, so nothing else catches it.
@@ -155,6 +191,7 @@ verify_workloads:
   - {label: "Text embeddings",    gate: "{{ deploy_openrag | default(false) }}", ns: "{{ openrag_namespace | default('openrag') }}", name: text-embeddings}
   - {label: "OpenSearch Dashboards", gate: "{{ (deploy_openrag | default(false)) and (openrag_deploy_dashboards | default(false)) }}", ns: "{{ openrag_opensearch_namespace | default('opensearch') }}", name: opensearch-dashboards}
   - {label: "MLflow PostgreSQL",  gate: "{{ deploy_mlflow_server | default(true) }}", ns: "{{ rhoai_feature_namespace | default('redhat-ods-applications') }}", name: mlflow-db}
+  - {label: "Gen AI pgvector",    gate: true, ns: "{{ model_namespace | default('qwen3-4b') }}", name: genai-pgvector}
   - {label: "Milvus operator",    gate: "{{ deploy_milvus | default(false) }}", ns: "{{ milvus_operator_namespace | default('milvus-operator') }}", name: milvus-operator}
   # The operator names the Deployment <cr>-milvus-<component>, so a standalone
   # instance called milvus gives milvus-milvus-standalone.
