@@ -1,0 +1,43 @@
+---
+# Fetches AutoRAG's published sample corpus and uploads it to the
+# autorag-data bucket. Reads bucket name and credentials from the
+# ObjectBucketClaim's own generated ConfigMap and Secret, so nothing about
+# the storage is hardcoded and no credential is written by hand.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: autorag-seed
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      containers:
+        - name: seed
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs boto3
+              export PYTHONPATH=/tmp/pylibs
+              python /app/seed_data.py
+          env:
+            - name: S3_ENDPOINT
+              value: https://s3.openshift-storage.svc:443
+            - name: BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: autorag-data, key: BUCKET_NAME}}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: autorag-data, key: AWS_ACCESS_KEY_ID}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: autorag-data, key: AWS_SECRET_ACCESS_KEY}}
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+      volumes:
+        - name: script
+          configMap: {name: autorag-seed-script}

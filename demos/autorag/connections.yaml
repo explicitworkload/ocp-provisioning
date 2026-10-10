@@ -1,0 +1,45 @@
+---
+# The two RHOAI Connections AutoRAG needs, beyond the Pipeline Server.
+#
+# An RHOAI "Connection" is just a Secret with dashboard labels and a
+# connection-type annotation, which is why these are plain Secrets.
+#
+# The S3 one is NOT in this file. It is the Secret the autorag-data
+# ObjectBucketClaim generates, patched in place with the connection
+# metadata and the three non-secret fields the dashboard needs:
+#
+#   oc patch secret autorag-data -n rag-eval --type=merge -p '{
+#     "metadata":{
+#       "labels":{"opendatahub.io/dashboard":"true","opendatahub.io/managed":"true"},
+#       "annotations":{"opendatahub.io/connection-type-ref":"s3",
+#                      "openshift.io/display-name":"AutoRAG data (documents + benchmark)"}},
+#     "stringData":{"AWS_S3_ENDPOINT":"https://s3.openshift-storage.svc:443",
+#                   "AWS_S3_BUCKET":"<from the autorag-data ConfigMap>",
+#                   "AWS_DEFAULT_REGION":"us-east-1"}}'
+#
+# Patching rather than creating a second Secret keeps exactly one copy of
+# the credential, owned by the claim, so deleting the OBC removes the
+# bucket, the keys and the connection together.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llama-stack-conn
+  namespace: rag-eval
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/managed: "true"
+  annotations:
+    opendatahub.io/connection-type-ref: uri-v1
+    openshift.io/display-name: "Llama Stack (Gen AI playground)"
+    openshift.io/description: "The RAG stack AutoRAG optimises against"
+type: Opaque
+stringData:
+  # The Gen AI playground IS a llama-stack server - it serves the
+  # llama-stack API on 8321, with Milvus registered as a vector store and
+  # the LiteLLM-fronted models as inference providers. No separate
+  # deployment is needed.
+  LLAMA_STACK_CLIENT_BASE_URL: "http://lsd-genai-playground-service.qwen3-4b.svc.cluster.local:8321"
+  # A placeholder, not a redaction. That endpoint answers /v1/models
+  # unauthenticated in-cluster, so there is no credential to supply - but
+  # the pipeline requires the key to be present.
+  LLAMA_STACK_CLIENT_API_KEY: "not-required"
