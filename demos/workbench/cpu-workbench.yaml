@@ -33,7 +33,14 @@ metadata:
     openshift.io/description: "Data Science workbench for exploring the MLflow demos interactively"
     opendatahub.io/image-display-name: "Jupyter | Data Science | CPU | Python 3.12"
     notebooks.opendatahub.io/last-image-selection: "s2i-generic-data-science-notebook:3.5"
+    # Legacy, and a no-op here: no oauth-proxy sidecar is injected.
+    # Authentication happens at the data-science-gateway. See the note in
+    # gpu-workbench.yaml.
     notebooks.opendatahub.io/inject-oauth: "true"
+    # Without this the dashboard's Hardware profile column reads "No
+    # hardware profile" and the sizing here is invisible in the UI.
+    opendatahub.io/hardware-profile-name: cpu-only
+    opendatahub.io/hardware-profile-namespace: rag-eval
 spec:
   template:
     spec:

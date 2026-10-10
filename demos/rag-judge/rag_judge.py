@@ -27,6 +27,8 @@ import time
 import mlflow
 import requests
 import urllib3
+
+from usage import record_usage
 from mlflow.genai.scorers import Correctness, Guidelines, RelevanceToQuery
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -75,7 +77,12 @@ def llm(prompt, model=None, max_tokens=400):
               "chat_template_kwargs": {"enable_thinking": False}},
         verify=False, timeout=180)
     r.raise_for_status()
-    c = r.json()["choices"][0]
+    body = r.json()
+    c = body["choices"][0]
+    # LiteLLM returns a usage block on every response. Recording it on the
+    # active span is what makes MLflow's Token usage and Tokens per trace
+    # panels show anything; discarding it is why they read zero.
+    record_usage(body.get("usage") or {}, r.headers)
     out = (c["message"].get("content") or "").strip()
     if not out:
         raise RuntimeError(f"empty content (finish_reason={c.get('finish_reason')})")

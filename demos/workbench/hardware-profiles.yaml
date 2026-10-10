@@ -1,0 +1,124 @@
+---
+# Hardware profiles for the rag-eval project.
+#
+# Profiles are what the dashboard offers in the "Hardware profile" dropdown
+# when someone creates a workbench or deployment. Without one in the
+# namespace, the column reads "No hardware profile" and the user is left
+# typing CPU and memory by hand with nothing stopping them asking for a card
+# the cluster does not have.
+#
+# These pin the INSTANCE TYPE, which the stock gpu-profile in
+# redhat-ods-applications does not: it selects only
+# nvidia.com/gpu.present: "true", so it will place you on a 15 GiB T4 or a
+# 46 GiB L40S depending on what the scheduler feels like. That difference
+# decides whether a fine-tune runs in bf16 or not at all, so it should not
+# be left to chance.
+#
+# Note the tolerations are inert on this cluster - the gpu_worker role
+# creates GPU MachineSets with no taints at all. They are kept because they
+# cost nothing and matter on any cluster where the nodes ARE tainted, which
+# is the more usual arrangement.
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: cpu-only
+  namespace: rag-eval
+  annotations:
+    opendatahub.io/display-name: "CPU only"
+    opendatahub.io/description: "No accelerator. For exploring results, querying the corpus, and the tabular demo."
+    opendatahub.io/disabled: "false"
+    opendatahub.io/dashboard-feature-visibility: '[]'
+spec:
+  identifiers:
+    - identifier: cpu
+      displayName: CPU
+      resourceType: CPU
+      minCount: 1
+      maxCount: "8"
+      defaultCount: "1"
+    - identifier: memory
+      displayName: Memory
+      resourceType: Memory
+      minCount: "1Gi"
+      maxCount: "16Gi"
+      defaultCount: "4Gi"
+---
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: nvidia-t4
+  namespace: rag-eval
+  annotations:
+    opendatahub.io/display-name: "NVIDIA T4 (16 GiB)"
+    opendatahub.io/description: "1x Tesla T4 on g4dn.4xlarge. Turing: fp16 only, no bf16 and no Flash Attention 2. Fine for inference, awkward for training."
+    opendatahub.io/disabled: "false"
+    opendatahub.io/dashboard-feature-visibility: '[]'
+spec:
+  identifiers:
+    - identifier: cpu
+      displayName: CPU
+      resourceType: CPU
+      minCount: 1
+      maxCount: "16"
+      defaultCount: "2"
+    - identifier: memory
+      displayName: Memory
+      resourceType: Memory
+      minCount: "1Gi"
+      maxCount: "60Gi"
+      defaultCount: "8Gi"
+    - identifier: nvidia.com/gpu
+      displayName: GPU
+      resourceType: Accelerator
+      minCount: 1
+      maxCount: 1
+      defaultCount: 1
+  scheduling:
+    type: Node
+    node:
+      nodeSelector:
+        node.kubernetes.io/instance-type: g4dn.4xlarge
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+---
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: nvidia-l40s
+  namespace: rag-eval
+  annotations:
+    opendatahub.io/display-name: "NVIDIA L40S (48 GiB)"
+    opendatahub.io/description: "1x L40S on g6e.4xlarge. Ada Lovelace: bf16 and Flash Attention 2 both work. The one to pick for fine-tuning."
+    opendatahub.io/disabled: "false"
+    opendatahub.io/dashboard-feature-visibility: '[]'
+spec:
+  identifiers:
+    - identifier: cpu
+      displayName: CPU
+      resourceType: CPU
+      minCount: 1
+      maxCount: "16"
+      defaultCount: "4"
+    - identifier: memory
+      displayName: Memory
+      resourceType: Memory
+      minCount: "1Gi"
+      maxCount: "120Gi"
+      defaultCount: "16Gi"
+    - identifier: nvidia.com/gpu
+      displayName: GPU
+      resourceType: Accelerator
+      minCount: 1
+      maxCount: 1
+      defaultCount: 1
+  scheduling:
+    type: Node
+    node:
+      nodeSelector:
+        node.kubernetes.io/instance-type: g6e.4xlarge
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

@@ -51,10 +51,17 @@ metadata:
     # UI shows the bare image reference.
     opendatahub.io/image-display-name: "Jupyter | PyTorch | CUDA | Python 3.12"
     notebooks.opendatahub.io/last-image-selection: "pytorch:3.5"
-    # The notebook controller injects an oauth-proxy sidecar, so the
-    # workbench is reachable only by users who can authenticate to the
-    # cluster rather than by anyone who finds the Route.
+    # Legacy, and a no-op on this cluster: no oauth-proxy sidecar is
+    # injected (the pod runs a single container). Authentication is done
+    # at the data-science-gateway, which fronts the workbench on
+    # /notebook/<ns>/<name> and answers 302 to anyone unauthenticated.
+    # Kept because removing it is not worth a pod restart; do not rely on
+    # it for protection.
     notebooks.opendatahub.io/inject-oauth: "true"
+    # Without this the dashboard's Hardware profile column reads "No
+    # hardware profile" and the sizing here is invisible in the UI.
+    opendatahub.io/hardware-profile-name: nvidia-l40s
+    opendatahub.io/hardware-profile-namespace: rag-eval
 spec:
   template:
     spec:
