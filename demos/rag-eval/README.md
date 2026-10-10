@@ -24,6 +24,12 @@ The Job expects a namespace prepared like this:
 
 ```bash
 oc create ns rag-eval
+# Makes RHOAI treat the namespace as a Data Science Project, so it appears
+# in the dashboard's Projects list with the AI badge rather than as a plain
+# namespace. Without it the Deployments, Workbenches and Pipelines tabs are
+# not offered for it at all.
+oc label ns rag-eval opendatahub.io/dashboard=true
+oc annotate ns rag-eval openshift.io/display-name="RAG Eval & MLflow Demos"
 oc create sa rag-eval -n rag-eval
 oc create rolebinding rag-eval-admin --clusterrole=admin \
   --serviceaccount=rag-eval:rag-eval -n rag-eval

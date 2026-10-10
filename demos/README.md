@@ -1,0 +1,100 @@
+# Demos
+
+Six things this cluster can be shown doing, all built against a live
+deployment and all runnable from a checkout. Every one of them answers a
+question with evidence rather than asserting a capability.
+
+They are Kubernetes Jobs rather than notebooks, deliberately: a Job is
+reproducible, lives in git, and re-runs with one command. The two
+workbenches exist for the interactive half of the story.
+
+Each demo has two documents: a **README** explaining how it works and what
+is easy to get wrong, and a **WALKTHROUGH** scripting how to present it.
+
+| # | Demo | Shows | GPU | Runtime |
+|---|------|-------|-----|---------|
+| 1 | [rag-eval](rag-eval/) | Retrieval A/B: OpenSearch BM25 vs OpenSearch kNN vs Milvus, tracked in MLflow | no | ~100s |
+| 2 | [rag-judge](rag-judge/) | Tracing + LLM judges scoring answer quality | no | ~2.5m |
+| 3 | [prompt-versions](prompt-versions/) | Prompt Registry: three versions, evaluated head to head | no | ~4m |
+| 4 | [tabular-mlops](tabular-mlops/) | Classic MLOps: sklearn grid, autolog, compare, register | no | ~2m |
+| 5 | [model-serving](model-serving/) | The registry → KServe hop, with a live prediction | no | ~3m |
+| 6 | [workbench](workbench/) | Interactive Jupyter, CPU and L40S GPU | optional | n/a |
+
+## Which to show
+
+**If you have ten minutes:** demo 1, then demo 5. One measures something
+nobody knew; the other completes a lifecycle people assume is harder than
+it is.
+
+**If the audience is LLM-focused:** 1 → 2 → 3. That is a coherent arc —
+*does retrieval find the right thing, are the answers any good, and which
+prompt should we ship* — and each builds on the last.
+
+**If there are traditional data scientists in the room:** 4 → 5. No LLMs,
+no GPU, and the registry-to-serving handoff is the part that makes it real.
+
+**If you want one slide that justifies the platform:** demo 1's result.
+A dedicated vector database and a search engine doing vectors on the side
+retrieve *identically*; the choice is latency, not quality. Nobody believes
+that from an argument.
+
+## Dependencies between them
+
+```
+tabular-mlops ──registers a model──▶ model-serving
+rag-eval ──same corpus, same Q&A pattern──▶ rag-judge ──▶ prompt-versions
+```
+
+- **model-serving requires tabular-mlops** to have run; it serves what that
+  demo registers.
+- rag-eval, rag-judge and prompt-versions are independent of each other but
+  all need OpenRAG deployed with an ingested corpus.
+- The workbenches need nothing.
+
+## Prerequisites
+
+All of them need the `rag-eval` namespace prepared once — see
+[rag-eval/README.md](rag-eval/README.md#running-it) for the exact commands.
+It creates the namespace, labels it as a Data Science Project, and makes the
+ServiceAccount and credentials Secret the Jobs share.
+
+On the cluster itself:
+
+| Needed by | What |
+|---|---|
+| 1, 2, 3 | OpenRAG deployed (`deploy_openrag=true`) with an ingested corpus |
+| 1 | Milvus deployed (`deploy_milvus=true`) |
+| 1, 2, 3 | LiteLLM serving a chat model and `bge-small-en-v1.5` |
+| 4, 5 | Nothing beyond MLflow and ODF |
+| all | RHOAI's MLflow — see [rag-eval/README.md](rag-eval/README.md#talking-to-rhoais-mlflow) |
+
+## Two things that will bite you
+
+**Keep `?workspace=<namespace>` on the MLflow UI URL.** Workspaces map 1:1
+to namespaces. Open the bare path and you land in a different workspace with
+an empty experiment list, which looks exactly like "nothing ever ran". This
+is the single most likely way a live demo fails.
+
+**Demos 1-3 generate with a MaaS model, not the cluster's own GPU model.**
+That is deliberate. The GPU node went down twice while these were being
+built, taking `qwen3-4b` with it. Set `GEN_MODEL=qwen3-4b` to exercise the
+local model when you want to show it; leave it alone when you want the demo
+to survive the hardware.
+
+## Where the results live
+
+```
+MLflow UI   https://<data-science-gateway>/mlflow/#/experiments/<id>?workspace=rag-eval
+RHOAI       https://<rhods-dashboard>/projects/rag-eval
+```
+
+| Experiment | From |
+|---|---|
+| `openrag-retrieval-ab` | demo 1 |
+| `openrag-answer-quality` | demo 2 |
+| `openrag-prompt-versions` | demo 3 |
+| `breast-cancer-tabular` | demo 4 |
+
+Plus a registered model (`breast-cancer-classifier`), a prompt
+(`openrag-rag-answer`, three versions), and a served InferenceService
+(`breast-cancer`).

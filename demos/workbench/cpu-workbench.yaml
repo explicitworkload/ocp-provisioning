@@ -1,0 +1,109 @@
+---
+# A CPU Jupyter workbench for walking through the existing demos
+# interactively - loading MLflow runs, querying the OpenSearch corpus,
+# poking at the registered model - without holding a GPU to do it.
+#
+# That is the point of having both: browsing results needs no accelerator,
+# and taking a card out of the pool to read a dataframe is a waste on a
+# cluster with three of them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rag-eval-cpu-workbench
+  namespace: rag-eval
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: gp3-csi
+---
+apiVersion: kubeflow.org/v1
+kind: Notebook
+metadata:
+  name: rag-eval-cpu-workbench
+  namespace: rag-eval
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/odh-managed: "true"
+  annotations:
+    openshift.io/display-name: "RAG Eval Workbench (CPU)"
+    openshift.io/description: "Data Science workbench for exploring the MLflow demos interactively"
+    opendatahub.io/image-display-name: "Jupyter | Data Science | CPU | Python 3.12"
+    notebooks.opendatahub.io/last-image-selection: "s2i-generic-data-science-notebook:3.5"
+    notebooks.opendatahub.io/inject-oauth: "true"
+spec:
+  template:
+    spec:
+      # Explicitly keep this off the GPU nodes. The obvious assumption -
+      # that the nvidia.com/gpu taint repels it - is false on this cluster:
+      # the gpu_worker role creates the MachineSets without any taint, so
+      # GPU nodes accept ordinary workloads and this pod landed on a T4 box
+      # the first time. A pod that requests no GPU does not consume one, but
+      # it does compete for CPU and memory on the most expensive nodes here.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/gpu
+                    operator: DoesNotExist
+      containers:
+        - name: rag-eval-cpu-workbench
+          image: registry.redhat.io/rhoai/odh-workbench-jupyter-datascience-cpu-py312-rhel9@sha256:206018cabeb3389fcfb554cb1850c82e509483a2f98bf963d82031303adaaee5
+          imagePullPolicy: Always
+          workingDir: /opt/app-root/src
+          env:
+            - name: NOTEBOOK_ARGS
+              value: |-
+                --ServerApp.port=8888
+                --ServerApp.token=''
+                --ServerApp.password=''
+                --ServerApp.base_url=/notebook/rag-eval/rag-eval-cpu-workbench
+            # Pre-wired so the first cell can talk to MLflow without
+            # copying URLs out of a README.
+            - name: MLFLOW_TRACKING_URI
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+            - name: MLFLOW_TRACKING_INSECURE_TLS
+              value: "true"
+            - name: MLFLOW_WORKSPACE
+              value: rag-eval
+            # The demos' other two endpoints, for the same reason.
+            - name: OPENSEARCH_URL
+              value: https://opensearch-node.opensearch.svc.cluster.local:9200
+            - name: LITELLM_URL
+              value: http://litellm.litellm.svc.cluster.local:4000
+          ports:
+            - name: notebook-port
+              containerPort: 8888
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          volumeMounts:
+            - name: rag-eval-cpu-workbench
+              mountPath: /opt/app-root/src
+          livenessProbe:
+            httpGet:
+              path: /notebook/rag-eval/rag-eval-cpu-workbench/api
+              port: notebook-port
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /notebook/rag-eval/rag-eval-cpu-workbench/api
+              port: notebook-port
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 10
+      volumes:
+        - name: rag-eval-cpu-workbench
+          persistentVolumeClaim:
+            claimName: rag-eval-cpu-workbench

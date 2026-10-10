@@ -33,6 +33,8 @@ oc apply -f demos/model-serving/export-job.yaml
 
 # 3. runtime, credentials, and the InferenceService
 oc process -n redhat-ods-applications mlserver-runtime-template -o yaml | oc apply -n rag-eval -f -
+# ...then name it for the dashboard, or Deployments shows "Unknown Serving Runtime"
+./demos/model-serving/servingruntime-annotate.sh rag-eval
 oc apply -f demos/model-serving/inferenceservice.yaml   # edit the bucket name first
 
 # 4. prove it predicts
@@ -70,6 +72,13 @@ oc exec -n rag-eval probe -- python -c "import sklearn; print(sklearn.__version_
 whole prefix into `/mnt/models` and MLServer then looks for `model.joblib`
 inside it. Pointing at the file gives a directory containing a file where a
 directory is expected.
+
+**The dashboard names the runtime from the ServingRuntime, not the
+InferenceService.** Without `opendatahub.io/template-name` and
+`template-display-name` on the *ServingRuntime*, the Deployments page reads
+"Unknown Serving Runtime" against a healthy model. Annotating the
+InferenceService instead does nothing - that was the first thing tried here
+and it did not work. `oc process` of the template does not add them either.
 
 **The predictor Service is headless, so use port 8080.** `ClusterIP: None`
 means the `80 → 8080` mapping is never applied — DNS resolves straight to

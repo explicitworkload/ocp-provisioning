@@ -12,8 +12,22 @@ kind: InferenceService
 metadata:
   name: breast-cancer
   namespace: rag-eval
+  labels:
+    # Without this the deployment does not appear as a dashboard-managed
+    # model at all.
+    opendatahub.io/dashboard: "true"
   annotations:
     serving.kserve.io/deploymentMode: Standard
+    # The RHOAI dashboard resolves the runtime's display name from these
+    # annotations on the InferenceService - NOT from the ServingRuntime,
+    # which already carries its own display name. Omit them and the
+    # Deployments page shows "Unknown Serving Runtime" against a model that
+    # is serving perfectly well. The model_serving role sets the same pair
+    # for its vLLM InferenceService.
+    opendatahub.io/template-name: mlserver-runtime-template
+    opendatahub.io/template-display-name: "MLServer ServingRuntime for KServe"
+    openshift.io/display-name: "Breast cancer classifier (sklearn)"
+    openshift.io/description: "Registered from MLflow (breast-cancer-classifier v2)"
 spec:
   predictor:
     # Carries the annotated S3 credentials; without it the storage
