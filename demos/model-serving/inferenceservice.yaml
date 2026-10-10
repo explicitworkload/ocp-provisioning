@@ -1,0 +1,29 @@
+---
+# Serves the model the tabular demo registered, fetched from the NooBaa
+# bucket the export Job wrote it to. CPU only - mlserver-runtime is the
+# non-GPU runtime, so this leaves both T4s free.
+#
+# storageUri points at the PREFIX, not the file. KServe downloads the whole
+# prefix into /mnt/models and MLServer's sklearn runtime then looks for
+# model.joblib inside it; naming the object directly gives a model directory
+# with a file where MLServer expects a directory.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: breast-cancer
+  namespace: rag-eval
+  annotations:
+    serving.kserve.io/deploymentMode: Standard
+spec:
+  predictor:
+    # Carries the annotated S3 credentials; without it the storage
+    # initializer has no way to authenticate to NooBaa.
+    serviceAccountName: model-store-sa
+    model:
+      modelFormat:
+        name: sklearn
+      runtime: mlserver-runtime
+      storageUri: s3://model-artifacts-19c45ccd-ed00-4aac-bd71-1b93b0458536/breast-cancer
+      resources:
+        requests: {cpu: 200m, memory: 1Gi}
+        limits: {cpu: "1", memory: 2Gi}

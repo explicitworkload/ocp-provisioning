@@ -1,0 +1,12 @@
+---
+# NooBaa bucket for model artifacts. Generates a Secret (credentials) and a
+# ConfigMap (BUCKET_NAME, BUCKET_HOST, BUCKET_PORT) of the same name, which
+# the export Job reads - so no storage details are hardcoded anywhere.
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: model-artifacts
+  namespace: rag-eval
+spec:
+  generateBucketName: model-artifacts
+  storageClassName: openshift-storage.noobaa.io

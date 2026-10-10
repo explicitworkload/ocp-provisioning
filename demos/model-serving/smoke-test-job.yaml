@@ -1,0 +1,42 @@
+---
+# A Ready InferenceService means the pod started, not that the model works.
+# This calls it with holdout rows the model never saw and checks the answers.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-test
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              # Same pin as the trainer, the exporter and the runtime image.
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                "scikit-learn==1.9.0" requests
+              export PYTHONPATH=/tmp/pylibs
+              python /app/smoke_test.py
+          env:
+            - name: PREDICTOR_URL
+              value: http://breast-cancer-predictor.rag-eval.svc.cluster.local:8080
+            - name: MODEL_NAME
+              value: breast-cancer
+            - name: N_ROWS
+              value: "20"
+            - name: SEED
+              value: "1337"
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+      volumes:
+        - name: script
+          configMap: {name: smoke-test-script}

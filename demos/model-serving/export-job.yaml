@@ -1,0 +1,58 @@
+---
+# Carries a registered MLflow model into the NooBaa bucket KServe fetches
+# from. The ObjectBucketClaim named model-artifacts generates both the
+# Secret (credentials) and the ConfigMap (bucket name and host) referenced
+# below, so this Job needs no hardcoded storage details.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: export-model
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      containers:
+        - name: export
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              # Same scikit-learn pin as the training job and the MLServer
+              # runtime image. All three have to agree or the pickle this
+              # writes is unreadable at inference time.
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                mlflow "scikit-learn==1.9.0" boto3
+              export PYTHONPATH=/tmp/pylibs
+              export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              python /app/export_to_s3.py
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+            - name: MLFLOW_TRACKING_INSECURE_TLS
+              value: "true"
+            - name: MLFLOW_WORKSPACE
+              value: rag-eval
+            - name: MODEL_NAME
+              value: breast-cancer-classifier
+            - name: S3_PREFIX
+              value: breast-cancer
+            - name: S3_ENDPOINT
+              value: https://s3.openshift-storage.svc:443
+            - name: BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: model-artifacts, key: BUCKET_NAME}}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: model-artifacts, key: AWS_ACCESS_KEY_ID}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: model-artifacts, key: AWS_SECRET_ACCESS_KEY}}
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+      volumes:
+        - name: script
+          configMap: {name: export-model-script}

@@ -21,8 +21,14 @@ spec:
               set -euo pipefail
               # Full mlflow, not skinny: mlflow.sklearn.autolog and the model
               # flavour live outside skinny.
+              # scikit-learn is pinned to the version inside the MLServer
+              # runtime image (odh-mlserver-rhel9 ships 1.9.0). A pickle is
+              # only reliably loadable by the version that wrote it, so
+              # training with anything else produces a model the cluster
+              # cannot serve - and the failure surfaces at inference, not
+              # here.
               pip install --quiet --no-cache-dir --target=/tmp/pylibs \
-                mlflow scikit-learn
+                mlflow "scikit-learn==1.9.0"
               export PYTHONPATH=/tmp/pylibs
               export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
               python /app/train.py
