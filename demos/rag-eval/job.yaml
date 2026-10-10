@@ -1,0 +1,73 @@
+---
+# Runs the retrieval A/B in-cluster rather than from a laptop, so every
+# endpoint is reached by cluster DNS and MLflow gets a real ServiceAccount
+# token. The namespace matters: RHOAI's MLflow maps a workspace 1:1 to a
+# Kubernetes namespace, so this Job logs into the "rag-eval" workspace
+# because that is the namespace it runs in.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rag-eval
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      containers:
+        - name: eval
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              # --target rather than a venv: restricted-v2 gives this pod an
+              # arbitrary UID whose HOME is not writable, so --user has
+              # nowhere to go.
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                mlflow-skinny pymilvus requests numpy
+              export PYTHONPATH=/tmp/pylibs
+              # MLflow authenticates with a Kubernetes bearer token
+              # (the server runs with --app-name=kubernetes-auth).
+              export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              python /app/rag_eval.py
+          env:
+            - name: OPENSEARCH_URL
+              value: https://opensearch-node.opensearch.svc.cluster.local:9200
+            - name: OPENSEARCH_PASSWORD
+              valueFrom: {secretKeyRef: {name: rag-eval-creds, key: OPENSEARCH_PASSWORD}}
+            - name: LITELLM_URL
+              value: http://litellm.litellm.svc.cluster.local:4000
+            - name: LITELLM_KEY
+              valueFrom: {secretKeyRef: {name: rag-eval-creds, key: LITELLM_KEY}}
+            - name: MILVUS_URI
+              value: http://milvus-milvus.milvus.svc.cluster.local:19530
+            - name: MLFLOW_TRACKING_URI
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+            # The server presents a service-serving certificate; the pod's
+            # trust bundle does not carry that CA by default.
+            - name: MLFLOW_TRACKING_INSECURE_TLS
+              value: "true"
+            - name: MLFLOW_WORKSPACE
+              value: rag-eval
+            - name: MLFLOW_EXPERIMENT
+              value: openrag-retrieval-ab
+            - name: N_QUESTIONS
+              value: "40"
+            - name: TOP_KS
+              value: "1,3,5,10"
+            # Which chunks get sampled for the question set. Change it and
+            # re-run to find out whether a result is stable or an artefact
+            # of this particular sample - which is the thing experiment
+            # tracking is actually for.
+            - name: SEED
+              value: "1337"
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+      volumes:
+        - name: script
+          configMap: {name: rag-eval-script}
