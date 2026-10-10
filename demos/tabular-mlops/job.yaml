@@ -1,0 +1,49 @@
+---
+# The CPU-only demo. No GPU, no inference endpoint, no corpus - so this is
+# the one that still runs when the model-serving stack is unhappy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tabular-mlops
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      containers:
+        - name: train
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              # Full mlflow, not skinny: mlflow.sklearn.autolog and the model
+              # flavour live outside skinny.
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                mlflow scikit-learn
+              export PYTHONPATH=/tmp/pylibs
+              export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              python /app/train.py
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+            - name: MLFLOW_TRACKING_INSECURE_TLS
+              value: "true"
+            - name: MLFLOW_WORKSPACE
+              value: rag-eval
+            - name: MLFLOW_EXPERIMENT
+              value: breast-cancer-tabular
+            - name: REGISTERED_NAME
+              value: breast-cancer-classifier
+            - name: SEED
+              value: "1337"
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "2", memory: 3Gi}
+      volumes:
+        - name: script
+          configMap: {name: tabular-mlops-script}

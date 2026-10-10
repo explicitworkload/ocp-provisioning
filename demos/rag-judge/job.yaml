@@ -1,0 +1,77 @@
+---
+# Traces the RAG pipeline and judges its answers. Same namespace and shape as
+# the rag-eval Job, so the ServiceAccount, credentials Secret and MLflow
+# workspace are already in place.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rag-judge
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      containers:
+        - name: judge
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              # Full mlflow here, not mlflow-skinny: the genai evaluate and
+              # scorer APIs are not in skinny. openai is what the judge
+              # provider uses to reach an OpenAI-compatible endpoint.
+              pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                mlflow openai requests
+              export PYTHONPATH=/tmp/pylibs
+              export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              python /app/rag_judge.py
+          env:
+            - name: OPENSEARCH_URL
+              value: https://opensearch-node.opensearch.svc.cluster.local:9200
+            - name: OPENSEARCH_PASSWORD
+              valueFrom: {secretKeyRef: {name: rag-eval-creds, key: OPENSEARCH_PASSWORD}}
+            - name: LITELLM_URL
+              value: http://litellm.litellm.svc.cluster.local:4000
+            - name: LITELLM_KEY
+              valueFrom: {secretKeyRef: {name: rag-eval-creds, key: LITELLM_KEY}}
+            # MLflow's judges reach their model through the openai provider,
+            # which reads these two. LiteLLM is OpenAI-compatible, so the
+            # judge and the model under test come down the same pipe.
+            - name: OPENAI_API_BASE
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: OPENAI_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: rag-eval-creds, key: LITELLM_KEY}}
+            - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+              value: openai:/granite-3-2-8b-instruct
+            # Deliberately NOT the local GPU model. granite is a MaaS
+            # endpoint, so this demo keeps working when the GPU node does not
+            # - which it did not, an hour before this was written.
+            - name: GEN_MODEL
+              value: granite-3-2-8b-instruct
+            - name: MLFLOW_TRACKING_URI
+              value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+            - name: MLFLOW_TRACKING_INSECURE_TLS
+              value: "true"
+            - name: MLFLOW_WORKSPACE
+              value: rag-eval
+            - name: MLFLOW_EXPERIMENT
+              value: openrag-answer-quality
+            - name: N_QUESTIONS
+              value: "12"
+            - name: TOP_K
+              value: "5"
+            - name: SEED
+              value: "1337"
+          volumeMounts:
+            - {name: script, mountPath: /app}
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "2", memory: 3Gi}
+      volumes:
+        - name: script
+          configMap: {name: rag-judge-script}
