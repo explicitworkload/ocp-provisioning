@@ -1,0 +1,88 @@
+---
+# Registers the judges on the experiment so they persist and appear in
+# MLflow's Judges tab. Passing scorers to mlflow.genai.evaluate() runs
+# them ad hoc - the scores land on the run, but nothing is stored about
+# the judges themselves, so that tab stays empty and the next evaluation
+# has to re-declare them in code.
+#
+# Run once per experiment, after prompt-versions.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-judges
+  namespace: rag-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      containers:
+      - args:
+        - "set -euo pipefail\n# Full mlflow here, not mlflow-skinny: the genai evaluate\
+          \ and\n# scorer APIs are not in skinny. openai is what the judge\n# provider\
+          \ uses to reach an OpenAI-compatible endpoint.\npip install --quiet --no-cache-dir\
+          \ --target=/tmp/pylibs \\\n  mlflow openai requests\nexport PYTHONPATH=/tmp/pylibs\n\
+          export MLFLOW_TRACKING_TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\"\
+          \npython /app/register_judges.py\n"
+        command:
+        - /bin/bash
+        - -lc
+        env:
+        - name: OPENSEARCH_URL
+          value: https://opensearch-node.opensearch.svc.cluster.local:9200
+        - name: OPENSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: OPENSEARCH_PASSWORD
+              name: rag-eval-creds
+        - name: LITELLM_URL
+          value: http://litellm.litellm.svc.cluster.local:4000
+        - name: LITELLM_KEY
+          valueFrom:
+            secretKeyRef:
+              key: LITELLM_KEY
+              name: rag-eval-creds
+        - name: OPENAI_API_BASE
+          value: http://litellm.litellm.svc.cluster.local:4000/v1
+        - name: OPENAI_BASE_URL
+          value: http://litellm.litellm.svc.cluster.local:4000/v1
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: LITELLM_KEY
+              name: rag-eval-creds
+        - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+          value: openai:/granite-3-2-8b-instruct
+        - name: GEN_MODEL
+          value: granite-3-2-8b-instruct
+        - name: MLFLOW_TRACKING_URI
+          value: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+        - name: MLFLOW_TRACKING_INSECURE_TLS
+          value: 'true'
+        - name: MLFLOW_WORKSPACE
+          value: rag-eval
+        - name: MLFLOW_EXPERIMENT
+          value: openrag-prompt-versions
+        - name: N_QUESTIONS
+          value: '10'
+        - name: TOP_K
+          value: '5'
+        - name: SEED
+          value: '1337'
+        image: registry.access.redhat.com/ubi9/python-312:latest
+        name: register
+        resources:
+          limits:
+            cpu: '2'
+            memory: 3Gi
+          requests:
+            cpu: 200m
+            memory: 512Mi
+        volumeMounts:
+        - mountPath: /app
+          name: script
+      restartPolicy: Never
+      serviceAccountName: rag-eval
+      volumes:
+      - configMap:
+          name: register-judges-script
+        name: script

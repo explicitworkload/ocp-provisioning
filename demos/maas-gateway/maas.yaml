@@ -1,0 +1,138 @@
+---
+# Model as a Service: every model LiteLLM serves, published through Red Hat
+# Connectivity Link (Kuadrant) on the data-science-gateway, with API-key
+# authentication and per-key rate limiting.
+#
+# LiteLLM is the target rather than the InferenceServices because it is the
+# only thing that sees ALL the models. Six of the eight are remote MaaS
+# endpoints that are not InferenceServices at all and never can be, so the
+# RHOAI-native LLMInferenceService path would govern exactly one of them.
+# Putting the aggregate endpoint behind the gateway covers the lot, and
+# changes nothing about the running models - so OpenRAG keeps working.
+#
+# Endpoint after this is applied:
+#   https://rh-ai.apps.<domain>/llm/v1/chat/completions
+# with   Authorization: APIKEY <key>
+
+# The gateway only admits routes from openshift-ingress and
+# redhat-ods-applications (its allowedRoutes selector names them
+# explicitly), so the HTTPRoute cannot live in the litellm namespace. It
+# lives here and reaches across, which the ReferenceGrant below permits.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: litellm-maas
+  namespace: redhat-ods-applications
+  labels:
+    app.kubernetes.io/part-of: maas
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: data-science-gateway
+      namespace: openshift-ingress
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /llm
+      # Strip the /llm prefix so LiteLLM sees the OpenAI paths it expects
+      # (/v1/chat/completions, /v1/models). Same pattern the platform's own
+      # mlflow route uses.
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: litellm
+          namespace: litellm
+          port: 4000
+          weight: 1
+---
+# Without this the cross-namespace backendRef above is silently refused and
+# the route reports ResolvedRefs=False.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-maas-route-to-litellm
+  namespace: litellm
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: redhat-ods-applications
+  to:
+    - group: ""
+      kind: Service
+      name: litellm
+---
+# API-key authentication, enforced by Authorino at the gateway.
+#
+# Keys are ordinary Secrets carrying the label the selector below matches,
+# so issuing a consumer a key is `oc create secret` - no separate identity
+# provider, and revocation is `oc delete secret`.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: litellm-maas-auth
+  namespace: redhat-ods-applications
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: litellm-maas
+  rules:
+    authentication:
+      api-key:
+        apiKey:
+          selector:
+            matchLabels:
+              kuadrant.io/auth-secret-for: litellm-maas
+          # Keys may live anywhere, so a team can hold its own.
+          allNamespaces: true
+        credentials:
+          # X-API-Key, NOT the Authorization header. The gateway's own
+          # authentication runs first as an unconditional, listener-wide
+          # ext_authz filter (data-science-authn-filter -> kube-auth-proxy)
+          # with no per-route exemption, and an ODH Lua filter OVERWRITES
+          # Authorization before Kuadrant is consulted. A key placed there
+          # is destroyed in transit, and Authorino reports UNAUTHENTICATED
+          # against a perfectly valid credential.
+          customHeader:
+            name: X-API-Key
+    response:
+      success:
+        filters:
+          # Hand the consumer's identity downstream, so LiteLLM's own logs
+          # attribute usage to a named consumer rather than to "the gateway".
+          identity:
+            json:
+              properties:
+                consumer:
+                  selector: auth.identity.metadata.annotations.kuadrant\.io/groups
+---
+# Per-key rate limiting, enforced by Limitador.
+#
+# Counted per API key rather than per route: one noisy consumer should not
+# exhaust the budget for everyone, which is what a route-wide limit does.
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: litellm-maas-ratelimit
+  namespace: redhat-ods-applications
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: litellm-maas
+  limits:
+    per-consumer:
+      rates:
+        - limit: 60
+          window: 1m
+      counters:
+        - expression: auth.identity.userid

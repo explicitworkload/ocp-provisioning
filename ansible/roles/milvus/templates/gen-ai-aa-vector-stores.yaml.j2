@@ -19,6 +19,34 @@ providers:
       provider_type: remote::milvus
       config:
         uri: http://{{ milvus_name }}-milvus.{{ milvus_namespace }}.svc.cluster.local:19530
+        # NOTE: this line has NO EFFECT today. Kept only so the intent is
+        # visible, and so it starts working if upstream adds the field.
+        #
+        # The problem it is aimed at is real: MilvusVectorIOConfig declares
+        # token as required-but-nullable, so a provider config without it
+        # does not merely degrade the vector store, it takes down the whole
+        # Gen AI playground. ogx validates every provider at startup,
+        # pydantic raises "1 validation error for MilvusVectorIOConfig:
+        # token Field required", and the process exits 0 - so the pod sits
+        # in CrashLoopBackOff with a clean exit code and nothing points
+        # here. It surfaces whenever someone first opens the Gen AI studio,
+        # which creates the OGXServer on demand - potentially days after
+        # this file was written.
+        #
+        # But this file is not passed through. The Gen AI BFF (the
+        # gen-ai-ui Deployment in redhat-ods-applications,
+        # github.com/opendatahub-io/gen-ai) unmarshals it into a typed Go
+        # struct - models.VectorStoreConfig is {Key, URI} - and re-emits
+        # llama-stack-config from that. Any key with no struct field is
+        # silently discarded, and there is no Token field, so no value of
+        # token can survive the compile. The ${env.X} substitutions visible
+        # in llama-stack-config are BFF-authored boilerplate, not reachable
+        # from here.
+        #
+        # The working fix is one level up: OGXServer.spec.overrideConfig
+        # points the playground at a ConfigMap the BFF does not own. See
+        # demos/README.md. Needs an upstream fix to be solved properly.
+        token: ""
 registered_resources:
   vector_stores:
     - vector_store_id: {{ milvus_vector_store_id }}
