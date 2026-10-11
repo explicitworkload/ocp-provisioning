@@ -305,6 +305,9 @@
                   # costs a little retrieval quality on those chunks. The
                   # alternative is failing the whole ingest, so: truncate.
                   - "--auto-truncate"
+                  # Separate limit, separate failure: how many chunks may
+                  # arrive in ONE request. See openrag_embedding_max_batch.
+                  - "--max-client-batch-size={{ openrag_embedding_max_batch }}"
                 ports:
                   - containerPort: 8080
                 env:
@@ -362,6 +365,26 @@
 # ---------------------------------------------------------------------------
 # OpenRAG itself
 # ---------------------------------------------------------------------------
+
+# force: true below rescues a checkout with local modifications. It does not
+# rescue one that is not a repository any more - an interrupted clone, or a
+# half-deleted directory. The git module decides "is this a repo" by looking
+# for .git/config, and when that is missing it falls back to git clone, which
+# then refuses a non-empty destination:
+#   fatal: destination path '/tmp/openrag-chart' already exists and is not an
+#   empty directory
+# That is terminal: the role fails identically on every subsequent run and
+# cannot repair itself. Clearing the remains first makes the next clone work.
+- name: Look for a usable OpenRAG checkout
+  ansible.builtin.stat:
+    path: "{{ openrag_checkout_dir }}/.git/config"
+  register: openrag_checkout_git
+
+- name: Clear a checkout that is no longer a repository
+  ansible.builtin.file:
+    path: "{{ openrag_checkout_dir }}"
+    state: absent
+  when: not openrag_checkout_git.stat.exists
 
 - name: Check out the OpenRAG chart
   ansible.builtin.git:

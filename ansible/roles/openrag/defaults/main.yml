@@ -37,6 +37,17 @@ openrag_embedding_image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
 openrag_embedding_model_id: BAAI/bge-small-en-v1.5
 openrag_embedding_model_name: bge-small-en-v1.5
 
+# How many inputs one embeddings request may carry. TEI defaults to 32, which
+# is fine for OpenRAG - it ingests a document at a time - and far too low for
+# anything that indexes a whole corpus in one call. AutoRAG does exactly that
+# and got a 413 from TEI, relayed by LiteLLM as a 413, surfaced three layers
+# up as "Unable to embed and upload documents to vector store":
+#   batch size 289 > maximum allowed batch size 32
+# This is a validation limit only. TEI still splits the work internally by
+# --max-batch-tokens, so raising it costs queue time on a big request, not
+# memory.
+openrag_embedding_max_batch: 2048
+
 # --- Docling ----------------------------------------------------------------
 openrag_docling_image: quay.io/docling-project/docling-serve:latest
 
