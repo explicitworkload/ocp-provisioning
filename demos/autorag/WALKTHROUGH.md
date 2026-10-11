@@ -31,6 +31,14 @@ ansible-playbook site.yml --tags demos
 Check before you present: the Pipeline Server should be Ready, and the
 `rag-eval` project should list two Connections.
 
+**Open the finished run and confirm the leaderboard renders, before the
+audience is in the room.** A run started before the artifact endpoint was
+fixed will show *"Unable to fetch RAG patterns"* forever — the endpoint is
+recorded per artifact when the artifact is written, so the fix does not
+reach backwards. On this cluster the good run is
+`autorag-artifact-endpoint`; `autorag-dim-fix` and anything older will
+show the error no matter what.
+
 ## 1. The callback (1 min)
 
 **Tell** — Return to demo 1's scatter plot for a moment.
@@ -66,8 +74,11 @@ Check before you present: the Pipeline Server should be Ready, and the
 5. **Evaluation dataset** → **S3** → `benchmark_data.json`
 6. **Vector I/O provider** → `milvus (remote Milvus)`
 7. **Optimization metric** → `Overall score`
-8. Leave **Run preset** and **Model configuration** at their defaults
-9. **Create run**
+8. **Model configuration → Edit** → drop the two `sentence-transformers/…`
+   embedding models, keep `endpoint-1/bge-small-en-v1.5`. Skipping this
+   fails the run several minutes in; see the last note below.
+9. Leave **Run preset** at its default
+10. **Create run**
 
 **Tell** —
 > "Note what I did not have to do: pick the models. It pre-filled six
@@ -89,14 +100,48 @@ Check before you present: the Pipeline Server should be Ready, and the
 > text, build the search space, optimise, evaluate, publish. Nothing about
 > it is a black box; you can open any step."
 
-## 5. The leaderboard (2 min, on a finished run)
+## 5. The leaderboard (3 min, on a finished run) — THE PAYOFF
 
-**Show** — Open a completed run's artifacts → the HTML leaderboard.
+Do not create a run and wait. Have a finished one open in a tab and switch
+to it. On this cluster that is **`autorag-artifact-endpoint`**.
+
+**Show** — the run's results page, and the ranked table.
+
+**Tell** — read the top and the bottom, nothing in between.
+
+> "Eight configurations, ranked. The top one scores 0.82. The bottom one
+> scores 0.52 — and look at what makes it different."
+
+**Show** — point at the **search mode** column: seven say `hybrid`, one
+says `vector`.
 
 **Tell** —
-> "A ranked table of RAG patterns, and for each one the config that
-> produced it plus indexing and inference notebooks. The output is not just
-> a number — it is the thing you deploy."
+> "That is the only pure-vector configuration in the set, and it is last by
+> twenty-seven points. Everything else varies chunk size, overlap, reranker,
+> generation model — and lands within five points of each other. On this
+> corpus, none of those mattered much. One thing did."
+
+**Show** — now the **context correctness** column: `0.41` on that row,
+`0.64`–`0.88` on the others.
+
+**Tell** — this is the sentence to land.
+> "And this tells us *why*. Context correctness is whether the right
+> passage was retrieved at all. Vector-only retrieval is what failed. The
+> answer scores fall as a consequence — the model is not worse, it is being
+> handed worse context. That distinction is the difference between
+> replacing your model and fixing your retriever, and it is the kind of
+> thing you cannot tell from one aggregate number."
+
+**Tell** — close on what you are holding.
+> "Each row carries the config that produced it, plus indexing and
+> inference notebooks. The output is not a number, it is the thing you
+> deploy."
+
+### If you want one more beat
+
+It replicates. A six-pattern run earlier the same day put its single
+vector-only configuration last at 0.55 while every hybrid one scored
+0.80–0.84. Two runs, different pattern counts, same answer.
 
 ## Say these before anyone else does
 
@@ -112,6 +157,10 @@ actual work, and AutoRAG does not do it for you.
 tok/s, while the other five are MaaS endpoints. If the run drags, that is
 usually why.
 
-**Two of the three default embedding models are not served by this
-cluster** — they are `sentence-transformers` paths the pipeline downloads
-and runs on CPU. Fine, but slower, and invisible to LiteLLM's cost figures.
+**Two of the three default embedding models cannot be fetched here.** They
+are `sentence-transformers` paths, and the pod cannot download them — a
+run that keeps them fails in Search Space Preparation. If you create a run
+live, drop them under *Model configuration → Edit* and keep
+`endpoint-1/bge-small-en-v1.5`. This is why step 3 says to leave the
+defaults alone only for the walk-through of the form; a run you actually
+submit needs this edit.
