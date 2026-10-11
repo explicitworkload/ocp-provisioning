@@ -37,7 +37,7 @@ is easy to get wrong, and a **WALKTHROUGH** scripting how to present it.
 | 4 | [tabular-mlops](tabular-mlops/) | Classic MLOps: sklearn grid, autolog, compare, register | no | ~2m |
 | 5 | [model-serving](model-serving/) | The registry → KServe hop, with a live prediction | no | ~3m |
 | 6 | [workbench](workbench/) | Interactive Jupyter, CPU and L40S GPU | optional | n/a |
-| 7 | [autorag](autorag/) | AutoRAG: the platform running demo 1's sweep automatically, over a much larger space | no | run ~42m |
+| 7 | [autorag](autorag/) | AutoRAG: the platform running demo 1's sweep automatically, over a much larger space | no | run ~20-40m |
 
 ## Which to show
 
@@ -59,9 +59,12 @@ sweep the platform runs.
 **If you want one slide that justifies the platform:** demo 1's result
 next to demo 7's. Demo 1: a dedicated vector database and a search engine
 doing vectors on the side retrieve *identically* — the choice is latency,
-not quality. Demo 7, sweeping six configurations: the only one that used
-vector search *on its own* scored 0.55 while every hybrid configuration
-landed between 0.80 and 0.84, whatever the model or chunk size.
+not quality. Demo 7, sweeping eight configurations: the only one that used
+vector search *on its own* scored 0.52 while every hybrid configuration
+landed between 0.77 and 0.82, whatever the model or chunk size — and its
+*context correctness* was 0.41 against their 0.64–0.88, so it is retrieval
+that fails and the answers that suffer for it. A six-pattern run earlier
+the same day said the same thing.
 
 So: which vector store you buy barely matters, and whether you use it
 alone matters enormously. Both are counterintuitive, both are measured,

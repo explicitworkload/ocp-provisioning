@@ -229,26 +229,35 @@ For the embedding set, keep `endpoint-1/bge-small-en-v1.5` and drop the two
 
 ### What a finished run actually said
 
-The first run to complete on sandbox3508, 2026-10-11. Six patterns, 42
-minutes wall clock, `overall_score`:
+sandbox3508, 2026-10-11, `overall_score`. Eight patterns, read off the
+leaderboard the dashboard renders:
 
-| Pattern | Score | Search | Chunks | Generation model |
-|---|---|---|---|---|
-| 4 | **0.8357** | hybrid | 10 | qwen36-35b-a3b |
-| 6 | 0.8256 | hybrid | 3 | granite-3-2-8b-instruct |
-| 1 | 0.8219 | hybrid | 3 | granite-3-2-8b-instruct |
-| 5 | 0.8184 | hybrid | 3 | qwen36-35b-a3b |
-| 3 | 0.8011 | hybrid | 3 | granite-3-2-8b-instruct |
-| 2 | 0.5499 | **vector** | 3 | granite-3-2-8b-instruct |
+| Pattern | Overall | Answer corr. | Faithful. | **Context corr.** | Search | Chunking |
+|---|---|---|---|---|---|---|
+| 1 | **0.8191** | 0.6232 | 0.8453 | 0.8077 | hybrid rrf | recursive 2048/128 |
+| 8 | 0.8069 | 0.6950 | 0.8724 | 0.6795 | hybrid rrf | recursive 2048/256 |
+| 7 | 0.8060 | 0.6617 | 0.8830 | 0.6795 | hybrid rrf | recursive 2048/256 |
+| 3 | 0.8014 | 0.5981 | 0.7807 | 0.8846 | hybrid weighted | hybrid 512/0 |
+| 4 | 0.7906 | 0.7484 | 0.8498 | 0.6410 | hybrid rrf | recursive 2048/256 |
+| 5 | 0.7698 | 0.5940 | 0.8312 | 0.8077 | hybrid rrf | recursive 2048/128 |
+| 6 | 0.7687 | 0.6149 | 0.8061 | 0.8077 | hybrid rrf | recursive 2048/128 |
+| 2 | 0.5196 | 0.3194 | 0.6566 | **0.4103** | **vector** | recursive 2048/128 |
 
 **That bottom row is the demo.** Pattern 2 is the only pure-vector
-configuration in the set and the only one below 0.80 — not by a little, by
-28 points. Everything else differs in chunking, reranking and model, and
-lands within 3.5 points of the winner. On this corpus the choice that
-mattered was not which model or how big the chunks; it was *vector search
-alone versus vector plus keyword*.
+configuration in the set and the only one below 0.75 — not by a little, by
+27 points. The other seven vary chunking, overlap, reranker and model and
+land inside 5 points of each other.
 
-That pairs well with [rag-eval](../rag-eval/), which found OpenSearch kNN
+The **context correctness** column says why, and this is the part worth
+showing: 0.4103 against 0.64–0.88. Vector-only *retrieval* is what fails.
+Answer correctness and faithfulness fall as a consequence — the model is
+not worse, it is being handed worse context.
+
+This replicates. An earlier six-pattern run the same day put the single
+vector-only configuration last at 0.5499 while every hybrid one scored
+0.80–0.84. Two independent runs, same conclusion.
+
+It also pairs with [rag-eval](../rag-eval/), which found OpenSearch kNN
 and Milvus retrieving near-identically. Taken together: which vector store
 you pick barely moves the needle, and whether you use one *on its own*
 moves it enormously. Neither is obvious, and nobody believes either from
