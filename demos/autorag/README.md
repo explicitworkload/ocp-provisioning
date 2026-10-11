@@ -57,21 +57,28 @@ the available models straight off that connection.
 
 ## What it took to get a run to finish
 
-Eight things broke, and none of them said what was wrong. This is the list
+Nine things broke, and none of them said what was wrong. This is the list
 so the next person recognises the symptom rather than rediscovering the
-cause. The first six are fixed in the demos role, the seventh in the
-openrag role; the eighth is the one to read if you are rebuilding this
-cluster.
+cause. The first six and the ninth are fixed in the demos role, the
+seventh in the openrag role; the eighth is the one to read if you are
+rebuilding this cluster.
 
-**1. TLS to NooBaa, twice.** The KFP *launcher* — the thing that moves
-artifacts between steps — carries no CA bundle: `Error reading CA bundle
-file, open /etc/ssl/certs/ca-certificates.crt: no such file or directory`,
-then `failed to download input artifact`. Separately the pipeline
-components read the data bucket with boto3, which rejects the same
-service-CA certificate with `CERTIFICATE_VERIFY_FAILED`. `apiServer.cABundle`
-fixes neither — that bundle reaches the API server, not the launcher. Both
-endpoints are plain `http` on port 80 instead, which is pod-to-pod traffic
-to a NooBaa service and the same call the milvus role already made.
+**1. TLS to NooBaa's *Service*.** Nothing in the cluster trusts the
+service-CA certificate that `s3.openshift-storage.svc` presents. The KFP
+*launcher* — the thing that moves artifacts between steps — fails with
+`Error reading CA bundle file, open /etc/ssl/certs/ca-certificates.crt: no
+such file or directory`, then `failed to download input artifact`.
+Separately the pipeline components read the data bucket with boto3, which
+rejects the same certificate with `CERTIFICATE_VERIFY_FAILED`.
+`apiServer.cABundle` fixes neither — that bundle reaches the API server,
+not the launcher.
+
+The data bucket is plain `http` on port 80 for that reason, which is
+pod-to-pod traffic to a NooBaa Service. The *artifact* store is not: it
+uses NooBaa's Route over https, for the reason in finding 9. Read that
+one before concluding this cluster cannot do TLS to NooBaa — it can,
+against the Route, whose certificate comes from the ingress router rather
+than the service CA.
 
 **2. A NetworkPolicy that hangs instead of refusing.** The Llama-stack
 server carries an operator-managed policy admitting only its own namespace,
@@ -143,6 +150,38 @@ result. Measured rather than tabulated: a lookup keyed by model name is
 wrong the first time someone fronts a model that is not in it, and wrong
 in exactly this silent way. A model whose dimension cannot be measured is
 left unpublished rather than published at a guess.
+
+**9. A results page that cannot reach the results.** The run succeeds, every
+step is green, and the leaderboard reports:
+
+```
+Unable to fetch RAG patterns
+```
+
+with `Patterns evaluated —` and `Winning pattern —`. Nothing is logged,
+anywhere, because the failing request never reaches the cluster.
+
+The DSPA has **one** object-storage endpoint and it is used for two jobs
+that pull in opposite directions: the pipeline pods read and write
+artifacts through it, and the API server builds the **presigned download
+URLs it hands your browser** from it. Point it at `s3.openshift-storage.svc`
+and the second job is impossible — no laptop resolves an in-cluster Service
+name. The leaderboard is sitting in the bucket the whole time.
+
+The role now reads NooBaa's own `s3` Route and uses that, over https. The
+Route is terminated by the ingress router and presents the cluster's
+ingress certificate, which is publicly trusted, so unlike the Service it
+needs no CA bundle on either side — the launcher moves artifacts over it
+quite happily. Verified by fetching a presigned URL from a laptop with
+full certificate verification: 200, 7294 bytes, real content, where the
+Service endpoint gave a bare connection failure.
+
+Two things to know. The endpoint is recorded per artifact **when the
+artifact is created**, so fixing it does not repair old runs — their
+download URLs keep the old host forever, and only runs started afterwards
+display. And if the cluster has no `s3` Route the role falls back to the
+Service and says so, because runs still work; only the results page
+suffers.
 
 ### Where that setting actually lives on this cluster
 

@@ -60,6 +60,41 @@
 # No credential is written here: the DSPA is pointed at the Secret the
 # ObjectBucketClaim generates, so the claim stays the sole owner and
 # deleting it removes bucket, keys and server config together.
+# The DSPA has ONE endpoint for object storage, and it is used for two jobs
+# that pull in opposite directions: the pipeline pods read and write
+# artifacts through it, and the API server builds the PRESIGNED DOWNLOAD URLs
+# it hands the browser from it. An in-cluster Service name satisfies the
+# first and cannot possibly satisfy the second - no laptop resolves
+# s3.openshift-storage.svc - so the AutoRAG results page reports
+#
+#   Unable to fetch RAG patterns
+#
+# against a run that succeeded, with nothing logged anywhere, because the
+# failed request never reaches the cluster. The leaderboard is sitting in the
+# bucket the whole time.
+#
+# NooBaa's own Route is reachable from both, so use it when it exists.
+- name: Look for NooBaa's external S3 route
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ demos_autorag_s3_route_namespace }}"
+    name: "{{ demos_autorag_s3_route_name }}"
+  register: demos_autorag_s3_route
+  failed_when: false
+
+- name: Report that artifacts will not be viewable in the dashboard
+  ansible.builtin.debug:
+    msg: >-
+      No {{ demos_autorag_s3_route_name }} Route in
+      {{ demos_autorag_s3_route_namespace }}, so the pipeline server falls
+      back to {{ demos_autorag_artifact_fallback_host }}. Runs will work and
+      the AutoRAG results page will say "Unable to fetch RAG patterns",
+      because the presigned URLs it hands the browser will name a Service
+      only the cluster can resolve.
+  when: (demos_autorag_s3_route.resources | default([])) | length == 0
+
 - name: Create the Pipeline Server
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -106,23 +141,30 @@
         objectStorage:
           externalStorage:
             bucket: "{{ demos_autorag_pipeline_cm.resources[0].data.BUCKET_NAME }}"
-            host: s3.openshift-storage.svc
-            # Port 80 and plain http, deliberately. NooBaa's TLS endpoint
-            # presents a service-CA certificate and the KFP LAUNCHER - what
-            # moves artifacts between steps - carries no bundle that trusts
-            # it: it logs "Error reading CA bundle file, open
+            # The Route when there is one, the Service otherwise. See the
+            # comment above the route lookup for why the Service alone is not
+            # enough.
+            host: "{{ demos_autorag_artifact_host }}"
+            # https, and this is the part that changed. The in-cluster
+            # endpoint had to be plaintext: NooBaa's Service presents a
+            # service-CA certificate and the KFP LAUNCHER - what moves
+            # artifacts between steps - carries no bundle that trusts it,
+            # logging "Error reading CA bundle file, open
             # /etc/ssl/certs/ca-certificates.crt: no such file or directory"
             # and then "failed to download input artifact", which does not
-            # read as a TLS problem.
+            # read as a TLS problem. apiServer.cABundle does NOT fix it -
+            # that bundle reaches the API server, not the launcher.
             #
-            # apiServer.cABundle does NOT fix this - that bundle reaches the
-            # API server, not the launcher - so the attempt was abandoned and
-            # its two variables deleted from defaults. This is pod-to-pod
-            # traffic to a NooBaa service, so
-            # plaintext is the smaller compromise, and it is what the milvus
-            # role settled on against the same endpoint.
-            port: "80"
-            scheme: http
+            # The Route is different: it is terminated by the ingress router
+            # and presents the cluster's ingress certificate, which is
+            # publicly trusted here - verified with curl from a pod using
+            # nothing but a stock CA bundle. So the launcher's missing file
+            # stops mattering and the browser gets a URL it can actually
+            # open. Set demos_autorag_artifact_scheme=http if an ingress
+            # certificate somewhere is not trusted; the Route allows
+            # plaintext (insecureEdgeTerminationPolicy: Allow).
+            port: "{{ demos_autorag_artifact_port }}"
+            scheme: "{{ demos_autorag_artifact_scheme }}"
             region: us-east-1
             s3CredentialsSecret:
               secretName: pipeline-artifacts

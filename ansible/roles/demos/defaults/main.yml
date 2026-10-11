@@ -67,3 +67,25 @@ demos_milvus_uri: "http://{{ milvus_name | default('milvus') }}-milvus.{{ milvus
 # Removed rather than left set, because a variable nothing reads reads as a
 # setting that is in force.
 demos_autorag_llamastack_url: "http://lsd-genai-playground-service.{{ model_namespace | default('qwen3-4b') }}.svc.cluster.local:8321"
+
+# Object storage for pipeline artifacts. The DSPA uses this one endpoint
+# BOTH for the pipeline pods and for the presigned download URLs the API
+# server hands the browser, so it has to be a name both can resolve - which
+# an in-cluster Service is not. tasks/autorag.yml reads NooBaa's Route and
+# falls back to the Service only if there is none.
+demos_autorag_s3_route_namespace: openshift-storage
+demos_autorag_s3_route_name: s3
+demos_autorag_artifact_fallback_host: s3.openshift-storage.svc
+demos_autorag_artifact_host: >-
+  {{ (demos_autorag_s3_route.resources | default([]) | first | default({}))
+     .spec.host | default(demos_autorag_artifact_fallback_host, true) }}
+
+# https only holds up against the Route, whose certificate comes from the
+# ingress router and is publicly trusted. Against the Service fallback the
+# launcher cannot verify anything, so that path has to drop to plaintext.
+demos_autorag_artifact_scheme: >-
+  {{ 'https' if (demos_autorag_s3_route.resources | default([])) | length > 0
+     else 'http' }}
+demos_autorag_artifact_port: >-
+  {{ '443' if (demos_autorag_s3_route.resources | default([])) | length > 0
+     else '80' }}
