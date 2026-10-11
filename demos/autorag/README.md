@@ -57,11 +57,11 @@ the available models straight off that connection.
 
 ## What it took to get a run to finish
 
-Nine things broke, and none of them said what was wrong. This is the list
+Ten things broke, and none of them said what was wrong. This is the list
 so the next person recognises the symptom rather than rediscovering the
-cause. The first six and the ninth are fixed in the demos role, the
-seventh in the openrag role; the eighth is the one to read if you are
-rebuilding this cluster.
+cause. All but two are fixed in the demos role; the seventh is in the
+openrag role, and the eighth is the one to read if you are rebuilding
+this cluster.
 
 **1. TLS to NooBaa's *Service*.** Nothing in the cluster trusts the
 service-CA certificate that `s3.openshift-storage.svc` presents. The KFP
@@ -73,12 +73,17 @@ rejects the same certificate with `CERTIFICATE_VERIFY_FAILED`.
 `apiServer.cABundle` fixes neither — that bundle reaches the API server,
 not the launcher.
 
-The data bucket is plain `http` on port 80 for that reason, which is
-pod-to-pod traffic to a NooBaa Service. The *artifact* store is not: it
-uses NooBaa's Route over https, for the reason in finding 9. Read that
-one before concluding this cluster cannot do TLS to NooBaa — it can,
-against the Route, whose certificate comes from the ingress router rather
-than the service CA.
+Both endpoints dropped to plain `http` on port 80 for that reason, and
+both have since moved back to https — against NooBaa's **Route**, not its
+Service. The Route is terminated by the ingress router and presents the
+cluster's ingress certificate, which is publicly trusted, so there is
+nothing left to distrust: verified from a pod with Python and certifi,
+the handshake succeeds and S3 answers 403 for want of credentials. The
+service CA was the problem, not TLS.
+
+Finding 9 is why the artifact store moved; finding 10 is why the data
+connection had to follow. Do not read this entry as "this cluster cannot
+do TLS to NooBaa" — it can, just not to `*.svc`.
 
 **2. A NetworkPolicy that hangs instead of refusing.** The Llama-stack
 server carries an operator-managed policy admitting only its own namespace,
@@ -182,6 +187,27 @@ download URLs keep the old host forever, and only runs started afterwards
 display. And if the cluster has no `s3` Route the role falls back to the
 Service and says so, because runs still work; only the results page
 suffers.
+
+**10. A connection the form refuses to use.** With the data bucket on
+plain http, the Create-run form cannot be completed at all. **Browse
+bucket** opens and returns:
+
+```
+S3 Connection must use HTTPS
+The connection autorag-data is configured using HTTP. Configure the
+connection's endpoint using HTTPS and try again.
+```
+
+There is no way past it — that dialog is the only way to pick the
+documents folder and the evaluation dataset.
+
+This is the bill for finding 1. The data connection was plaintext to get
+boto3 past the service-CA certificate, and the dashboard will not accept
+a plaintext connection on any terms. The Route settles both at once: its
+certificate verifies against a stock bundle, so boto3 is satisfied
+without `verify=False` and the dashboard is satisfied without plaintext.
+The seed Job uses the same endpoint now, so there is one answer to
+"where is the bucket" instead of three.
 
 ### Where that setting actually lives on this cluster
 

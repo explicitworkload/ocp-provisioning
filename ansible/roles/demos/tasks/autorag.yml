@@ -339,11 +339,21 @@
             Sample corpus and test questions for the Documents RAG
             Optimization Pipeline
       stringData:
-        # http on port 80, not https on 443, for the same reason as the
-        # artifact store: the pipeline components read this bucket with
-        # boto3, which rejects NooBaa's service-CA certificate with "SSL
-        # validation failed ... CERTIFICATE_VERIFY_FAILED".
-        AWS_S3_ENDPOINT: http://s3.openshift-storage.svc:80
+        # NooBaa's Route, https. This was http on the Service, to get past
+        # boto3 rejecting the service-CA certificate with "SSL validation
+        # failed ... CERTIFICATE_VERIFY_FAILED" - and that bought a worse
+        # problem: the dashboard's bucket browser refuses a plaintext
+        # connection outright,
+        #
+        #   S3 Connection must use HTTPS. The connection autorag-data is
+        #   configured using HTTP. Configure the connection's endpoint
+        #   using HTTPS and try again.
+        #
+        # which makes the Create-run form impossible to complete - there is
+        # no way to pick the documents folder. The Route presents the
+        # ingress certificate instead of the service CA, so boto3 verifies
+        # it against a stock bundle and the browser is happy too.
+        AWS_S3_ENDPOINT: "{{ demos_autorag_s3_endpoint }}"
         AWS_S3_BUCKET: "{{ demos_autorag_data_cm.resources[0].data.BUCKET_NAME }}"
         AWS_DEFAULT_REGION: us-east-1
   # The module returns the object it wrote, and that object carries the
@@ -413,12 +423,16 @@
                     export PYTHONPATH=/tmp/pylibs
                     python /app/seed_data.py
                 env:
-                  # https here, unlike the two connections above, because
-                  # seed_data.py passes verify=False to boto3 and so never
-                  # checks the service-CA certificate. The pipeline
-                  # components have no such switch.
+                  # The same Route the connection uses. This was the
+                  # Service, which only worked because seed_data.py passes
+                  # verify=False to boto3 and so never checks the
+                  # service-CA certificate - a switch the pipeline
+                  # components do not have. Against the Route the
+                  # certificate would verify on its own merits, so the two
+                  # now agree on one endpoint and verify=False is belt and
+                  # braces rather than the thing holding it up.
                   - name: S3_ENDPOINT
-                    value: https://s3.openshift-storage.svc:443
+                    value: "{{ demos_autorag_s3_endpoint }}"
                   # Bucket name and keys come from what the claim generated,
                   # so nothing about the storage is written by hand.
                   - name: BUCKET_NAME

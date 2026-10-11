@@ -89,3 +89,18 @@ demos_autorag_artifact_scheme: >-
 demos_autorag_artifact_port: >-
   {{ '443' if (demos_autorag_s3_route.resources | default([])) | length > 0
      else '80' }}
+
+# The same endpoint as a URL, for the S3 Connection the Create-run form
+# reads. Three separate things refuse a plaintext one:
+#   - the dashboard's bucket browser, outright - "S3 Connection must use
+#     HTTPS. The connection autorag-data is configured using HTTP" - so the
+#     form cannot be completed at all;
+#   - boto3 in the pipeline components, which rejects the Service's
+#     service-CA certificate with CERTIFICATE_VERIFY_FAILED;
+#   - and a browser, which cannot resolve a Service name in the first place.
+# The Route satisfies all three, because its certificate comes from the
+# ingress router rather than the service CA. Dropping to http here was the
+# earlier workaround for boto3 and it is no longer needed.
+demos_autorag_s3_endpoint: >-
+  {{ demos_autorag_artifact_scheme | trim }}://{{ demos_autorag_artifact_host | trim
+  }}:{{ demos_autorag_artifact_port | trim }}
