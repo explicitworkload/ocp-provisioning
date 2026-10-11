@@ -185,13 +185,14 @@ mcp_write_rules:
 # the Azure model, which does not exist where Lightspeed is absent.
 openrag_auto_configure: true
 
-deploy_openrag: false
+deploy_openrag: true
 
 # --- Milvus ----------------------------------------------------------------
 # A vector database, with Attu as its UI, published to RHOAI's Vector stores
-# tab. Off by default: it is a third vector store next to the OpenSearch that
-# openrag deploys and the pgvector the Gen AI playground ships with, so it
-# should be a choice.
+# tab. It is a third vector store next to the OpenSearch that openrag deploys
+# and the pgvector the Gen AI playground ships with - on by default because
+# demo 1 exists to compare the three, and demo 7 (AutoRAG) uses Milvus as its
+# vector_io provider. Turn it off and those two have nothing to measure.
 #
 # Milvus is in no operator catalog, so this comes from the upstream zilliztech
 # Helm chart - needs the helm CLI, like openrag - and carries no Red Hat
@@ -201,7 +202,7 @@ deploy_openrag: false
 # The Milvus image declares no USER and will not run as anything but root, so
 # the role grants anyuid to a dedicated service account in the milvus
 # namespace. Everything else there stays non-root.
-deploy_milvus: false
+deploy_milvus: true
 
 # -------------------------------------------------------------------
 #
@@ -220,7 +221,7 @@ deploy_milvus: false
 # The trust domain defaults to the cluster's apps domain and is IMMUTABLE once
 # the CR is created - see roles/ztwim/defaults/main.yml to override before the
 # first run.
-deploy_ztwim: true
+deploy_ztwim: false
 
 # External DNS / Cloudflare — OFF by default. Runs last in the playbook.
 # Enable only when you want real records written to the Cloudflare zone:

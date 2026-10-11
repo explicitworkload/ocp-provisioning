@@ -51,8 +51,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys Bookinfo demo app with Istio sidecar injection and Gatus health monitoring (probes in-cluster service DNS, with the Gatus UI embedded in the dashboard)
 - Deploys OpenShift Dev Spaces with a `CheCluster` and registers this repo as a one-click workspace sample; workspaces install the Claude Code CLI and the Kubernetes extension on start
 - Deploys Operations Dashboard with sidebar navigation, login authentication, Service Mesh controls (traffic shifting, fault injection, circuit breaker, timeouts/retries), Platform Admin (MachineSet scaling, cluster shutdown), node resiliency testing (stop/start the backing EC2 instance, or destroy a Machine and let its MachineSet rebuild it), AI Assistant (chat with MCP server tool use), embedded health monitor, floating task log with toast notifications, and sustained traffic generator
-- Optionally deploys OpenRAG with OpenSearch, docling, CPU embeddings and Langflow, wired through LiteLLM so it serves the same models as everything else (off by default; needs `helm`)
-- Optionally deploys Milvus (standalone, backed by NooBaa rather than a bundled MinIO) with the Attu UI, registered as a vector store in RHOAI's Gen AI studio (off by default; needs `helm`)
+- Deploys OpenRAG with OpenSearch, docling, CPU embeddings and Langflow, wired through LiteLLM so it serves the same models as everything else (on by default; needs `helm`)
+- Deploys Milvus (standalone, backed by NooBaa rather than a bundled MinIO) with the Attu UI, registered as a vector store in RHOAI's Gen AI studio (on by default; needs `helm`)
 - Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
 - Deploys seven MLflow and RHOAI demos — retrieval A/B across OpenSearch and Milvus, LLM-judged answer quality, a prompt registry comparison, a tabular MLOps run through to a served KServe endpoint, two workbenches, and AutoRAG — and runs their Jobs, so the dashboards have real results in them rather than empty panels (on by default; see [demos/](demos/))
 
@@ -62,8 +62,8 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 |------|------------|---------|
 | `oc` | everything | [OpenShift CLI](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html) |
 | `python3` | everything | system package |
-| `helm` | the `openrag` and `milvus` roles **only** | `brew install helm`, or see below on RHEL |
-| `git` | the `openrag` role **only** | `brew install git` / `sudo dnf install -y git` |
+| `helm` | the `openrag` and `milvus` roles — **both on by default** | `brew install helm`, or see below on RHEL |
+| `git` | the `openrag` role — **on by default** | `brew install git` / `sudo dnf install -y git` |
 
 `helm` and `git` are checked in `site.yml`'s `pre_tasks`, before the run
 touches the cluster, and only when the roles that need them are actually

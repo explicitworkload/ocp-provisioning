@@ -286,7 +286,7 @@ Red Hat's SPIRE distribution, giving workloads short-lived cryptographic identit
 | `SpiffeCSIDriver` | DaemonSet delivering SVIDs via an ephemeral CSI volume |
 | `SpireOIDCDiscoveryProvider` | publishes JWKS at `oidc-discovery.<apps-domain>` |
 
-Defaults live in `roles/ztwim/defaults/main.yml`. Set `deploy_ztwim: false` to skip it.
+Off by default — set `deploy_ztwim: true` to deploy it. Defaults live in `roles/ztwim/defaults/main.yml`.
 
 The trust domain defaults to the cluster's apps domain, so SPIFFE IDs look like `spiffe://apps.ocp.<id>.sandbox<n>.opentlc.com/ns/<namespace>/sa/<serviceaccount>`.
 
@@ -325,7 +325,7 @@ Deploys [Gatus](https://github.com/TwiN/gatus) health monitoring, exposed at `ga
 
 Deploys Red Hat Quay backed by ODF managed object storage (NooBaa). Falls back to S3 config when ODF is unavailable.
 
-### OpenRAG — optional, off by default
+### OpenRAG — on by default
 
 Deploys [OpenRAG](https://github.com/langflow-ai/openrag) and its dependencies:
 a three-node OpenSearch cluster, docling-serve for document conversion,
@@ -362,11 +362,14 @@ from the upstream project:
   rejected the credential", which is misleading: ingestion works, because
   that path uses basic auth.
 
-### Milvus — optional, off by default
+### Milvus — on by default
 
 A vector database with [Attu](https://github.com/zilliztech/attu) as its UI,
 published to RHOAI's **Gen AI studio → AI asset endpoints → Vector stores**.
-Enable with `deploy_milvus=true`; needs the `helm` CLI, like OpenRAG.
+Needs the `helm` CLI, like OpenRAG; set `deploy_milvus=false` to skip it.
+Demo 1 exists to compare it against OpenSearch and demo 7 uses it as
+AutoRAG's vector store, so turning it off leaves both with nothing to
+measure.
 
 ```bash
 ./run.sh --tags milvus -e deploy_milvus=true
@@ -576,11 +579,12 @@ while they were being written.
 - An existing OpenShift 4.22+ cluster on AWS
 - `oc` CLI authenticated (`oc login`)
 - Python 3.x
-- `helm` — only for the `openrag` and `milvus` roles
-- `git` — only for the `openrag` role
+- `helm` — for the `openrag` and `milvus` roles, both of which are on by default
+- `git` — for the `openrag` role, on by default
 
 The last two are asserted up front by `site.yml`, and only when the role
-that needs them is enabled.
+that needs them is enabled — so a run with `deploy_openrag=false` and
+`deploy_milvus=false` needs neither.
 
 ## Quick start
 
@@ -847,8 +851,8 @@ ansible/
     ├── devspaces/              # Dev Spaces operator + CheCluster
     ├── ztwim/                  # SPIFFE/SPIRE workload identity (server, agent, CSI, OIDC)
     ├── gatus/                  # Gatus health monitoring
-    ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings (opt-in)
-    ├── milvus/                 # Milvus operator, standalone instance, Attu UI (opt-in)
+    ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings
+    ├── milvus/                 # Milvus operator, standalone instance, Attu UI
     ├── demos/                  # The seven demos under demos/, one task file each
     ├── verify/                 # Asserts the deployment; collects every failure
     └── summary/                # Prints URLs, credentials and total run time
