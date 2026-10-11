@@ -1,6 +1,11 @@
 ---
 # The two RHOAI Connections AutoRAG needs, beyond the Pipeline Server.
 #
+# REFERENCE COPY. ansible/roles/demos/tasks/autorag.yml is what actually
+# creates this, and it is the one that is maintained - it reads the bucket
+# names back off the cluster instead of needing substitution. This file is
+# here to be read.
+#
 # An RHOAI "Connection" is just a Secret with dashboard labels and a
 # connection-type annotation, which is why these are plain Secrets.
 #
@@ -13,7 +18,7 @@
 #       "labels":{"opendatahub.io/dashboard":"true","opendatahub.io/managed":"true"},
 #       "annotations":{"opendatahub.io/connection-type-ref":"s3",
 #                      "openshift.io/display-name":"AutoRAG data (documents + benchmark)"}},
-#     "stringData":{"AWS_S3_ENDPOINT":"https://s3.openshift-storage.svc:443",
+#     "stringData":{"AWS_S3_ENDPOINT":"http://s3.openshift-storage.svc:80",
 #                   "AWS_S3_BUCKET":"<from the autorag-data ConfigMap>",
 #                   "AWS_DEFAULT_REGION":"us-east-1"}}'
 #
@@ -23,23 +28,38 @@
 apiVersion: v1
 kind: Secret
 metadata:
+  # Same name the role uses. Two connections that do the same thing is a
+  # trap in a live demo - the Create-run form offers both and neither is
+  # obviously the right one.
   name: llama-stack-conn
   namespace: rag-eval
   labels:
     opendatahub.io/dashboard: "true"
     opendatahub.io/managed: "true"
   annotations:
+    # BOTH spellings. The AutoRAG UI filters its "Open GenAI Stack
+    # connection" dropdown on opendatahub.io/connection-type, while the
+    # rest of the dashboard uses -ref. Setting only -ref made the dropdown
+    # report "There are no secrets in the selected namespace" against a
+    # perfectly good connection.
+    opendatahub.io/connection-type: uri-v1
     opendatahub.io/connection-type-ref: uri-v1
     openshift.io/display-name: "Llama Stack (Gen AI playground)"
     openshift.io/description: "The RAG stack AutoRAG optimises against"
 type: Opaque
 stringData:
-  # The Gen AI playground IS a llama-stack server - it serves the
-  # llama-stack API on 8321, with Milvus registered as a vector store and
-  # the LiteLLM-fronted models as inference providers. No separate
-  # deployment is needed.
-  LLAMA_STACK_CLIENT_BASE_URL: "http://lsd-genai-playground-service.qwen3-4b.svc.cluster.local:8321"
-  # A placeholder, not a redaction. That endpoint answers /v1/models
-  # unauthenticated in-cluster, so there is no credential to supply - but
-  # the pipeline requires the key to be present.
-  LLAMA_STACK_CLIENT_API_KEY: "not-required"
+  # OGX_CLIENT_*, not LLAMA_STACK_CLIENT_* as the upstream AutoRAG readme
+  # says. This build's pipeline reads a secret it names via the
+  # ogx_secret_name parameter and expects these two keys; a secret with
+  # the documented names is simply never read.
+  #
+  # The Gen AI playground IS the llama-stack server - it serves the API on
+  # 8321 with Milvus registered as a vector store and the LiteLLM models
+  # as inference providers, so nothing separate needs deploying.
+  OGX_CLIENT_BASE_URL: "http://lsd-genai-playground-service.qwen3-4b.svc.cluster.local:8321"
+  # Must be NON-EMPTY, and that is the whole point of this comment. The
+  # endpoint needs no credential, but an empty value makes the client send
+  # "Authorization: Bearer " with nothing after it, and httpx refuses:
+  #   httpx.LocalProtocolError: Illegal header value b'Bearer '
+  # surfacing as ogx_client.APIConnectionError several steps into the run.
+  OGX_CLIENT_API_KEY: "not-required"

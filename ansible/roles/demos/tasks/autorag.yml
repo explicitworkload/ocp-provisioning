@@ -1,0 +1,478 @@
+---
+# AutoRAG's prerequisites: a Pipeline Server, two NooBaa buckets, the two
+# Connections its Create-run form offers, and the sample corpus. The
+# optimisation run itself stays in the UI - that is the part worth showing.
+#
+# This replaces demos/autorag/setup.sh. What the script did with sed and
+# oc patch is done here from facts read back off the cluster; the manifests
+# under demos/autorag/ stay readable on their own.
+
+# --- artifact storage for the Pipeline Server -----------------------------
+- name: Claim a NooBaa bucket for pipeline artifacts
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: pipeline-artifacts
+        namespace: "{{ demos_namespace }}"
+      spec:
+        generateBucketName: pipeline-artifacts
+        storageClassName: openshift-storage.noobaa.io
+
+# The DSPA below needs this bucket's name, and generateBucketName means the
+# name does not exist until the claim binds. Binding takes seconds; the
+# budget is for a NooBaa that is still reconciling other claims.
+- name: Wait for the artifact bucket to bind
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: objectbucket.io/v1alpha1
+    kind: ObjectBucketClaim
+    namespace: "{{ demos_namespace }}"
+    name: pipeline-artifacts
+  register: demos_autorag_pipeline_obc
+  until: (demos_autorag_pipeline_obc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 5
+
+# The claim writes a ConfigMap of its own name holding BUCKET_NAME. Read it
+# rather than hardcoding: the name is generated per cluster, so a committed
+# one applies cleanly and then fails at runtime against a bucket that is not
+# there. This is why demos/autorag/pipeline-server.yaml carries a
+# __PIPELINE_BUCKET__ placeholder instead of a value.
+- name: Read the artifact bucket name the claim generated
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ demos_namespace }}"
+    name: pipeline-artifacts
+  register: demos_autorag_pipeline_cm
+
+# AutoRAG's Documents RAG Optimization Pipeline runs on Kubeflow Pipelines,
+# and this cluster had no DataSciencePipelinesApplication at all - the one
+# prerequisite it was missing. The autorag-ui Deployment, a llama-stack
+# server, Milvus and the LiteLLM-fronted models were all already here.
+#
+# No credential is written here: the DSPA is pointed at the Secret the
+# ObjectBucketClaim generates, so the claim stays the sole owner and
+# deleting it removes bucket, keys and server config together.
+- name: Create the Pipeline Server
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+      kind: DataSciencePipelinesApplication
+      metadata:
+        name: dspa
+        namespace: "{{ demos_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+      spec:
+        dspVersion: v2
+        apiServer:
+          deploy: true
+          # Registers the managed pipeline set AutoRAG runs on -
+          # documents-rag-optimization-pipeline, plus documents-indexing and
+          # the two autogluon ones. An EMPTY OBJECT is the whole
+          # configuration; it enables the defaults and adds the
+          # init-managed-pipelines init container to the API server pod.
+          #
+          # Without it the AutoRAG page says "A pipeline server was found,
+          # but AutoRAG pipelines are not enabled" and offers a button. The
+          # button sets exactly this and restarts the pipeline server, so
+          # declaring it means a fresh cluster never needs the click.
+          #
+          # The DSPA then reports ManagedPipelineValid=False/NotApplicable
+          # ("no explicit pipeline list"). That is the defaults path, not a
+          # fault, and Ready still goes True.
+          managedPipelines: {}
+          # No enableExternalRoute here, unlike demos/autorag/pipeline-server.yaml:
+          # the v1 CRD has no such field under apiServer and the API server
+          # prunes it silently, so it never did anything.
+        # The default MariaDB rather than an external SQL database. It holds
+        # pipeline metadata only - runs, DAGs, artifact references - and not
+        # the artifacts, which go to the bucket.
+        database:
+          mariaDB:
+            deploy: true
+            pipelineDBName: mlpipeline
+            pvcSize: 10Gi
+        objectStorage:
+          externalStorage:
+            bucket: "{{ demos_autorag_pipeline_cm.resources[0].data.BUCKET_NAME }}"
+            host: s3.openshift-storage.svc
+            # Port 80 and plain http, deliberately. NooBaa's TLS endpoint
+            # presents a service-CA certificate and the KFP LAUNCHER - what
+            # moves artifacts between steps - carries no bundle that trusts
+            # it: it logs "Error reading CA bundle file, open
+            # /etc/ssl/certs/ca-certificates.crt: no such file or directory"
+            # and then "failed to download input artifact", which does not
+            # read as a TLS problem.
+            #
+            # apiServer.cABundle does NOT fix this - that bundle reaches the
+            # API server, not the launcher - so the attempt was abandoned and
+            # its two variables deleted from defaults. This is pod-to-pod
+            # traffic to a NooBaa service, so
+            # plaintext is the smaller compromise, and it is what the milvus
+            # role settled on against the same endpoint.
+            port: "80"
+            scheme: http
+            region: us-east-1
+            s3CredentialsSecret:
+              secretName: pipeline-artifacts
+              accessKey: AWS_ACCESS_KEY_ID
+              secretKey: AWS_SECRET_ACCESS_KEY
+
+# --- the documents and benchmark bucket -----------------------------------
+- name: Claim a NooBaa bucket for the AutoRAG corpus
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: autorag-data
+        namespace: "{{ demos_namespace }}"
+      spec:
+        generateBucketName: autorag-data
+        storageClassName: openshift-storage.noobaa.io
+
+- name: Wait for the corpus bucket to bind
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: objectbucket.io/v1alpha1
+    kind: ObjectBucketClaim
+    namespace: "{{ demos_namespace }}"
+    name: autorag-data
+  register: demos_autorag_data_obc
+  until: (demos_autorag_data_obc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 5
+
+# Generated name again, and this one is needed twice: by the S3 connection
+# the pipeline reads, and by the message at the end telling the presenter
+# what to type into the Create-run form.
+- name: Read the corpus bucket name the claim generated
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ demos_namespace }}"
+    name: autorag-data
+  register: demos_autorag_data_cm
+
+# --- the two connections the Create-run form offers -----------------------
+# An RHOAI Connection is a Secret with dashboard labels and a connection-type
+# annotation, which is why this is a plain Secret. Nothing in it is secret:
+# the playground answers in-cluster without credentials.
+# The pipeline steps run here but call the Llama-stack server in the model
+# namespace, and that server carries an operator-managed NetworkPolicy
+# admitting only its own namespace, redhat-ods-applications and ingress.
+# Without this companion policy the call is not refused, it HANGS - and
+# surfaces much later as
+#
+#   ogx_client.APITimeoutError: Request timed out
+#
+# on client.models.list(), a call that takes 9ms when allowed through. It
+# reads like a slow model rather than a blocked packet.
+#
+# A separate policy rather than an edit to theirs: the ogx-operator owns
+# that one (ownerReference OGXServer) and reverts changes. NetworkPolicies
+# are additive, so admitting one more namespace this way is durable.
+- name: Let the demos namespace reach the Llama-stack server
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-demos-to-llama-stack
+        # In the MODEL namespace: ingress rules are evaluated against the
+        # destination pod, not the source.
+        namespace: "{{ model_namespace | default('qwen3-4b') }}"
+      spec:
+        podSelector:
+          matchLabels:
+            app: ogx
+            app.kubernetes.io/instance: lsd-genai-playground
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: "{{ demos_namespace }}"
+            ports:
+              - protocol: TCP
+                port: 8321
+
+- name: Create the Llama-stack connection
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: llama-stack-conn
+        namespace: "{{ demos_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+          opendatahub.io/managed: "true"
+        annotations:
+          # BOTH spellings. The AutoRAG UI filters its "Open GenAI Stack
+          # connection" dropdown on opendatahub.io/connection-type, while
+          # the rest of the dashboard uses -type-ref. Setting only -ref made
+          # the dropdown report "There are no secrets in the selected
+          # namespace" against a working connection.
+          opendatahub.io/connection-type: uri-v1
+          opendatahub.io/connection-type-ref: uri-v1
+          openshift.io/display-name: "Llama Stack (Gen AI playground)"
+          openshift.io/description: "The RAG stack AutoRAG optimises against"
+      type: Opaque
+      stringData:
+        # Two spellings of the same two values, because two different
+        # things read this connection. demos/autorag/connections.yaml
+        # shipped only the LLAMA_STACK_CLIENT_* pair and the Create-run
+        # form took it, but the pipeline never reads those keys: every
+        # component that talks to the stack mounts OGX_CLIENT_BASE_URL and
+        # OGX_CLIENT_API_KEY by those exact names, from whichever
+        # connection the run selected (secretAsEnv, optional: false).
+        # Carrying both is what makes the form and the run agree.
+        #
+        # The Gen AI playground IS a llama-stack server - it serves the API
+        # on 8321 with Milvus registered as a vector store and the
+        # LiteLLM-fronted models as inference providers - so no separate
+        # deployment is needed.
+        LLAMA_STACK_CLIENT_BASE_URL: "{{ demos_autorag_llamastack_url }}"
+        OGX_CLIENT_BASE_URL: "{{ demos_autorag_llamastack_url }}"
+        # A placeholder, not a redaction: that endpoint answers /v1/models
+        # unauthenticated in-cluster. It must still be NON-EMPTY. The client
+        # sends the value as a bearer token whatever it is, and an empty one
+        # dies in httpx before any request leaves the pod -
+        # "LocalProtocolError: Illegal header value b'Bearer '", surfacing
+        # as APIConnectionError in search-space-preparation.
+        LLAMA_STACK_CLIENT_API_KEY: not-required
+        OGX_CLIENT_API_KEY: not-required
+
+# The S3 connection is this patch, not a manifest of its own. The
+# autorag-data claim already generates a Secret holding the access keys;
+# adding the connection metadata and the three non-secret fields to THAT
+# keeps one copy of the credential, owned by the claim, so deleting the OBC
+# removes bucket, keys and connection together. A second Secret would be two
+# things to revoke and two chances to miss one.
+#
+# apply here is additive: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are
+# absent from this definition, were never in its last-applied annotation,
+# and so are left untouched.
+- name: Turn the corpus bucket's own Secret into an S3 connection
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: autorag-data
+        namespace: "{{ demos_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+          opendatahub.io/managed: "true"
+        annotations:
+          opendatahub.io/connection-type: s3
+          opendatahub.io/connection-type-ref: s3
+          openshift.io/display-name: "AutoRAG data (documents + benchmark)"
+          openshift.io/description: >-
+            Sample corpus and test questions for the Documents RAG
+            Optimization Pipeline
+      stringData:
+        # http on port 80, not https on 443, for the same reason as the
+        # artifact store: the pipeline components read this bucket with
+        # boto3, which rejects NooBaa's service-CA certificate with "SSL
+        # validation failed ... CERTIFICATE_VERIFY_FAILED".
+        AWS_S3_ENDPOINT: http://s3.openshift-storage.svc:80
+        AWS_S3_BUCKET: "{{ demos_autorag_data_cm.resources[0].data.BUCKET_NAME }}"
+        AWS_DEFAULT_REGION: us-east-1
+  # The module returns the object it wrote, and that object carries the
+  # generated access keys.
+  no_log: true
+
+# --- the sample corpus ----------------------------------------------------
+# The script stays in demos/ and is shipped from there. The corpus it fetches
+# is not shipped at all: at about 912 KB it is over the 256 KB cap on a
+# ConfigMap's last-applied-configuration annotation, so the Job downloads it.
+- name: Ship the seed script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: autorag-seed-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        seed_data.py: "{{ lookup('file', demos_src + '/autorag/seed_data.py') }}"
+
+# A completed Job is immutable, so a second run of this role cannot apply
+# over the first one. Delete and recreate, and wait for the delete so the
+# create does not race the old Job's pods.
+- name: Remove any previous seed job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: autorag-seed
+    wait: true
+  when: demos_run_jobs | bool
+
+- name: Seed the corpus and the benchmark into the bucket
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: autorag-seed
+        namespace: "{{ demos_namespace }}"
+      spec:
+        # No retries. What breaks this Job is deterministic - no egress for
+        # the download, a wrong endpoint, a key the bucket will not take -
+        # and three further attempts only delay saying so.
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: seed
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs boto3
+                    export PYTHONPATH=/tmp/pylibs
+                    python /app/seed_data.py
+                env:
+                  # https here, unlike the two connections above, because
+                  # seed_data.py passes verify=False to boto3 and so never
+                  # checks the service-CA certificate. The pipeline
+                  # components have no such switch.
+                  - name: S3_ENDPOINT
+                    value: https://s3.openshift-storage.svc:443
+                  # Bucket name and keys come from what the claim generated,
+                  # so nothing about the storage is written by hand.
+                  - name: BUCKET_NAME
+                    valueFrom:
+                      configMapKeyRef:
+                        name: autorag-data
+                        key: BUCKET_NAME
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: autorag-data
+                        key: AWS_ACCESS_KEY_ID
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: autorag-data
+                        key: AWS_SECRET_ACCESS_KEY
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: autorag-seed-script
+  when: demos_run_jobs | bool
+
+# Five minutes. The seeding itself took 10 seconds on sandbox3508; the budget
+# covers a cold pull of the python image and the pip install of boto3, both
+# of which need egress. When this expires the pod holds the answer -
+# "oc logs job/autorag-seed" in the demos namespace.
+- name: Wait for the corpus to be seeded
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: autorag-seed
+  register: demos_autorag_seed
+  until: >-
+    demos_autorag_seed.resources | length > 0 and
+    demos_autorag_seed.resources[0].status.succeeded is defined
+  retries: 30
+  delay: 10
+  when: demos_run_jobs | bool
+
+# --- readiness ------------------------------------------------------------
+# Fifteen minutes, and most of it goes on MariaDB's PVC and six Deployments
+# reconciling. Non-fatal on purpose: every manifest is already applied, the
+# operator carries on without us, and the other demos in this role should not
+# be held hostage to a slow pipeline server.
+- name: Wait for the Pipeline Server to become ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: datasciencepipelinesapplications.opendatahub.io/v1
+    kind: DataSciencePipelinesApplication
+    namespace: "{{ demos_namespace }}"
+    name: dspa
+  register: demos_autorag_dspa
+  until: >-
+    demos_autorag_dspa.resources | length > 0 and
+    demos_autorag_dspa.resources[0].status is defined and
+    demos_autorag_dspa.resources[0].status.conditions is defined and
+    demos_autorag_dspa.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Ready') |
+    selectattr('status', 'equalto', 'True') | list | length > 0
+  retries: 90
+  delay: 10
+  ignore_errors: true
+
+- name: Report the Pipeline Server as not yet ready
+  ansible.builtin.debug:
+    msg: >-
+      The AutoRAG prerequisites are all applied, but the pipeline server in
+      {{ demos_namespace }} is not Ready after 15 minutes. AutoRAG will
+      refuse to create a run until it is. Check
+      "oc get dspa dspa -n {{ demos_namespace }} -o yaml"; a failing
+      DatabaseAvailable or ObjectStoreAvailable condition names the cause.
+      WebhookReady and ManagedPipelineValid sit at False/NotApplicable even
+      on a healthy server and are not it.
+  when: demos_autorag_dspa is failed
+
+- name: Report what AutoRAG now has to work with
+  ansible.builtin.debug:
+    msg: >-
+      AutoRAG prerequisites in {{ demos_namespace }}.
+      Dashboard: Gen AI studio -> AutoRAG -> Create run.
+      Documents: s3://{{ demos_autorag_data_cm.resources[0].data.BUCKET_NAME }}/input_data/
+      Test data: s3://{{ demos_autorag_data_cm.resources[0].data.BUCKET_NAME }}/benchmark_data.json
+      Connections: "Llama Stack (Gen AI playground)" and
+      "AutoRAG data (documents + benchmark)".
+      {{ 'The corpus was seeded.' if demos_run_jobs | bool else
+         'The corpus was NOT seeded - demos_run_jobs is false.' }}

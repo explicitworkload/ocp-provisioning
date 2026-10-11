@@ -312,3 +312,40 @@ external_dns_cloudflare_proxied: true
 #         - granite-3-2-8b-instruct
 #         - Docling
 #         - qwen38-27b
+
+# --- Demos -----------------------------------------------------------------
+# The demos under demos/ in this repo: retrieval A/B, answer judging, prompt
+# versions, tabular MLOps, model serving, workbenches and AutoRAG. All are
+# deployed into one Data Science Project (rag-eval by default) and all log to
+# MLflow.
+#
+# The role refuses to run if MLflow, OpenSearch or LiteLLM is missing, naming
+# which, rather than failing later inside a Job where nobody is tailing the
+# logs. So deploy_openrag=true is effectively a prerequisite.
+deploy_demos: true
+
+# Individually switchable. Turn one off and the rest still deploy.
+demos_rag_eval: true          # retrieval A/B across OpenSearch and Milvus
+demos_rag_judge: true         # tracing plus LLM judges on answer quality
+demos_prompt_versions: true   # three prompt versions, compared head to head
+demos_tabular: true           # sklearn grid, autologged, winner registered
+demos_model_serving: true     # that registered model served on KServe
+demos_autorag: true           # Pipeline Server and AutoRAG prerequisites
+
+# The GPU workbench holds its card for as long as it runs, idle or not. On a
+# cluster with one spare accelerator that blocks training jobs, so set this
+# false if the GPU is needed elsewhere.
+demos_workbenches: true
+
+# Run the jobs, not merely create them. A demo that has never run shows empty
+# panels, which is worse than no demo - the MLflow experiments, traces,
+# judges and registered model only exist once something has executed.
+#
+# Costs roughly ten minutes of build time and some MaaS tokens. Set false to
+# deploy the manifests and run them by hand later.
+demos_run_jobs: true
+
+# Generation defaults to a MaaS model rather than the cluster's own GPU
+# model, so the demos survive the GPU node going away. Set to the value of
+# model_name to exercise the local model instead.
+#demos_gen_model: granite-3-2-8b-instruct

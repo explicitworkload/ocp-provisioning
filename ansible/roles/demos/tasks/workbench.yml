@@ -1,0 +1,456 @@
+---
+# The interactive half of the demos: two Jupyter workbenches, and the
+# hardware profiles that make their sizing visible in the dashboard.
+#
+# Everything else under demos/ is a Job - reproducible, in git, one
+# command. These are the opposite, and that is the point: the surface
+# RHOAI is built around, under "Develop & train". There is no Job here,
+# so demos_run_jobs does not apply. A Notebook starts as soon as it is
+# created; stopping one is a dashboard action, not a role one.
+
+# --- hardware profiles ----------------------------------------------------
+# What the dashboard offers in the "Hardware profile" dropdown when
+# someone creates a workbench or a deployment in this namespace. Without
+# one the column reads "No hardware profile", and the user types CPU and
+# memory by hand with nothing stopping them asking for a card the cluster
+# does not have.
+#
+# infrastructure.opendatahub.io/v1, not the v1alpha1 that most examples
+# still show: that version is deprecated, and the profiles the
+# openshift_ai and model_serving roles create are already on v1.
+
+- name: Offer a CPU-only hardware profile
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: infrastructure.opendatahub.io/v1
+      kind: HardwareProfile
+      metadata:
+        name: cpu-only
+        namespace: "{{ demos_namespace }}"
+        annotations:
+          opendatahub.io/display-name: "CPU only"
+          opendatahub.io/description: >-
+            No accelerator. For exploring results, querying the corpus,
+            and the tabular demo.
+          opendatahub.io/disabled: "false"
+          opendatahub.io/dashboard-feature-visibility: "[]"
+      spec:
+        identifiers:
+          - identifier: cpu
+            displayName: CPU
+            resourceType: CPU
+            minCount: 1
+            maxCount: "8"
+            defaultCount: "1"
+          - identifier: memory
+            displayName: Memory
+            resourceType: Memory
+            minCount: "1Gi"
+            maxCount: "16Gi"
+            defaultCount: "4Gi"
+
+# The two GPU profiles pin the INSTANCE TYPE, which the stock gpu-profile
+# in redhat-ods-applications does not: it selects only
+# nvidia.com/gpu.present: "true", so it places you on a 15 GiB T4 or a
+# 46 GiB L40S depending on what the scheduler feels like. That difference
+# decides whether a fine-tune runs in bf16 or not at all, so it should not
+# be left to chance.
+#
+# The tolerations below are inert here - the gpu_worker role creates GPU
+# MachineSets with no taints at all. They are kept because they cost
+# nothing and matter on any cluster where the nodes ARE tainted, which is
+# the more usual arrangement.
+- name: Offer a T4 hardware profile pinned to the instance type
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: infrastructure.opendatahub.io/v1
+      kind: HardwareProfile
+      metadata:
+        name: nvidia-t4
+        namespace: "{{ demos_namespace }}"
+        annotations:
+          opendatahub.io/display-name: "NVIDIA T4 (16 GiB)"
+          opendatahub.io/description: >-
+            1x Tesla T4 on g4dn.4xlarge. Turing: fp16 only, no bf16 and no
+            Flash Attention 2. Fine for inference, awkward for training.
+          opendatahub.io/disabled: "false"
+          opendatahub.io/dashboard-feature-visibility: "[]"
+      spec:
+        identifiers:
+          - identifier: cpu
+            displayName: CPU
+            resourceType: CPU
+            minCount: 1
+            maxCount: "16"
+            defaultCount: "2"
+          - identifier: memory
+            displayName: Memory
+            resourceType: Memory
+            minCount: "1Gi"
+            maxCount: "60Gi"
+            defaultCount: "8Gi"
+          - identifier: nvidia.com/gpu
+            displayName: GPU
+            resourceType: Accelerator
+            minCount: 1
+            maxCount: 1
+            defaultCount: 1
+        scheduling:
+          type: Node
+          node:
+            nodeSelector:
+              node.kubernetes.io/instance-type: g4dn.4xlarge
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+
+- name: Offer an L40S hardware profile pinned to the instance type
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: infrastructure.opendatahub.io/v1
+      kind: HardwareProfile
+      metadata:
+        name: nvidia-l40s
+        namespace: "{{ demos_namespace }}"
+        annotations:
+          opendatahub.io/display-name: "NVIDIA L40S (48 GiB)"
+          opendatahub.io/description: >-
+            1x L40S on g6e.4xlarge. Ada Lovelace: bf16 and Flash Attention
+            2 both work. The one to pick for fine-tuning.
+          opendatahub.io/disabled: "false"
+          opendatahub.io/dashboard-feature-visibility: "[]"
+      spec:
+        identifiers:
+          - identifier: cpu
+            displayName: CPU
+            resourceType: CPU
+            minCount: 1
+            maxCount: "16"
+            defaultCount: "4"
+          - identifier: memory
+            displayName: Memory
+            resourceType: Memory
+            minCount: "1Gi"
+            maxCount: "120Gi"
+            defaultCount: "16Gi"
+          - identifier: nvidia.com/gpu
+            displayName: GPU
+            resourceType: Accelerator
+            minCount: 1
+            maxCount: 1
+            defaultCount: 1
+        scheduling:
+          type: Node
+          node:
+            nodeSelector:
+              node.kubernetes.io/instance-type: g6e.4xlarge
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+
+# --- the volumes the workbenches keep their work on -----------------------
+# One each, mounted at /opt/app-root/src. They survive Actions -> Stop,
+# which is the point of stopping rather than deleting: the hardware goes
+# back and the files stay. Their contents are nobody's source of truth.
+#
+# Re-applying a bound PVC is a no-op while nothing here changes; the
+# storage class and access modes are immutable once bound, so altering
+# either means deleting the volume and losing what is on it.
+- name: Create the workbench volumes
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: "{{ item }}"
+        namespace: "{{ demos_namespace }}"
+        labels:
+          # The dashboard lists only volumes carrying this label under the
+          # project's Storage tab.
+          opendatahub.io/dashboard: "true"
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: gp3-csi
+  loop:
+    - rag-eval-cpu-workbench
+    - rag-eval-workbench
+
+# --- the workbenches ------------------------------------------------------
+# Two rather than one. Browsing MLflow runs, querying the corpus and
+# poking at the registered model need no accelerator, and taking a card
+# out of the pool to read a dataframe is a waste.
+#
+# Note on re-running. These two never settle: a mutating webhook rewrites
+# the container env on the way in (see MLFLOW_TRACKING_URI below), so the
+# object that lands is not the one applied, every run patches it again,
+# and the StatefulSet behind it rolls. Measured on sandbox3508 - a second
+# run reports changed on both Notebooks and nothing else. The volume and
+# its contents survive, but it does restart a workbench someone may be
+# sitting in - about two minutes back to Running - so use
+# demos_workbenches=false on a run where that matters.
+
+- name: Create the CPU workbench
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: kubeflow.org/v1
+      kind: Notebook
+      metadata:
+        name: rag-eval-cpu-workbench
+        namespace: "{{ demos_namespace }}"
+        labels:
+          # Both are needed for the dashboard to list and manage it.
+          opendatahub.io/dashboard: "true"
+          opendatahub.io/odh-managed: "true"
+        annotations:
+          openshift.io/display-name: "RAG Eval Workbench (CPU)"
+          openshift.io/description: >-
+            Data Science workbench for exploring the MLflow demos
+            interactively
+          # Names the image in the dashboard's workbench list; without
+          # these the UI shows the bare image reference.
+          opendatahub.io/image-display-name: "Jupyter | Data Science | CPU | Python 3.12"
+          notebooks.opendatahub.io/last-image-selection: "s2i-generic-data-science-notebook:3.5"
+          # Legacy, and a no-op here: no oauth-proxy sidecar is injected.
+          # Authentication happens at the data-science-gateway. See the
+          # note on the GPU workbench below.
+          notebooks.opendatahub.io/inject-oauth: "true"
+          # Without these the dashboard's Hardware profile column reads
+          # "No hardware profile" and the sizing below is invisible in
+          # the UI.
+          opendatahub.io/hardware-profile-name: cpu-only
+          opendatahub.io/hardware-profile-namespace: "{{ demos_namespace }}"
+      spec:
+        template:
+          spec:
+            # Explicitly keep this off the GPU nodes. The obvious
+            # assumption - that the nvidia.com/gpu taint repels it - is
+            # false on this cluster: the gpu_worker role creates the
+            # MachineSets without any taint, so GPU nodes accept ordinary
+            # workloads and this pod landed on a T4 box the first time. A
+            # pod that requests no GPU does not consume one, but it does
+            # compete for CPU and memory on the most expensive nodes here.
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node-role.kubernetes.io/gpu
+                          operator: DoesNotExist
+            containers:
+              - name: rag-eval-cpu-workbench
+                image: registry.redhat.io/rhoai/odh-workbench-jupyter-datascience-cpu-py312-rhel9@sha256:206018cabeb3389fcfb554cb1850c82e509483a2f98bf963d82031303adaaee5
+                imagePullPolicy: Always
+                workingDir: /opt/app-root/src
+                env:
+                  # base_url has to match the path the data-science-gateway
+                  # fronts the workbench on, /notebook/<ns>/<name>, or the
+                  # dashboard's Open button reaches a 404.
+                  - name: NOTEBOOK_ARGS
+                    value: |-
+                      --ServerApp.port=8888
+                      --ServerApp.token=''
+                      --ServerApp.password=''
+                      --ServerApp.base_url=/notebook/{{ demos_namespace }}/rag-eval-cpu-workbench
+                  # Pre-wired so the first cell can talk to MLflow without
+                  # copying URLs out of a README. A workspace is a
+                  # namespace, 1:1. Insecure TLS because MLflow serves on a
+                  # service-serving certificate the image does not trust.
+                  #
+                  # MLFLOW_TRACKING_URI does not survive admission here,
+                  # which the WALKTHROUGH does not know: the webhook that
+                  # injects the six certificate-bundle variables strips
+                  # this one, so it reaches neither the Notebook nor the
+                  # pod and mlflow falls back to a local ./mlruns. Shown
+                  # by "oc apply --dry-run=server -f
+                  # demos/workbench/cpu-workbench.yaml", which returns the
+                  # object without it. Kept because it records the intent
+                  # and costs nothing; until the webhook stops removing
+                  # it, a notebook has to call mlflow.set_tracking_uri()
+                  # for itself.
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  # The demos' other two endpoints, for the same reason.
+                  - name: OPENSEARCH_URL
+                    value: "{{ demos_opensearch_url }}"
+                  - name: LITELLM_URL
+                    value: "{{ demos_litellm_url }}"
+                ports:
+                  - name: notebook-port
+                    containerPort: 8888
+                    protocol: TCP
+                resources:
+                  requests:
+                    cpu: "500m"
+                    memory: 2Gi
+                  limits:
+                    cpu: "2"
+                    memory: 8Gi
+                volumeMounts:
+                  - name: rag-eval-cpu-workbench
+                    mountPath: /opt/app-root/src
+                livenessProbe:
+                  httpGet:
+                    path: "/notebook/{{ demos_namespace }}/rag-eval-cpu-workbench/api"
+                    port: notebook-port
+                  initialDelaySeconds: 60
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: "/notebook/{{ demos_namespace }}/rag-eval-cpu-workbench/api"
+                    port: notebook-port
+                  initialDelaySeconds: 30
+                  periodSeconds: 15
+                  failureThreshold: 10
+            volumes:
+              - name: rag-eval-cpu-workbench
+                persistentVolumeClaim:
+                  claimName: rag-eval-cpu-workbench
+
+# The GPU one. Pinned to the L40S (g6e.4xlarge), not a T4: the L40S has
+# 45 GiB and Ada Lovelace, so bf16 and Flash Attention 2 both work. The
+# T4s are Turing with 15 GiB - fp16 only, no FA2 - and most fine-tuning
+# recipes assume otherwise. Leaving the free T4 alone is deliberate: it
+# stays available for training Jobs and for serving.
+- name: Create the GPU workbench
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: kubeflow.org/v1
+      kind: Notebook
+      metadata:
+        name: rag-eval-workbench
+        namespace: "{{ demos_namespace }}"
+        labels:
+          opendatahub.io/dashboard: "true"
+          opendatahub.io/odh-managed: "true"
+        annotations:
+          openshift.io/display-name: "RAG Eval GPU Workbench (L40S)"
+          openshift.io/description: >-
+            PyTorch + CUDA workbench on the L40S, for the LoRA fine-tune
+          opendatahub.io/image-display-name: "Jupyter | PyTorch | CUDA | Python 3.12"
+          notebooks.opendatahub.io/last-image-selection: "pytorch:3.5"
+          # Legacy, and a no-op on this cluster: no oauth-proxy sidecar is
+          # injected (the pod runs a single container). Authentication is
+          # done at the data-science-gateway, which fronts the workbench
+          # on /notebook/<ns>/<name> and answers 302 to anyone
+          # unauthenticated. Kept because removing it is not worth a pod
+          # restart; do not rely on it for protection.
+          notebooks.opendatahub.io/inject-oauth: "true"
+          opendatahub.io/hardware-profile-name: nvidia-l40s
+          opendatahub.io/hardware-profile-namespace: "{{ demos_namespace }}"
+      spec:
+        template:
+          spec:
+            # Without this the scheduler is free to place the workbench on
+            # a T4, which fits and is a much worse card for fine-tuning.
+            nodeSelector:
+              node.kubernetes.io/instance-type: g6e.4xlarge
+            # Kept for portability, but inert here for the same reason as
+            # on the hardware profiles above: the GPU MachineSets carry no
+            # taints, so there is nothing to tolerate.
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: rag-eval-workbench
+                image: registry.redhat.io/rhoai/odh-workbench-jupyter-pytorch-cuda-py312-rhel9@sha256:f476e56ad00faaad5f2e26010f633233db2d4b299d7c5281e2f4ac46949b531b
+                imagePullPolicy: Always
+                workingDir: /opt/app-root/src
+                env:
+                  - name: NOTEBOOK_ARGS
+                    value: |-
+                      --ServerApp.port=8888
+                      --ServerApp.token=''
+                      --ServerApp.password=''
+                      --ServerApp.base_url=/notebook/{{ demos_namespace }}/rag-eval-workbench
+                  # Stripped by the same webhook as on the CPU workbench
+                  # above, and kept for the same reason.
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                ports:
+                  - name: notebook-port
+                    containerPort: 8888
+                    protocol: TCP
+                resources:
+                  requests:
+                    cpu: "1"
+                    memory: 8Gi
+                    nvidia.com/gpu: "1"
+                  limits:
+                    # The card cannot be shared, so request and limit are
+                    # both 1.
+                    cpu: "4"
+                    memory: 16Gi
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: rag-eval-workbench
+                    mountPath: /opt/app-root/src
+                  # Jupyter writes to /dev/shm for dataloader workers; the
+                  # default 64Mi is not enough once torch is involved.
+                  - name: shm
+                    mountPath: /dev/shm
+                livenessProbe:
+                  httpGet:
+                    path: "/notebook/{{ demos_namespace }}/rag-eval-workbench/api"
+                    port: notebook-port
+                  initialDelaySeconds: 60
+                  periodSeconds: 30
+                  failureThreshold: 10
+                readinessProbe:
+                  httpGet:
+                    path: "/notebook/{{ demos_namespace }}/rag-eval-workbench/api"
+                    port: notebook-port
+                  initialDelaySeconds: 30
+                  periodSeconds: 15
+                  failureThreshold: 10
+            volumes:
+              - name: rag-eval-workbench
+                persistentVolumeClaim:
+                  claimName: rag-eval-workbench
+              - name: shm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 2Gi
+
+# Said out loud because it is the one thing this file leaves running that
+# costs something, and an idle workbench looks free from the dashboard.
+- name: Report that the GPU workbench now holds a card
+  ansible.builtin.debug:
+    msg: >-
+      rag-eval-workbench holds the L40S for as long as it runs, idle or
+      not. Stop it from Projects -> {{ demos_namespace }} -> Workbenches
+      -> Actions -> Stop when the accelerator is needed elsewhere; the
+      volume and its contents survive. Set demos_workbenches=false to
+      leave both workbenches out of the run entirely.

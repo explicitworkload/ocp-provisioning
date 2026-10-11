@@ -1,0 +1,69 @@
+---
+# The demos under demos/ in this repo, deployed as Ansible rather than as a
+# page of oc commands. Everything else here is a role; these were the
+# exception.
+#
+# On by default, and each demo switchable individually in
+# group_vars/all.yml. Set deploy_demos=false to leave the lot out.
+deploy_demos: true
+
+demos_namespace: rag-eval
+demos_display_name: "RAG Eval & MLflow Demos"
+demos_description: >-
+  MLflow demos: retrieval A/B, answer judging, prompt versions, tabular
+  MLOps, model serving and AutoRAG
+
+# The scripts live in demos/, not in this role's files/. One copy, and the
+# directory stays browsable and runnable on its own.
+demos_src: "{{ playbook_dir }}/../demos"
+
+# Per-demo switches. All are cheap except the workbenches, which hold a PVC
+# each and - for the GPU one - a card for as long as they run.
+demos_rag_eval: true          # retrieval A/B
+demos_rag_judge: true         # tracing + LLM judges
+demos_prompt_versions: true   # prompt registry A/B
+demos_tabular: true           # sklearn grid -> registry
+demos_model_serving: true     # registry -> KServe, needs demos_tabular
+# NOTE ON THE GPU: the L40S workbench holds its card for as long as it is
+# running, idle or not. On a cluster with one spare GPU that blocks
+# training jobs, so set this false if the accelerator is needed elsewhere.
+demos_workbenches: true       # Jupyter, CPU + GPU
+demos_autorag: true           # Pipeline Server + AutoRAG prerequisites
+
+# Run the jobs, not just create them. On by default because a demo that
+# has never run shows empty panels, which is worse than no demo at all -
+# the MLflow experiments, traces, judges and registered model only exist
+# once something has executed.
+#
+# The cost is roughly ten minutes of cluster build time and some MaaS
+# tokens. Set false to deploy the manifests and run them by hand later.
+demos_run_jobs: true
+
+demos_job_image: registry.access.redhat.com/ubi9/python-312:latest
+
+# Pinned to the scikit-learn inside the MLServer runtime image. A pickle is
+# only reliably loadable by the version that wrote it, and a mismatch fails
+# at inference rather than at training. Check with:
+#   oc exec <mlserver pod> -- python -c "import sklearn; print(sklearn.__version__)"
+demos_sklearn_version: "1.9.0"
+
+# Generation defaults to a MaaS model, not the cluster's own GPU model, so
+# the demos survive the GPU node going away - which it did, twice, while
+# they were being written.
+demos_gen_model: granite-3-2-8b-instruct
+demos_embed_model: bge-small-en-v1.5
+demos_judge_model: "openai:/granite-3-2-8b-instruct"
+
+demos_mlflow_uri: https://mlflow.redhat-ods-applications.svc.cluster.local:8443/mlflow
+demos_litellm_url: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000"
+demos_opensearch_url: "https://opensearch-node.{{ openrag_opensearch_namespace | default('opensearch') }}.svc.cluster.local:9200"
+demos_milvus_uri: "http://{{ milvus_name | default('milvus') }}-milvus.{{ milvus_namespace | default('milvus') }}.svc.cluster.local:19530"
+
+# --- AutoRAG ---------------------------------------------------------------
+# There were two CA variables here, naming the service-CA bundle, from an
+# attempt to make the pipeline trust NooBaa's TLS endpoint. It does not
+# work - apiServer.cABundle reaches the API server, not the launcher that
+# moves artifacts - and tasks/autorag.yml uses http on port 80 instead.
+# Removed rather than left set, because a variable nothing reads reads as a
+# setting that is in force.
+demos_autorag_llamastack_url: "http://lsd-genai-playground-service.{{ model_namespace | default('qwen3-4b') }}.svc.cluster.local:8321"

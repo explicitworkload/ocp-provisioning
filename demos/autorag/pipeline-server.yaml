@@ -1,26 +1,4 @@
 ---
-# The Pipeline Server (Kubeflow Pipelines) for the rag-eval project.
-#
-# AutoRAG's Documents RAG Optimization Pipeline runs on Kubeflow Pipelines,
-# and this cluster had no DataSciencePipelinesApplication at all - the one
-# prerequisite it was missing. Everything else AutoRAG needs was already
-# here: the autorag-ui Deployment, a llama-stack server (the Gen AI
-# playground on :8321), Milvus as a vector store, chat and embedding models
-# via LiteLLM, and NooBaa for object storage.
-#
-# Artifacts go to a NooBaa bucket from an ObjectBucketClaim. The OBC
-# generates its own Secret holding AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
-# and DSPA is pointed straight at it rather than at a hand-made copy - no
-# credential is written by hand, and nothing secret lands in this file.
-apiVersion: objectbucket.io/v1alpha1
-kind: ObjectBucketClaim
-metadata:
-  name: pipeline-artifacts
-  namespace: rag-eval
-spec:
-  generateBucketName: pipeline-artifacts
-  storageClassName: openshift-storage.noobaa.io
----
 apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
 kind: DataSciencePipelinesApplication
 metadata:
@@ -35,6 +13,16 @@ spec:
     # The dashboard and the AutoRAG UI reach the API server in-cluster; an
     # external Route is not needed and is one less thing exposed.
     enableExternalRoute: false
+    # Registers the managed pipeline set, which is what AutoRAG runs on -
+    # documents-rag-optimization-pipeline, plus documents-indexing and the
+    # two autogluon ones. An EMPTY OBJECT is the whole configuration; it
+    # enables the defaults.
+    #
+    # Without it the AutoRAG page says "A pipeline server was found, but
+    # AutoRAG pipelines are not enabled" and offers a button. The button
+    # sets exactly this, and restarts the pipeline server to apply it -
+    # so declaring it here means a fresh cluster never needs the click.
+    managedPipelines: {}
   # The default MariaDB, deployed here rather than pointing at an external
   # SQL database. It holds pipeline metadata only - runs, DAGs, artifact
   # references - not the artifacts themselves, which go to the bucket.
@@ -45,10 +33,26 @@ spec:
       pvcSize: 10Gi
   objectStorage:
     externalStorage:
-      bucket: pipeline-artifacts-accb9dee-ebff-4db3-b932-c1e80f968e1f
+      # A placeholder, because the name is GENERATED per cluster
+      # (generateBucketName) and so cannot be committed - a hardcoded one
+      # applies cleanly and then fails at runtime against a bucket that
+      # does not exist here. The role reads the real name off the claim's
+      # ConfigMap instead of substituting into this file.
+      bucket: __PIPELINE_BUCKET__
       host: s3.openshift-storage.svc
-      port: "443"
-      scheme: https
+      # Port 80 and plain http, deliberately. NooBaa's TLS endpoint
+      # presents a service-CA certificate, and the KFP LAUNCHER - which is
+      # what moves artifacts between steps - carries no bundle that trusts
+      # it: it logs "Error reading CA bundle file, open
+      # /etc/ssl/certs/ca-certificates.crt: no such file or directory" and
+      # then "failed to download input artifact". Setting
+      # apiServer.cABundle does NOT fix this; that bundle reaches the API
+      # server, not the launcher, and the run fails identically.
+      #
+      # This is pod-to-pod traffic inside the cluster to a NooBaa service,
+      # so plaintext here is a smaller compromise than the alternatives.
+      port: "80"
+      scheme: http
       region: us-east-1
       s3CredentialsSecret:
         # The ObjectBucketClaim above generates this Secret and these two

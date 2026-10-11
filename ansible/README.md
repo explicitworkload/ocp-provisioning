@@ -524,6 +524,53 @@ as the cause.
 The image tag must track the OpenSearch server's major line — both are
 3.8.0 as shipped.
 
+### Demos — on by default
+
+Seven demonstrations of what the platform can be shown doing, deployed as a
+role rather than as a page of `oc` commands. They live in [`demos/`](../demos/)
+at the repo root, one directory each with a README and a presenter's
+walkthrough; the role applies them.
+
+```bash
+./run.sh --tags demos
+```
+
+| # | Demo | Shows |
+|---|------|-------|
+| 1 | rag-eval | retrieval A/B: OpenSearch BM25 vs OpenSearch kNN vs Milvus |
+| 2 | rag-judge | tracing plus LLM judges scoring answer quality |
+| 3 | prompt-versions | Prompt Registry, three versions compared |
+| 4 | tabular-mlops | sklearn grid, autologged, winner registered |
+| 5 | model-serving | that registered model served on KServe |
+| 6 | workbench | Jupyter, CPU and L40S GPU |
+| 7 | autorag | AutoRAG running demo 1's sweep automatically, over a far larger space |
+
+`deploy_demos` gates the lot and each has its own switch
+(`demos_rag_eval`, `demos_autorag`, …), all `true`. The role refuses to
+proceed without MLflow, which every demo writes to.
+
+**`demos_run_jobs`, also `true`, is the one worth understanding.** It
+decides whether the Jobs are run or merely created. A demo that has never
+run shows empty panels, which is worse than no demo at all — the
+experiments, traces, judges and registered model only exist once something
+has executed. It costs roughly ten minutes and some MaaS tokens.
+
+**`demos_workbenches` is the one to think about.** The L40S workbench holds
+its card for as long as it runs, idle or not, so on a cluster with one
+spare accelerator it blocks training jobs.
+
+Demo 5 needs demo 4 to have run — it serves what that one registers. Demos
+1-3 need OpenRAG with an ingested corpus; demo 1 also needs Milvus. Demo 7
+needs ODF for its buckets and the Gen AI playground as its Llama-stack
+server, and is the only one whose run is started by hand, from the
+dashboard — see [demos/autorag/README.md](../demos/autorag/README.md),
+which also lists the seven things that had to be fixed to make a run
+finish.
+
+Generation defaults to a MaaS model rather than the cluster's own GPU
+model, so the demos survive the GPU node going away — which it did, twice,
+while they were being written.
+
 ## Prerequisites
 
 - An existing OpenShift 4.22+ cluster on AWS
@@ -767,6 +814,8 @@ ansible-playbook site.yml --tags external-dns       # External DNS + Cloudflare
 ansible-playbook site.yml --tags devspaces          # OpenShift Dev Spaces
 ansible-playbook site.yml --tags ztwim              # SPIFFE/SPIRE workload identity
 ansible-playbook site.yml --tags milvus             # Milvus + Attu + vector store
+ansible-playbook site.yml --tags openrag            # OpenSearch, docling, embeddings, OpenRAG
+ansible-playbook site.yml --tags demos              # The seven demos under demos/
 ```
 
 ## Playbook structure
@@ -800,6 +849,7 @@ ansible/
     ├── gatus/                  # Gatus health monitoring
     ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings (opt-in)
     ├── milvus/                 # Milvus operator, standalone instance, Attu UI (opt-in)
+    ├── demos/                  # The seven demos under demos/, one task file each
     ├── verify/                 # Asserts the deployment; collects every failure
     └── summary/                # Prints URLs, credentials and total run time
 ```

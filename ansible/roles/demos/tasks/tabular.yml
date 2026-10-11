@@ -1,0 +1,176 @@
+---
+# The non-LLM demo: a scikit-learn grid, autologged, compared on a holdout,
+# and the winner promoted into the Model Registry. CPU only - no GPU, no
+# inference endpoint and no corpus - which is why it is the one that still
+# runs when the GPU node has gone away or the serving stack is reconciling.
+#
+# model_serving deploys what this registers, so a failure here is raised
+# rather than reported and stepped over.
+
+# train.py stays in demos/ as the single copy and is shipped from there, so
+# the directory remains browsable and runnable on its own. Applied before
+# the Job is recreated below rather than after: the pod reads the ConfigMap
+# at start, so an edited script only reaches a run that begins afterwards.
+- name: Ship the tabular training script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: tabular-mlops-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        train.py: "{{ lookup('file', demos_src + '/tabular-mlops/train.py') }}"
+
+# A Job's pod template is immutable once created, so apply: true cannot
+# bring an existing one up to date and the second run of the role errors on
+# it instead. Deleting first, and waiting for the delete, is what makes the
+# role re-runnable.
+- name: Remove any previous tabular training job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: tabular-mlops
+    wait: true
+  when: demos_run_jobs | bool
+
+- name: Train the grid and register the winner
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: tabular-mlops
+        namespace: "{{ demos_namespace }}"
+      spec:
+        # No retry. Each run logs a further eight runs into the experiment
+        # and registers another model version, so a repeat would quietly
+        # change what the walkthrough points at.
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            # No demos-creds here: this demo reaches nothing but MLflow, and
+            # MLflow authenticates the ServiceAccount's own token. It needs
+            # neither OpenSearch nor LiteLLM.
+            serviceAccountName: demos
+            containers:
+              - name: train
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # Full mlflow, not mlflow-skinny: sklearn.autolog and the
+                    # sklearn model flavour both live outside skinny, and
+                    # autolog is the whole point of this demo.
+                    #
+                    # scikit-learn is pinned to the version inside the
+                    # MLServer runtime image. A pickle is only reliably
+                    # loadable by the version that wrote it, so training
+                    # against anything else produces a model the cluster
+                    # cannot serve - and that failure surfaces at inference,
+                    # in the serving pod, with nothing wrong here. Read the
+                    # runtime's version with:
+                    #   oc exec <mlserver pod> -- \
+                    #     python -c "import sklearn; print(sklearn.__version__)"
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow "scikit-learn=={{ demos_sklearn_version }}"
+                    export PYTHONPATH=/tmp/pylibs
+                    # RHOAI's MLflow authorises a Kubernetes bearer token
+                    # against the namespace it belongs to; the pod's own
+                    # ServiceAccount token is one.
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/train.py
+                env:
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  # The tracking service has no Route and presents a
+                  # service-serving certificate; this image carries no bundle
+                  # that trusts it.
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  # A workspace is a namespace, 1:1. Without it every call
+                  # returns 400 "Workspace context is required for this
+                  # request", which names neither the header nor the rule.
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  - name: MLFLOW_EXPERIMENT
+                    value: breast-cancer-tabular
+                  - name: REGISTERED_NAME
+                    value: breast-cancer-classifier
+                  # Pinned. The grid scores near the ceiling of a 569-row
+                  # dataset, so a different shuffle can hand the win to a
+                  # different model and the walkthrough's numbers stop
+                  # matching the screen.
+                  - name: SEED
+                    value: "1337"
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 1Gi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: tabular-mlops-script
+  when: demos_run_jobs | bool
+
+- name: Wait for the tabular training job to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: tabular-mlops
+  register: demos_tabular_job
+  # .failed as well as .succeeded: backoffLimit is 0, so a lost pod is the
+  # end of the Job and never becomes succeeded. Waiting on success alone
+  # would burn the entire budget before admitting a run that failed in the
+  # first ten seconds.
+  until: >-
+    demos_tabular_job.resources[0].status.succeeded is defined
+    or demos_tabular_job.resources[0].status.failed is defined
+  # Five minutes. A measured run is under two, most of it pip installing
+  # scikit-learn; the rest is room for the image pull on a node that has not
+  # run a demo before.
+  retries: 30
+  delay: 10
+  when: demos_run_jobs | bool
+
+- name: Check that the tabular training job succeeded
+  ansible.builtin.assert:
+    that: demos_tabular_job.resources[0].status.succeeded is defined
+    fail_msg: >-
+      The tabular training job did not succeed. Read it with
+      "oc -n {{ demos_namespace }} logs job/tabular-mlops". The pod installs
+      mlflow and scikit-learn {{ demos_sklearn_version }} before it does
+      anything else, so a failure in the first seconds is an unreachable
+      package index rather than anything about the model. The model-serving
+      demo has nothing to deploy until this registers one.
+    quiet: true
+  when: demos_run_jobs | bool
+
+- name: Report the registered model
+  ansible.builtin.debug:
+    msg: >-
+      Experiment breast-cancer-tabular has eight runs and the best holdout
+      ROC AUC is registered as breast-cancer-classifier. Keep
+      "?workspace={{ demos_namespace }}" on the MLflow URL - the bare path
+      opens a different workspace with an empty experiment list, which looks
+      exactly like nothing having run.
+  when: demos_run_jobs | bool

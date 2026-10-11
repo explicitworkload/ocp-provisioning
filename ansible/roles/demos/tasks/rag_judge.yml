@@ -1,0 +1,372 @@
+---
+# Demo 2: trace the RAG pipeline, then judge the answers it produces.
+# Converted from demos/rag-judge/job.yaml, plus the judge registration that
+# demos/prompt-versions carries - the same script, pointed at this demo's
+# experiment rather than that one's.
+#
+# Everything lands in the experiment openrag-answer-quality, in the workspace
+# that is this namespace. A workspace is a namespace 1:1, which is why the
+# Jobs run here and why the MLflow UI needs ?workspace=<namespace> on the URL
+# before any of it is visible.
+
+# The scripts stay in demos/ and are mounted from there: one copy, and the
+# directory remains browsable and runnable by hand. This task runs ahead of
+# the Job on every pass, and the Job reads the mount at start, so an edit in
+# demos/ reaches the next run.
+#
+# usage.py travels with rag_judge.py because the script imports it. It copies
+# LiteLLM's usage block and cost header onto the active span, which is the
+# only reason MLflow's Token usage, Tokens per trace and Cost panels show
+# anything other than zero.
+- name: Ship the answer-quality script and the usage helper
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: rag-judge-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        rag_judge.py: "{{ lookup('file', demos_src + '/rag-judge/rag_judge.py') }}"
+        usage.py: "{{ lookup('file', demos_src + '/_shared/usage.py') }}"
+
+# Registering a judge is not what evaluate(scorers=[...]) does. Passing
+# scorers runs them ad hoc: the scores land on the run, but nothing is stored
+# about the judges themselves, so the Judges tab stays empty and the next
+# evaluation has to re-declare them in code. The evaluation looks completely
+# successful either way, which is why the distinction is easy to miss.
+#
+# The script is the one demos/prompt-versions holds; it is parameterised by
+# MLFLOW_EXPERIMENT, so registering on this experiment is a matter of running
+# it with that variable set.
+- name: Ship the judge registration script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: register-judges-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        register_judges.py: "{{ lookup('file', demos_src + '/prompt-versions/register_judges.py') }}"
+
+# A completed Job is immutable, and creating one that already exists fails,
+# so the previous run goes first. Foreground propagation takes its pod with
+# it; left behind, a Completed pod from the last run is what "oc logs
+# job/rag-judge" can end up showing.
+- name: Remove the previous answer-quality run
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: rag-judge
+    wait: true
+    delete_options:
+      propagationPolicy: Foreground
+  when: demos_run_jobs | bool
+
+- name: Run the answer-quality evaluation
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: rag-judge
+        namespace: "{{ demos_namespace }}"
+      spec:
+        # No retry. A second attempt would re-run the whole evaluation and
+        # bill another round of judge calls, and the wait below reads a
+        # failed pod as final because of this.
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: judge
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # Full mlflow, not mlflow-skinny: the genai evaluate and
+                    # scorer APIs are not in skinny. openai is the provider
+                    # the judges reach their model through.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow openai requests
+                    export PYTHONPATH=/tmp/pylibs
+                    # Read in the pod, never through Ansible. RHOAI's MLflow
+                    # authenticates with a Kubernetes bearer token and then
+                    # authorises it against the namespace it belongs to,
+                    # which is what the admin RoleBinding in main.yml covers.
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/rag_judge.py
+                env:
+                  - name: OPENSEARCH_URL
+                    value: "{{ demos_opensearch_url }}"
+                  - name: OPENSEARCH_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: OPENSEARCH_PASSWORD
+                  - name: LITELLM_URL
+                    value: "{{ demos_litellm_url }}"
+                  - name: LITELLM_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  # MLflow's judges take model="<provider>:/<name>" and reach
+                  # it through the openai provider, which reads these three
+                  # and nothing else. LiteLLM is OpenAI-compatible, so the
+                  # judge and the model under test come down the same pipe.
+                  - name: OPENAI_API_BASE
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_BASE_URL
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  # As shipped this is granite judging granite, which is the
+                  # first objection anyone in the room raises and a fair one.
+                  # Point demos_judge_model at a different LiteLLM model and
+                  # the demo is materially stronger.
+                  - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+                    value: "{{ demos_judge_model }}"
+                  - name: GEN_MODEL
+                    value: "{{ demos_gen_model }}"
+                  - name: EMBED_MODEL
+                    value: "{{ demos_embed_model }}"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  # The MLflow service presents a service-serving certificate
+                  # and this image carries no bundle that trusts it.
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  # Without a workspace every call comes back 400
+                  # INVALID_PARAMETER_VALUE: Workspace context is required
+                  # for this request.
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  - name: MLFLOW_EXPERIMENT
+                    value: openrag-answer-quality
+                  # Each question is one retrieval, one generation and three
+                  # judge calls, so cost scales at roughly 4x this number.
+                  # Twelve is also small enough that one answer moves a score
+                  # by 8 points, which is worth saying before anyone reads
+                  # 0.917 as precise.
+                  - name: N_QUESTIONS
+                    value: "12"
+                  - name: TOP_K
+                    value: "5"
+                  # Fixes which chunks the questions are written from, so a
+                  # re-run samples the same part of the corpus.
+                  - name: SEED
+                    value: "1337"
+                volumeMounts:
+                  # Both files land in /app, which Python puts on sys.path as
+                  # the script's own directory - that, and not PYTHONPATH, is
+                  # what makes "from usage import record_usage" resolve.
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: rag-judge-script
+  when: demos_run_jobs | bool
+
+- name: Wait for the answer-quality evaluation to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: rag-judge
+  register: demos_rag_judge_job
+  # .status.failed ends the wait as well as .status.succeeded: with
+  # backoffLimit 0 a failed pod is the final answer, and waiting the budget
+  # out would hide an error thrown on the first question.
+  until: >-
+    demos_rag_judge_job.resources | length > 0
+    and (demos_rag_judge_job.resources[0].status.succeeded is defined
+         or demos_rag_judge_job.resources[0].status.failed is defined)
+  # Ten minutes. Measured at about 2.5 minutes for twelve questions, plus
+  # roughly 40 seconds installing mlflow; the rest is headroom for a MaaS
+  # endpoint under load, since every question is four calls to it.
+  retries: 60
+  delay: 10
+  when: demos_run_jobs | bool
+
+- name: Stop when the answer-quality evaluation failed
+  ansible.builtin.fail:
+    msg: >-
+      The rag-judge Job failed. "oc -n {{ demos_namespace }} logs
+      job/rag-judge" has the reason. "no questions generated" means the
+      OpenSearch index held nothing to write questions from, so OpenRAG has
+      not ingested the corpus yet; "empty content" means LiteLLM returned a
+      completion with no text, which on a reasoning model is the whole
+      budget going into reasoning_content.
+  when:
+    - demos_run_jobs | bool
+    - demos_rag_judge_job.resources[0].status.failed is defined
+
+# Named for the experiment rather than "register-judges" alone: registration is
+# per-experiment and register_judges.py defaults MLFLOW_EXPERIMENT to the
+# prompt-versions one, so another demo registering its own judges must not
+# delete and re-run this Job.
+- name: Remove the previous judge registration run
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: register-judges-answer-quality
+    wait: true
+    delete_options:
+      propagationPolicy: Foreground
+  when: demos_run_jobs | bool
+
+# After the evaluation, so the judges attach to an experiment that already
+# holds the runs they describe: set_experiment creates an empty one when it
+# goes first, which is harmless but reads as a mistake in the UI.
+- name: Register the judges on the answer-quality experiment
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: register-judges-answer-quality
+        namespace: "{{ demos_namespace }}"
+      spec:
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: register
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # Full mlflow again: make_judge and the scorer classes
+                    # are not in mlflow-skinny either.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow openai
+                    export PYTHONPATH=/tmp/pylibs
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/register_judges.py
+                # Only MLflow and the judge provider: this script registers
+                # definitions and neither retrieves nor generates, so it gets
+                # no OpenSearch credential.
+                env:
+                  - name: OPENAI_API_BASE
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_BASE_URL
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  # Stored in each judge definition, so this is the model the
+                  # registered judges will use when they are next run.
+                  - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+                    value: "{{ demos_judge_model }}"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  # Required, not decoration: the script falls back to
+                  # openrag-prompt-versions, so leaving this unset registers
+                  # the judges on the wrong experiment and this one's Judges
+                  # tab stays empty.
+                  - name: MLFLOW_EXPERIMENT
+                    value: openrag-answer-quality
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: register-judges-script
+  when: demos_run_jobs | bool
+
+- name: Wait for the judge registration to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: register-judges-answer-quality
+  register: demos_register_judges_job
+  until: >-
+    demos_register_judges_job.resources | length > 0
+    and (demos_register_judges_job.resources[0].status.succeeded is defined
+         or demos_register_judges_job.resources[0].status.failed is defined)
+  # Five minutes, nearly all of it the pip install: the script writes four
+  # judge definitions and makes no model calls.
+  retries: 30
+  delay: 10
+  when: demos_run_jobs | bool
+
+- name: Stop when the judge registration failed
+  ansible.builtin.fail:
+    msg: >-
+      The register-judges-answer-quality Job failed. "oc -n
+      {{ demos_namespace }} logs job/register-judges-answer-quality" has the
+      reason. Note that the script catches a failure per judge, prints it and
+      still exits 0, so a Job that failed outright is a tracking or auth
+      problem rather than one judge being rejected.
+  when:
+    - demos_run_jobs | bool
+    - demos_register_judges_job.resources[0].status.failed is defined
+
+- name: Report the answer-quality results
+  ansible.builtin.debug:
+    msg: >-
+      openrag-answer-quality now holds one trace per question, each with a
+      RETRIEVER and an LLM span, and an evaluation run named
+      rag-answer-quality scored by three judges. Four judges are registered
+      on the experiment - the three built-ins plus a custom "actionable" one;
+      the registration log lists what landed, because a judge that is
+      rejected is reported and skipped rather than failing the Job.
+      Open MLflow with ?workspace={{ demos_namespace }} on the URL. The bare
+      path lands in a different workspace with an empty experiment list,
+      which reads as "nothing ever ran" and is the most likely way this demo
+      fails in front of an audience.
+  when: demos_run_jobs | bool

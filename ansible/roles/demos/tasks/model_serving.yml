@@ -1,0 +1,513 @@
+---
+# Registry to serving, which is the hop nothing automates. MLflow addresses
+# a model as models:/name/version on its own volume; KServe wants a
+# storageUri it can download. So the artefact is carried into a NooBaa
+# bucket, MLServer is stood up in front of it, and the live endpoint is then
+# sent holdout rows whose labels are already known - Ready means the pod
+# started, not that the model predicts.
+#
+# Runs on what tabular.yml registered. With no version of
+# breast-cancer-classifier in the registry the export stops on "no versions
+# registered", which the report below names.
+
+# --- the bucket KServe fetches from ---------------------------------------
+
+- name: Claim a NooBaa bucket for the exported model
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: model-artifacts
+        namespace: "{{ demos_namespace }}"
+      spec:
+        generateBucketName: model-artifacts
+        storageClassName: openshift-storage.noobaa.io
+
+- name: Wait for the model-artifacts bucket to be provisioned
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: objectbucket.io/v1alpha1
+    kind: ObjectBucketClaim
+    namespace: "{{ demos_namespace }}"
+    name: model-artifacts
+  register: demos_ms_obc
+  until: (demos_ms_obc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 10
+
+# generateBucketName, so the bucket is model-artifacts-<uuid> and its real
+# name is only knowable after the claim binds - the storageUri further down
+# is built from what is read back here rather than from a name written in
+# advance. The claim also generates a Secret of the same name; the export
+# Job takes both by reference.
+- name: Read the bucket name the claim generated
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ demos_namespace }}"
+    name: model-artifacts
+  register: demos_ms_bucket
+
+# --- carrying the model out of the registry -------------------------------
+
+# The script stays in demos/ and is shipped from there, so the directory
+# remains runnable on its own and there is one copy to correct.
+#
+# What it does is not a format conversion for its own sake: mlserver-runtime
+# declares sklearn, xgboost, lightgbm and onnx - not mlflow - so the script
+# lifts the estimator out of the MLflow wrapper with mlflow.sklearn.load_model
+# and writes the bare model.joblib the sklearn runtime looks for.
+- name: Ship the export script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: export-model-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        export_to_s3.py: "{{ lookup('file', demos_src + '/model-serving/export_to_s3.py') }}"
+
+# A completed Job is immutable and a second create fails on the name, so any
+# previous run is removed first. wait: true, because creating the
+# replacement while the old one is still terminating fails the same way.
+- name: Remove any previous export Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: export-model
+    wait: true
+  when: demos_run_jobs | bool
+
+- name: Export the registered model into the bucket
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: export-model
+        namespace: "{{ demos_namespace }}"
+      spec:
+        # A retry would fail the same way and double the wait below.
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: export
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # scikit-learn has to match in three places: the training
+                    # Job, here, and the MLServer runtime image. A pickle is
+                    # only reliably loadable by the version that wrote it,
+                    # and a mismatch does not fail at export - it fails at
+                    # inference, in a pod nobody is tailing.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow "scikit-learn=={{ demos_sklearn_version }}" boto3
+                    export PYTHONPATH=/tmp/pylibs
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/export_to_s3.py
+                env:
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  # MLflow's in-cluster endpoint presents a service-CA
+                  # certificate and this image carries no bundle for it.
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  # A workspace is a namespace, 1:1, and MLflow authorises
+                  # against the namespace the service account token belongs
+                  # to - the two have to name the same place.
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  - name: MODEL_NAME
+                    value: breast-cancer-classifier
+                  - name: S3_PREFIX
+                    value: breast-cancer
+                  - name: S3_ENDPOINT
+                    value: https://s3.openshift-storage.svc:443
+                  - name: BUCKET_NAME
+                    valueFrom:
+                      configMapKeyRef:
+                        name: model-artifacts
+                        key: BUCKET_NAME
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: model-artifacts
+                        key: AWS_ACCESS_KEY_ID
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: model-artifacts
+                        key: AWS_SECRET_ACCESS_KEY
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: export-model-script
+  when: demos_run_jobs | bool
+
+- name: Wait for the export Job to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: export-model
+  register: demos_ms_export
+  # backoffLimit is 0, so a failed pod sets .status.failed immediately.
+  # Breaking on either outcome turns a dead Job into the message below
+  # instead of ten more minutes of polling.
+  until: >-
+    demos_ms_export.resources[0].status.succeeded is defined
+    or demos_ms_export.resources[0].status.failed is defined
+  # 10 minutes. The pip install of mlflow and scikit-learn dominates; the
+  # artefact itself is 161 KiB and the upload is immediate.
+  retries: 60
+  delay: 10
+  when: demos_run_jobs | bool
+
+- name: Fail when the model never reached the bucket
+  ansible.builtin.fail:
+    msg: >-
+      The export Job did not complete -
+      "oc -n {{ demos_namespace }} logs job/export-model".
+      The usual cause is nothing to export: this demo serves what the
+      tabular demo registers, so breast-cancer-classifier has to exist in
+      the registry first (demos_tabular=true), or the script stops on "no
+      versions registered".
+  when:
+    - demos_run_jobs | bool
+    - demos_ms_export.resources[0].status.succeeded is not defined
+
+# --- the runtime ----------------------------------------------------------
+
+# Instantiated from the RHOAI template rather than written out here, so the
+# runtime image and arguments stay whatever the installed RHOAI ships.
+- name: Wait for the RHOAI MLServer runtime template
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: template.openshift.io/v1
+    kind: Template
+    namespace: redhat-ods-applications
+    name: mlserver-runtime-template
+  register: demos_ms_template
+  until: demos_ms_template.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Render the MLServer runtime from the template
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }}
+      process mlserver-runtime-template
+      -n redhat-ods-applications
+      -o yaml
+  register: demos_ms_runtime_yaml
+  changed_when: false
+
+- name: Create the MLServer runtime in the demos namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    namespace: "{{ demos_namespace }}"
+    definition: "{{ demos_ms_runtime_yaml.stdout | from_yaml_all | list }}"
+
+# The dashboard resolves the runtime's name from annotations on the
+# ServingRuntime. Without them the Deployments page reads "Unknown Serving
+# Runtime" against a model that is serving perfectly well; annotating the
+# InferenceService instead was the first thing tried here and did nothing,
+# and oc process does not add them because the template describes the
+# runtime rather than how the dashboard should label it.
+#
+# Patched, not applied: a partial apply would be the same field manager
+# offering an object without a spec, and the template's own spec would go
+# with it.
+- name: Name the runtime for the dashboard
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: serving.kserve.io/v1alpha1
+    kind: ServingRuntime
+    namespace: "{{ demos_namespace }}"
+    name: mlserver-runtime
+    definition:
+      metadata:
+        annotations:
+          opendatahub.io/apiProtocol: REST
+          opendatahub.io/template-name: mlserver-runtime-template
+          opendatahub.io/template-display-name: "MLServer ServingRuntime for KServe"
+
+# --- what the storage initializer authenticates with ----------------------
+
+# KServe finds S3 credentials through the predictor's ServiceAccount, and
+# takes the endpoint from ANNOTATIONS on the Secret rather than from its
+# data. The claim's Secret already holds the keys under the names the
+# initializer reads, so the annotations are added to it in place - copying
+# the pair into a second Secret would mean reading live credentials into an
+# Ansible variable for no gain.
+- name: Annotate the bucket credentials with the S3 endpoint
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: v1
+    kind: Secret
+    namespace: "{{ demos_namespace }}"
+    name: model-artifacts
+    definition:
+      metadata:
+        annotations:
+          # No scheme on the endpoint; s3-usehttps carries that.
+          serving.kserve.io/s3-endpoint: s3.openshift-storage.svc:443
+          serving.kserve.io/s3-usehttps: "1"
+          # NooBaa self-signs.
+          serving.kserve.io/s3-verifyssl: "0"
+          # NooBaa ignores the region and boto insists on having one.
+          serving.kserve.io/s3-region: us-east-1
+  no_log: true
+
+- name: Create the service account the predictor fetches the model with
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: model-store-sa
+        namespace: "{{ demos_namespace }}"
+      secrets:
+        - name: model-artifacts
+
+# --- serving --------------------------------------------------------------
+
+- name: Serve the exported model
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: serving.kserve.io/v1beta1
+      kind: InferenceService
+      metadata:
+        name: breast-cancer
+        namespace: "{{ demos_namespace }}"
+        labels:
+          # Without this the deployment does not appear as a
+          # dashboard-managed model at all.
+          opendatahub.io/dashboard: "true"
+        annotations:
+          serving.kserve.io/deploymentMode: Standard
+          # The same pair as on the ServingRuntime above. The Deployments
+          # page reads them from the runtime, not from here; these mirror
+          # what the model_serving role sets on its vLLM InferenceService.
+          opendatahub.io/template-name: mlserver-runtime-template
+          opendatahub.io/template-display-name: "MLServer ServingRuntime for KServe"
+          openshift.io/display-name: "Breast cancer classifier (sklearn)"
+          openshift.io/description: "Registered from MLflow (breast-cancer-classifier)"
+      spec:
+        predictor:
+          # Carries the annotated bucket credentials; without it the storage
+          # initializer has no way to authenticate to NooBaa.
+          serviceAccountName: model-store-sa
+          model:
+            modelFormat:
+              # sklearn, because the export wrote a bare estimator. mlflow
+              # is not among the formats this runtime declares.
+              name: sklearn
+            runtime: mlserver-runtime
+            # The prefix, not the object. KServe downloads everything under
+            # it into /mnt/models and MLServer then looks for model.joblib
+            # inside; naming the file gives it a directory containing a file
+            # where it expects a directory.
+            storageUri: "s3://{{ demos_ms_bucket.resources[0].data.BUCKET_NAME }}/breast-cancer"
+            resources:
+              requests:
+                cpu: 200m
+                memory: 1Gi
+              limits:
+                cpu: "1"
+                memory: 2Gi
+
+# Only worth waiting on when the export has run: against an empty prefix the
+# storage initializer finds no model.joblib and the predictor never goes
+# Ready, so a manifests-only run would spend the whole budget below failing.
+- name: Wait for the served model to become ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ demos_namespace }}"
+    name: breast-cancer
+  register: demos_ms_isvc
+  until: >-
+    demos_ms_isvc.resources[0].status.conditions | default([])
+    | selectattr('type', 'equalto', 'Ready')
+    | selectattr('status', 'equalto', 'True') | list | length > 0
+  # 10 minutes. Ready in about 30 seconds once the runtime image is on the
+  # node; the first deployment on a cluster pays for the image pull.
+  retries: 40
+  delay: 15
+  when: demos_run_jobs | bool
+
+# --- the proof ------------------------------------------------------------
+
+- name: Ship the smoke-test script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: smoke-test-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        smoke_test.py: "{{ lookup('file', demos_src + '/model-serving/smoke_test.py') }}"
+
+- name: Remove any previous smoke-test Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: smoke-test
+    wait: true
+  when: demos_run_jobs | bool
+
+- name: Call the served model with holdout rows
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: smoke-test
+        namespace: "{{ demos_namespace }}"
+      spec:
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: test
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # The same pin again: this is the step where a pickle
+                    # written by a different version surfaces.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      "scikit-learn=={{ demos_sklearn_version }}" requests
+                    export PYTHONPATH=/tmp/pylibs
+                    python /app/smoke_test.py
+                env:
+                  # Port 8080, not 80. The predictor Service is headless, so
+                  # the 80 -> 8080 mapping is never applied - DNS resolves
+                  # straight to pod IPs and the container port has to be
+                  # named. Port 80 gives "Connection refused" against a
+                  # perfectly healthy model.
+                  - name: PREDICTOR_URL
+                    value: "http://breast-cancer-predictor.{{ demos_namespace }}.svc.cluster.local:8080"
+                  - name: MODEL_NAME
+                    value: breast-cancer
+                  - name: N_ROWS
+                    value: "20"
+                  # The seed the training Job split on, so these rows are
+                  # the holdout the model never saw rather than rows it
+                  # could have memorised.
+                  - name: SEED
+                    value: "1337"
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: smoke-test-script
+  when: demos_run_jobs | bool
+
+- name: Wait for the smoke test to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: smoke-test
+  register: demos_ms_smoke
+  until: >-
+    demos_ms_smoke.resources[0].status.succeeded is defined
+    or demos_ms_smoke.resources[0].status.failed is defined
+  # 5 minutes, nearly all of it the pip install; 20 rows over one request.
+  retries: 30
+  delay: 10
+  when: demos_run_jobs | bool
+
+- name: Fail when the served model did not predict correctly
+  ansible.builtin.fail:
+    msg: >-
+      The smoke test did not pass -
+      "oc -n {{ demos_namespace }} logs job/smoke-test".
+      The script exits non-zero below 80% correct on the holdout rows, and
+      the cause of that is usually a scikit-learn mismatch between the
+      pickle and the runtime image: check the image's version with
+      "oc -n {{ demos_namespace }} exec deploy/breast-cancer-predictor --
+      python -c 'import sklearn; print(sklearn.__version__)'" and set
+      demos_sklearn_version to match.
+  when:
+    - demos_run_jobs | bool
+    - demos_ms_smoke.resources[0].status.succeeded is not defined
+
+- name: Report the model-serving demo
+  ansible.builtin.debug:
+    msg: >-
+      breast-cancer is served from
+      s3://{{ demos_ms_bucket.resources[0].data.BUCKET_NAME }}/breast-cancer
+      and appears on the Deployments tab of {{ demos_namespace }}.
+      {{ 'It was scored against unseen holdout rows: "oc -n '
+         ~ demos_namespace ~ ' logs job/smoke-test".'
+         if demos_run_jobs | bool else
+         'Nothing was run, so the bucket is empty and the predictor stays'
+         ~ ' unready until the export Job has run.' }}

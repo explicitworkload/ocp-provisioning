@@ -69,7 +69,7 @@
     #
     # helm is why this block exists. kubernetes.core.helm shells out to the
     # binary and does not bundle it, and the only two roles that use it,
-    # openrag and milvus, are the fifteenth and sixteenth of twenty-two.
+    # openrag and milvus, are the fifteenth and sixteenth of twenty-three.
     # So a control host without helm built ODF, RHOAI, the GPU stack and the
     # model - an hour of work - and then stopped at task 258 of 258 on a
     # missing CLI that was knowable before task 1. That is the whole failure
@@ -466,6 +466,17 @@
     # 56 of this playbook's tasks are until: loops, seven of which swallow
     # their expiry and seven more are one-shot probes feeding a when:, so a
     # green PLAY RECAP has never meant the cluster works. This asserts it.
+    # After everything it demonstrates. The demos log to MLflow, retrieve
+    # from OpenSearch and Milvus, chat through LiteLLM and serve a model
+    # on KServe, so every one of those has to exist first - the role
+    # checks and says which is missing rather than failing inside a Job.
+    #
+    # Before verify, so a broken demo is reported by the same run that
+    # built it.
+    - role: demos
+      tags: [demos]
+      when: deploy_demos | default(false) | bool
+
     - role: verify
       tags: [verify]
 

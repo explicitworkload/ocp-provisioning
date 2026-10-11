@@ -1,0 +1,28 @@
+---
+# Artifact storage for the Pipeline Server, as a NooBaa bucket.
+#
+# Separate from pipeline-server.yaml because the DSPA needs this bucket's
+# NAME, which is generated (generateBucketName) and therefore unknowable
+# until the claim binds. The role applies this first, waits for Bound, and
+# reads the name out of the ConfigMap the claim writes.
+# The Pipeline Server (Kubeflow Pipelines) for the rag-eval project.
+#
+# AutoRAG's Documents RAG Optimization Pipeline runs on Kubeflow Pipelines,
+# and this cluster had no DataSciencePipelinesApplication at all - the one
+# prerequisite it was missing. Everything else AutoRAG needs was already
+# here: the autorag-ui Deployment, a llama-stack server (the Gen AI
+# playground on :8321), Milvus as a vector store, chat and embedding models
+# via LiteLLM, and NooBaa for object storage.
+#
+# Artifacts go to a NooBaa bucket from an ObjectBucketClaim. The OBC
+# generates its own Secret holding AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
+# and DSPA is pointed straight at it rather than at a hand-made copy - no
+# credential is written by hand, and nothing secret lands in this file.
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: pipeline-artifacts
+  namespace: rag-eval
+spec:
+  generateBucketName: pipeline-artifacts
+  storageClassName: openshift-storage.noobaa.io

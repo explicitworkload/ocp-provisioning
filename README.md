@@ -21,10 +21,11 @@ ocp-provisioning/
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook (22 roles)
+│   ├── site.yml            # Main playbook (23 roles)
 │   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
-│   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, verify, etc.
+│   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, demos, verify, etc.
 │   └── README.md           # Ansible-specific docs
+├── demos/                  # Seven MLflow / RHOAI demos, a README and walkthrough each
 ├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
 ├── devfile.yaml            # Dev Spaces workspace definition (installs Claude CLI)
 ├── .vscode/extensions.json # Extensions recommended to Dev Spaces workspaces
@@ -53,6 +54,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Optionally deploys OpenRAG with OpenSearch, docling, CPU embeddings and Langflow, wired through LiteLLM so it serves the same models as everything else (off by default; needs `helm`)
 - Optionally deploys Milvus (standalone, backed by NooBaa rather than a bundled MinIO) with the Attu UI, registered as a vector store in RHOAI's Gen AI studio (off by default; needs `helm`)
 - Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
+- Deploys seven MLflow and RHOAI demos — retrieval A/B across OpenSearch and Milvus, LLM-judged answer quality, a prompt registry comparison, a tabular MLOps run through to a served KServe endpoint, two workbenches, and AutoRAG — and runs their Jobs, so the dashboards have real results in them rather than empty panels (on by default; see [demos/](demos/))
 
 ### Prerequisites
 
@@ -66,7 +68,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 `helm` and `git` are checked in `site.yml`'s `pre_tasks`, before the run
 touches the cluster, and only when the roles that need them are actually
 enabled. That ordering is deliberate: the checks used to live inside the
-roles, which are the fifteenth and sixteenth of twenty-two, so a host
+roles, which are the fifteenth and sixteenth of twenty-three, so a host
 without `helm` built ODF, RHOAI, the GPU stack and the model — about an
 hour — and then stopped at the last task on a missing CLI.
 
@@ -169,6 +171,11 @@ ansible-playbook site.yml --tags dashboard \
 # up - the bucket comes from NooBaa. Registers against the embedding model
 # LiteLLM serves, so run it after openrag on a cluster that has one.
 ./run.sh --tags milvus -e deploy_milvus=true
+
+# The seven demos under demos/. On by default, so this is for re-running
+# them on their own. Needs MLflow, which the role checks for first. Set
+# demos_run_jobs=false to apply the manifests without executing anything.
+./run.sh --tags demos
 ```
 
 See [ansible/README.md](ansible/README.md) for full variable reference, tags, Cloudflare and TLS notes, node resiliency testing, and Quay S3 configuration.

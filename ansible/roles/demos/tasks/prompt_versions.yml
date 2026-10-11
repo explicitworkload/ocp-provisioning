@@ -1,0 +1,378 @@
+---
+# Demo 3, from demos/prompt-versions/: three versions of the same RAG
+# answering prompt registered in MLflow's Prompt Registry, evaluated head to
+# head against one question set, then the judges that did the scoring
+# registered on the experiment so they outlive the run.
+#
+# demos/prompt-versions/ stays the source of truth - the scripts below are
+# shipped from there, and its README and WALKTHROUGH are what a presenter
+# reads.
+
+# Both Jobs have to name the SAME experiment: a judge is registered on an
+# experiment, so a name that drifts from the comparison's puts the judges
+# where nobody looks, and the Judges tab still reads empty. Named once here
+# rather than typed into both Jobs.
+#
+# The self-referencing default is what keeps a group_vars override working:
+# a bare set_fact outranks every other source and would silently win.
+- name: Name the experiment both prompt-version Jobs use
+  ansible.builtin.set_fact:
+    demos_prompt_experiment: "{{ demos_prompt_experiment | default('openrag-prompt-versions') }}"
+
+# usage.py travels with prompt_ab.py: the script does "from usage import
+# record_usage", and without it the Job dies on ImportError before it
+# reaches MLflow. Both keys land in /app, the script's own directory and so
+# on sys.path, which is why the import resolves even though PYTHONPATH
+# points at the pip --target directory instead.
+#
+# lookup('file') and not lookup('template'): prompt_ab.py's three prompts
+# are MLflow templates written in {{double braces}}, which a template lookup
+# would try to resolve as Ansible variables.
+- name: Ship the prompt comparison script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: prompt-versions-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        prompt_ab.py: "{{ lookup('file', demos_src + '/prompt-versions/prompt_ab.py') }}"
+        usage.py: "{{ lookup('file', demos_src + '/_shared/usage.py') }}"
+
+# register_judges.py imports nothing from _shared, so this one is the script
+# alone. The ConfigMaps are written before the Jobs are touched because a
+# pod reads its ConfigMap at start: edit a script and re-run, and an update
+# that lands after the pod has started is an update the run did not use.
+- name: Ship the judge registration script
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: register-judges-script
+        namespace: "{{ demos_namespace }}"
+      data:
+        register_judges.py: "{{ lookup('file', demos_src + '/prompt-versions/register_judges.py') }}"
+
+# --- the comparison -------------------------------------------------------
+# A completed Job is immutable and a second create fails on the name, so the
+# previous one goes first. wait: true, or the create below races a deletion
+# that has only been accepted, not finished.
+- name: Remove any previous prompt comparison Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: prompt-versions
+    wait: true
+  when: demos_run_jobs | bool
+
+# Re-running is safe but it is not inert: register_prompt with the same name
+# creates a NEW version every time, so a second run leaves six versions of
+# openrag-rag-answer and the walkthrough's "v1, v2, v3" becomes "v4, v5,
+# v6". Keeping the history is the behaviour the demo is about, so this is
+# left alone rather than worked around - but the version numbers climb.
+- name: Run the prompt version comparison
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: prompt-versions
+        namespace: "{{ demos_namespace }}"
+      spec:
+        # One attempt. A retry would re-register the three prompt versions
+        # and double the model spend before anyone noticed it had failed.
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: compare
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # Full mlflow, not mlflow-skinny: the genai evaluate and
+                    # scorer APIs are absent from skinny. openai is what the
+                    # judge provider uses to reach an OpenAI-compatible
+                    # endpoint.
+                    #
+                    # --target rather than a venv or --user: restricted-v2
+                    # gives this pod an arbitrary UID whose HOME is not
+                    # writable, so --user has nowhere to go.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow openai requests
+                    export PYTHONPATH=/tmp/pylibs
+                    # MLflow here authenticates with a Kubernetes bearer
+                    # token; the server runs --app-name=kubernetes-auth.
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/prompt_ab.py
+                env:
+                  - name: OPENSEARCH_URL
+                    value: "{{ demos_opensearch_url }}"
+                  - name: OPENSEARCH_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: OPENSEARCH_PASSWORD
+                  - name: LITELLM_URL
+                    value: "{{ demos_litellm_url }}"
+                  - name: LITELLM_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  # MLflow's judges reach their model through the openai
+                  # provider, which reads these three. LiteLLM is
+                  # OpenAI-compatible, so the judge and the model under test
+                  # come down the same pipe.
+                  - name: OPENAI_API_BASE
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_BASE_URL
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+                    value: "{{ demos_judge_model }}"
+                  - name: GEN_MODEL
+                    value: "{{ demos_gen_model }}"
+                  - name: EMBED_MODEL
+                    value: "{{ demos_embed_model }}"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  # The tracking server presents a service-serving
+                  # certificate and the pod's trust bundle does not carry
+                  # that CA.
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  # A workspace is a namespace, 1:1, and every request needs
+                  # one - without it the API answers 400 "Workspace context
+                  # is required for this request".
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  - name: MLFLOW_EXPERIMENT
+                    value: "{{ demos_prompt_experiment }}"
+                  # Cost is roughly versions x questions x 4 model calls -
+                  # one retrieval, one generation and three judge calls each
+                  # - so raise this deliberately rather than by habit.
+                  - name: N_QUESTIONS
+                    value: "10"
+                  - name: TOP_K
+                    value: "5"
+                  # Fixes which chunks the questions are generated from, so
+                  # the three versions are asked about the same material.
+                  - name: SEED
+                    value: "1337"
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: prompt-versions-script
+  when: demos_run_jobs | bool
+
+# 15 minutes. Measured at about four for three versions over ten questions,
+# plus a minute or two installing full mlflow; the rest is headroom for a
+# slow MaaS endpoint. Read it as a ceiling, not an estimate.
+#
+# The until also stops on status.failed because backoffLimit is 0: a Job
+# that died in its first minute never sets succeeded, and polling for
+# succeeded alone would sit out the entire budget before saying so.
+- name: Wait for the prompt comparison to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: prompt-versions
+  register: demos_prompt_versions_job
+  until: >-
+    demos_prompt_versions_job.resources[0].status.succeeded is defined
+    or demos_prompt_versions_job.resources[0].status.failed is defined
+  retries: 60
+  delay: 15
+  when: demos_run_jobs | bool
+
+- name: Fail if the prompt comparison did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      The prompt-versions Job did not succeed. Read it with
+      "oc -n {{ demos_namespace }} logs job/prompt-versions".
+      An un-ingested corpus is the usual cause - the script exits with
+      "no questions generated" when the OpenSearch index holds nothing to
+      ask about - followed by LiteLLM refusing the model named in
+      demos_gen_model ({{ demos_gen_model }}).
+  when:
+    - demos_run_jobs | bool
+    - (demos_prompt_versions_job.resources | default([]) | length) == 0
+      or demos_prompt_versions_job.resources[0].status.succeeded is not defined
+
+- name: Report the prompt comparison
+  ansible.builtin.debug:
+    msg: >-
+      Prompt versions compared in MLflow experiment
+      {{ demos_prompt_experiment }}, workspace {{ demos_namespace }}. Open it
+      with ?workspace={{ demos_namespace }} on the URL: the bare path lands
+      in a different workspace with an empty experiment list, which looks
+      exactly like nothing ever ran.
+  when: demos_run_jobs | bool
+
+# --- the judges -----------------------------------------------------------
+# Second Job, and after the first rather than beside it: these judges are
+# registered on the experiment the comparison creates.
+#
+# Why it exists at all - passing scorers to mlflow.genai.evaluate() runs them
+# ad hoc. The scores land on the run, but nothing is stored about the judges
+# themselves, so the Judges tab stays empty and the next evaluation has to
+# re-declare them in code. The distinction is easy to miss because the
+# evaluation looks completely successful either way.
+- name: Remove any previous judge registration Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: register-judges
+    wait: true
+  when: demos_run_jobs | bool
+
+- name: Register the judges on the experiment
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: register-judges
+        namespace: "{{ demos_namespace }}"
+      spec:
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: demos
+            containers:
+              - name: register
+                image: "{{ demos_job_image }}"
+                command: ["/bin/bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    # Full mlflow again, for the reason above: make_judge
+                    # and the built-in scorers are not in mlflow-skinny.
+                    pip install --quiet --no-cache-dir --target=/tmp/pylibs \
+                      mlflow openai requests
+                    export PYTHONPATH=/tmp/pylibs
+                    export MLFLOW_TRACKING_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                    python /app/register_judges.py
+                env:
+                  # No corpus credentials here. register_judges.py reads only
+                  # the experiment and the judge model; the hand-run
+                  # manifest in demos/prompt-versions/ carries OpenSearch and
+                  # the question-set variables as well, and the script
+                  # touches none of them.
+                  #
+                  # The judges name an openai:/ model, and the provider
+                  # reads these three.
+                  - name: OPENAI_API_BASE
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_BASE_URL
+                    value: "{{ demos_litellm_url }}/v1"
+                  - name: OPENAI_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: demos-creds
+                        key: LITELLM_KEY
+                  - name: MLFLOW_GENAI_JUDGE_DEFAULT_MODEL
+                    value: "{{ demos_judge_model }}"
+                  - name: MLFLOW_TRACKING_URI
+                    value: "{{ demos_mlflow_uri }}"
+                  - name: MLFLOW_TRACKING_INSECURE_TLS
+                    value: "true"
+                  - name: MLFLOW_WORKSPACE
+                    value: "{{ demos_namespace }}"
+                  - name: MLFLOW_EXPERIMENT
+                    value: "{{ demos_prompt_experiment }}"
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: script
+                configMap:
+                  name: register-judges-script
+  when: demos_run_jobs | bool
+
+# 10 minutes, nearly all of it the same mlflow install - the registration
+# itself is four API calls.
+- name: Wait for the judge registration to finish
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ demos_namespace }}"
+    name: register-judges
+  register: demos_register_judges_job
+  until: >-
+    demos_register_judges_job.resources[0].status.succeeded is defined
+    or demos_register_judges_job.resources[0].status.failed is defined
+  retries: 40
+  delay: 15
+  when: demos_run_jobs | bool
+
+- name: Fail if the judge registration did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      The register-judges Job did not succeed. Read it with
+      "oc -n {{ demos_namespace }} logs job/register-judges". The script
+      reports a per-judge error and carries on, so a non-zero exit means it
+      never reached the experiment {{ demos_prompt_experiment }} - a
+      tracking URI, token or workspace problem rather than a judge problem.
+  when:
+    - demos_run_jobs | bool
+    - (demos_register_judges_job.resources | default([]) | length) == 0
+      or demos_register_judges_job.resources[0].status.succeeded is not defined
+
+- name: Report the registered judges
+  ansible.builtin.debug:
+    msg: >-
+      Three built-in judges and the custom "actionable" judge are registered
+      on {{ demos_prompt_experiment }}. They are listed under GenAI ->
+      Evaluation -> Judges, and re-running this role versions a judge whose
+      definition has changed rather than duplicating it.
+  when: demos_run_jobs | bool

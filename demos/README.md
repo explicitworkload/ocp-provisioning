@@ -1,8 +1,9 @@
 # Demos
 
-Six things this cluster can be shown doing, all built against a live
-deployment and all runnable from a checkout. Every one of them answers a
-question with evidence rather than asserting a capability.
+Seven things this cluster can be shown doing, all built against a live
+deployment and all deployed by Ansible with the rest of the platform. Every
+one of them answers a question with evidence rather than asserting a
+capability.
 
 ## In plain English
 
@@ -36,6 +37,7 @@ is easy to get wrong, and a **WALKTHROUGH** scripting how to present it.
 | 4 | [tabular-mlops](tabular-mlops/) | Classic MLOps: sklearn grid, autolog, compare, register | no | ~2m |
 | 5 | [model-serving](model-serving/) | The registry → KServe hop, with a live prediction | no | ~3m |
 | 6 | [workbench](workbench/) | Interactive Jupyter, CPU and L40S GPU | optional | n/a |
+| 7 | [autorag](autorag/) | AutoRAG: the platform running demo 1's sweep automatically, over a much larger space | no | setup ~5m, run longer |
 
 ## Which to show
 
@@ -49,6 +51,10 @@ prompt should we ship* — and each builds on the last.
 
 **If there are traditional data scientists in the room:** 4 → 5. No LLMs,
 no GPU, and the registry-to-serving handoff is the part that makes it real.
+
+**If you are closing a longer session:** finish on demo 7. It only works
+after demo 1 — the point is the contrast between a sweep you wrote and a
+sweep the platform runs.
 
 **If you want one slide that justifies the platform:** demo 1's result.
 A dedicated vector database and a search engine doing vectors on the side
@@ -68,12 +74,44 @@ rag-eval ──same corpus, same Q&A pattern──▶ rag-judge ──▶ prompt
   all need OpenRAG deployed with an ingested corpus.
 - The workbenches need nothing.
 
-## Prerequisites
+## Deploying them
 
-All of them need the `rag-eval` namespace prepared once — see
-[rag-eval/README.md](rag-eval/README.md#running-it) for the exact commands.
-It creates the namespace, labels it as a Data Science Project, and makes the
-ServiceAccount and credentials Secret the Jobs share.
+They are a role, and it is on by default:
+
+```bash
+ansible-playbook site.yml --tags demos
+```
+
+The role prepares the shared `rag-eval` namespace once — labelled as a Data
+Science Project, with the ServiceAccount and credentials Secret the Jobs
+share — then applies each demo that is switched on. It checks that MLflow
+is deployed first and stops with a usable message if it is not.
+
+Switches in `group_vars/all.yml`, all `true`:
+
+| Variable | Demo |
+|---|---|
+| `deploy_demos` | the lot |
+| `demos_rag_eval` | 1 |
+| `demos_rag_judge` | 2 |
+| `demos_prompt_versions` | 3 |
+| `demos_tabular` | 4 |
+| `demos_model_serving` | 5 |
+| `demos_workbenches` | 6 |
+| `demos_autorag` | 7 |
+
+`demos_run_jobs` (also `true`) decides whether the Jobs are *run* or merely
+created. Leave it on: a demo that has never run shows empty panels, which
+is worse than no demo at all — the experiments, traces, judges and
+registered model only exist once something has executed. It costs roughly
+ten minutes of build time and some MaaS tokens.
+
+`demos_workbenches` is the one to think about. The L40S workbench holds its
+card for as long as it runs, idle or not, so on a cluster with one spare
+accelerator it blocks training jobs.
+
+The per-demo directories keep their manifests and scripts, so each still
+reads and runs on its own; the role is what is maintained.
 
 On the cluster itself:
 
@@ -83,6 +121,7 @@ On the cluster itself:
 | 1 | Milvus deployed (`deploy_milvus=true`) |
 | 1, 2, 3 | LiteLLM serving a chat model and `bge-small-en-v1.5` |
 | 4, 5 | Nothing beyond MLflow and ODF |
+| 7 | ODF for the buckets, Milvus, and the Gen AI playground as its Llama-stack server |
 | all | RHOAI's MLflow — see [rag-eval/README.md](rag-eval/README.md#talking-to-rhoais-mlflow) |
 
 ## Two things that will bite you

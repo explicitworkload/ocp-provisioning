@@ -1,0 +1,39 @@
+---
+# Lets the AutoRAG pipeline reach the Llama-stack server.
+#
+# The playground carries lsd-genai-playground-network-policy, which admits
+# traffic to :8321 only from its own namespace, from
+# redhat-ods-applications, and from ingress. AutoRAG's pipeline steps run
+# in the demos namespace, so they are refused - and the refusal is a
+# silent hang rather than a rejection, surfacing much later as
+#
+#   ogx_client.APITimeoutError: Request timed out
+#
+# on client.models.list(), a call that takes 9ms when it is allowed
+# through. It reads like a slow model; it is a blocked packet.
+#
+# This is a SEPARATE policy rather than an edit to that one, because the
+# ogx-operator owns it (ownerReference OGXServer/lsd-genai-playground) and
+# would revert the change. NetworkPolicies are additive, so a second
+# policy admitting one more namespace is the durable way to do it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-demos-to-llama-stack
+  # In the MODEL namespace, where the server lives - ingress policies are
+  # evaluated against the destination pod, not the source.
+  namespace: qwen3-4b
+spec:
+  podSelector:
+    matchLabels:
+      app: ogx
+      app.kubernetes.io/instance: lsd-genai-playground
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: rag-eval
+      ports:
+        - protocol: TCP
+          port: 8321
