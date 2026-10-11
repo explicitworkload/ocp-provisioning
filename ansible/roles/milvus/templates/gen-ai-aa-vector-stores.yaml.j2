@@ -44,8 +44,12 @@ providers:
         # from here.
         #
         # The working fix is one level up: OGXServer.spec.overrideConfig
-        # points the playground at a ConfigMap the BFF does not own. See
-        # demos/README.md. Needs an upstream fix to be solved properly.
+        # points the playground at a ConfigMap the BFF does not own. Note
+        # what that costs - with an override set, NOTHING in this file is
+        # read any more, including the registered_resources below. See
+        # "Where that setting actually lives on this cluster" in
+        # demos/autorag/README.md. Needs an upstream fix to be solved
+        # properly.
         token: ""
 registered_resources:
   vector_stores:

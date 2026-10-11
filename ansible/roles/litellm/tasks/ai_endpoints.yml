@@ -112,6 +112,96 @@
          | map(attribute='models') | sum(start=[]) | list }}
     excluded: "{{ (not_for_chat + on_cluster + opted_out + litellm_ai_asset_exclude) | unique | list }}"
 
+# An embedding model published without its dimension is a landmine. The
+# playground's llama-stack does not ask the model how wide its vectors are;
+# it reads embedding_dimension out of this metadata, and where the key is
+# absent it assumes 128. Everything then looks fine - the model is listed,
+# /v1/embeddings answers - until something creates a vector store with it,
+# at which point the first write fails with
+#
+#   BadRequestError: Embedding at index 0 has dimension 384, expected 128
+#
+# four steps into an AutoRAG run, naming neither the model nor this file.
+#
+# Measured rather than tabulated. A lookup keyed by model name is wrong the
+# first time someone fronts a model that is not in it, and silently wrong -
+# which is the failure mode being fixed here. Asking the endpoint costs one
+# request per embedding model and is correct by construction.
+#
+# CAVEAT: where OGXServer.spec.overrideConfig is set, the playground reads
+# that ConfigMap and nothing published here is consulted at all - the
+# dimension has to be right in the override too. See "Where that setting
+# actually lives on this cluster" in demos/autorag/README.md.
+- name: Measure what each embedding model actually returns
+  ansible.builtin.uri:
+    url: "{{ litellm_url }}/v1/embeddings"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ litellm_master_key }}"
+    body_format: json
+    body:
+      model: "{{ item.name }}"
+      input: "dimension probe"
+    validate_certs: false
+    status_code: [200]
+  register: litellm_embed_probe
+  loop: "{{ litellm_asset_models | selectattr('model_type', 'equalto', 'embedding') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  retries: 5
+  delay: 6
+  until: litellm_embed_probe.status | default(0) == 200
+  # Not fatal: one unreachable MaaS embedding endpoint should not stop a
+  # provisioning run. The model is dropped below instead.
+  failed_when: false
+  no_log: true
+
+- name: Note the embedding dimensions that came back
+  ansible.builtin.set_fact:
+    litellm_embedding_dims: >-
+      {{ litellm_embedding_dims | default({})
+         | combine({item.item.name: (item.json.data[0].embedding | length)}) }}
+  loop: "{{ litellm_embed_probe.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - (item.status | default(0)) == 200
+    - (item.json.data | default([])) | length > 0
+
+# Recorded before the next task edits the list, and derived from the list
+# rather than from everything LiteLLM serves. Models kept out for other
+# reasons - already on an InferenceService, opted out, explicitly excluded -
+# were never probed, and reporting them here would blame the endpoint for a
+# decision made above.
+- name: Note which embedding models could not be measured
+  ansible.builtin.set_fact:
+    litellm_unmeasured_embeddings: >-
+      {{ litellm_asset_models
+         | selectattr('model_type', 'equalto', 'embedding')
+         | map(attribute='name')
+         | reject('in', (litellm_embedding_dims | default({}) | list))
+         | list }}
+
+# Unpublished beats published-and-wrong. A model missing from the vector
+# store list is visibly absent; one carrying a made-up dimension fails much
+# later, somewhere else.
+- name: Leave out embedding models whose dimension could not be measured
+  ansible.builtin.set_fact:
+    litellm_asset_models: >-
+      {{ litellm_asset_models
+         | rejectattr('name', 'in', litellm_unmeasured_embeddings) | list }}
+  when: litellm_unmeasured_embeddings | length > 0
+
+- name: Report the embedding models that were left out
+  ansible.builtin.debug:
+    msg: >-
+      Not published as vector store embedding models, because
+      {{ litellm_url }}/v1/embeddings did not answer for them:
+      {{ litellm_unmeasured_embeddings | join(', ') }}. Publishing one
+      without a measured embedding_dimension makes llama-stack assume 128,
+      which fails on the first write to a vector store rather than here.
+  when: litellm_unmeasured_embeddings | length > 0
+
 - name: Report that there is nothing to publish
   ansible.builtin.debug:
     msg: >-

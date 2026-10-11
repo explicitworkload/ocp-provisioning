@@ -36,4 +36,10 @@ registered_resources:
       model_type: {{ m.model_type }}
       metadata:
         display_name: {{ m.name }}
+{%   if m.model_type == 'embedding' %}
+{#     Measured in tasks/ai_endpoints.yml, not guessed. Omit this and
+       llama-stack assumes 128, and the mismatch only surfaces on the first
+       write to a vector store. #}
+        embedding_dimension: {{ litellm_embedding_dims[m.name] }}
+{%   endif %}
 {% endfor %}
