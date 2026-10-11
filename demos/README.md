@@ -37,7 +37,7 @@ is easy to get wrong, and a **WALKTHROUGH** scripting how to present it.
 | 4 | [tabular-mlops](tabular-mlops/) | Classic MLOps: sklearn grid, autolog, compare, register | no | ~2m |
 | 5 | [model-serving](model-serving/) | The registry → KServe hop, with a live prediction | no | ~3m |
 | 6 | [workbench](workbench/) | Interactive Jupyter, CPU and L40S GPU | optional | n/a |
-| 7 | [autorag](autorag/) | AutoRAG: the platform running demo 1's sweep automatically, over a much larger space | no | setup ~5m, run longer |
+| 7 | [autorag](autorag/) | AutoRAG: the platform running demo 1's sweep automatically, over a much larger space | no | run ~42m |
 
 ## Which to show
 
@@ -56,10 +56,16 @@ no GPU, and the registry-to-serving handoff is the part that makes it real.
 after demo 1 — the point is the contrast between a sweep you wrote and a
 sweep the platform runs.
 
-**If you want one slide that justifies the platform:** demo 1's result.
-A dedicated vector database and a search engine doing vectors on the side
-retrieve *identically*; the choice is latency, not quality. Nobody believes
-that from an argument.
+**If you want one slide that justifies the platform:** demo 1's result
+next to demo 7's. Demo 1: a dedicated vector database and a search engine
+doing vectors on the side retrieve *identically* — the choice is latency,
+not quality. Demo 7, sweeping six configurations: the only one that used
+vector search *on its own* scored 0.55 while every hybrid configuration
+landed between 0.80 and 0.84, whatever the model or chunk size.
+
+So: which vector store you buy barely matters, and whether you use it
+alone matters enormously. Both are counterintuitive, both are measured,
+and nobody believes either from an argument.
 
 ## Dependencies between them
 

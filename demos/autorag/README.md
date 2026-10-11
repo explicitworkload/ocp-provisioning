@@ -188,6 +188,37 @@ while the other five are MaaS endpoints — if a run drags, drop it under
 For the embedding set, keep `endpoint-1/bge-small-en-v1.5` and drop the two
 `sentence-transformers/...` entries, per finding 6 above.
 
+### What a finished run actually said
+
+The first run to complete on sandbox3508, 2026-10-11. Six patterns, 42
+minutes wall clock, `overall_score`:
+
+| Pattern | Score | Search | Chunks | Generation model |
+|---|---|---|---|---|
+| 4 | **0.8357** | hybrid | 10 | qwen36-35b-a3b |
+| 6 | 0.8256 | hybrid | 3 | granite-3-2-8b-instruct |
+| 1 | 0.8219 | hybrid | 3 | granite-3-2-8b-instruct |
+| 5 | 0.8184 | hybrid | 3 | qwen36-35b-a3b |
+| 3 | 0.8011 | hybrid | 3 | granite-3-2-8b-instruct |
+| 2 | 0.5499 | **vector** | 3 | granite-3-2-8b-instruct |
+
+**That bottom row is the demo.** Pattern 2 is the only pure-vector
+configuration in the set and the only one below 0.80 — not by a little, by
+28 points. Everything else differs in chunking, reranking and model, and
+lands within 3.5 points of the winner. On this corpus the choice that
+mattered was not which model or how big the chunks; it was *vector search
+alone versus vector plus keyword*.
+
+That pairs well with [rag-eval](../rag-eval/), which found OpenSearch kNN
+and Milvus retrieving near-identically. Taken together: which vector store
+you pick barely moves the needle, and whether you use one *on its own*
+moves it enormously. Neither is obvious, and nobody believes either from
+an argument.
+
+Expect 429s from the MaaS endpoints during the generation phase. The
+client backs off and retries — the run above hit them repeatedly and still
+finished. It is rate limiting on a shared endpoint, not a fault.
+
 ## Cleaning up
 
 ```bash
