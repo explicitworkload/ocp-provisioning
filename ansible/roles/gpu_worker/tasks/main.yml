@@ -24,43 +24,120 @@
     worker_ami: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.ami.id }}"
     worker_security_groups: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.securityGroups }}"
     worker_region: "{{ machinesets.resources[0].spec.template.spec.providerSpec.value.placement.region }}"
-    # Derived like the region, not hardcoded. The AZ also builds the subnet
-    # filter "<infra>-subnet-private-<az>", so an AZ belonging to some other
-    # cluster matches no subnet at all: every Machine sits Failed and the
-    # readiness wait below burns 60x30s = 30 minutes before aborting the play
-    # with no diagnosis - ahead of odf, openshift_ai, model_serving and the
-    # rest. Set gpu_availability_zone explicitly to pin a zone (e.g. one with
-    # GPU capacity); leave it empty to follow the cluster's own workers.
-    gpu_az_effective: >-
-      {{ gpu_availability_zone if gpu_availability_zone | default('') | length > 0
-         else machinesets.resources[0].spec.template.spec.providerSpec.value.placement.availabilityZone }}
 
-- name: Create GPU MachineSets
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: present
-    apply: true
-    definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
-  loop: "{{ gpu_machinesets }}"
-  loop_control:
-    label: "{{ item.instance_type }} (replicas: {{ item.replicas }})"
+# Every zone this cluster already runs workers in, and no others. The AZ
+# builds the subnet filter "<infra>-subnet-private-<az>", so a zone the
+# installer never created a private subnet in matches nothing: the Machines
+# sit Failed, and a zone that CANNOT work is indistinguishable from one that
+# is merely full. Taking the list off the cluster's own workers means every
+# candidate is known to have a subnet.
+- name: List the availability zones this cluster has workers in
+  ansible.builtin.set_fact:
+    gpu_az_available: >-
+      {{ machinesets.resources
+         | map(attribute='spec.template.spec.providerSpec.value.placement.availabilityZone')
+         | select('string') | unique | list }}
 
-- name: Wait for GPU machines to be provisioned
-  kubernetes.core.k8s_info:
-    context: "{{ ocp_context or omit }}"
-    api_version: machine.openshift.io/v1beta1
-    kind: MachineSet
-    namespace: openshift-machine-api
-    name: "{{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
-  register: gpu_ms
-  until: >-
-    gpu_ms.resources | length > 0 and
-    (gpu_ms.resources[0].status.readyReplicas | default(0) | int) >= (item.replicas | int)
-  retries: 60
-  delay: 30
-  loop: "{{ gpu_machinesets | selectattr('replicas', '>', 0) | list }}"
+# A GPU MachineSet that is already RUNNING A NODE decides the zone, whatever
+# the shuffle says. Without that, a re-run picks a fresh zone at random and
+# builds a SECOND GPU node beside the one already there, billing for both -
+# the names differ only by zone, so nothing collides to stop it.
+#
+# readyReplicas is the whole condition, and it has to be. A GPU MachineSet
+# scaled to zero - which is what the role leaves behind for every instance
+# type it was not asked to build, and what a failed attempt leaves if it is
+# interrupted - protects no node and must not pin anything. Treating mere
+# existence as "resume here" would send a cluster whose 2a attempt failed
+# straight back to 2a on every subsequent run, which is precisely the loop
+# this change exists to break.
+# Matched on the MachineSet's own instanceType, not on its name. The names
+# embed the instance type, so a regex over them is possible - and it is how
+# this was first written - but every instance type contains a dot, and a dot
+# in a regex matches anything. Getting the escaping right through a YAML
+# folded scalar AND a Jinja string literal is two layers of quoting to be
+# wrong about, and being wrong is silent: the filter matches nothing, the
+# list comes back empty, and an empty list is exactly what "no GPU
+# MachineSets exist" looks like. instanceType is an exact string compare
+# with no escaping at all.
+- name: Look for GPU MachineSets that already have nodes
+  ansible.builtin.set_fact:
+    gpu_az_existing: >-
+      {{ machinesets.resources
+         | selectattr('spec.template.spec.providerSpec.value.instanceType',
+                      'in', gpu_machinesets | map(attribute='instance_type') | list)
+         | selectattr('status.readyReplicas', 'defined')
+         | selectattr('status.readyReplicas', '>', 0)
+         | map(attribute='spec.template.spec.providerSpec.value.placement.availabilityZone')
+         | select('string') | unique | list }}
+
+# Zero-replica GPU MachineSets from earlier attempts in other zones. Not
+# deleted - this role is not the only thing that can create a MachineSet,
+# and an empty one costs nothing - but worth naming, because they are
+# confusing to find later and an oc scale against the wrong one builds a
+# node in a zone nobody chose.
+- name: Report GPU MachineSets left over in other zones
+  ansible.builtin.debug:
+    msg: >-
+      Empty GPU MachineSets from earlier attempts, left in place:
+      {{ gpu_ms_stale | join(', ') }}. They hold no nodes. Delete them with
+      "oc delete machineset -n openshift-machine-api <name>" if they are in
+      the way.
+  vars:
+    gpu_ms_stale: >-
+      {{ machinesets.resources
+         | selectattr('spec.template.spec.providerSpec.value.instanceType',
+                      'in', gpu_machinesets | map(attribute='instance_type') | list)
+         | rejectattr('status.readyReplicas', 'defined')
+         | map(attribute='metadata.name') | list }}
+  when: gpu_ms_stale | length > 0
+
+# Order of preference:
+#   1. gpu_availability_zone, when set. Pinning means pinning - no fallback,
+#      because a pin exists to stop the role wandering.
+#   2. a zone this role already has GPU MachineSets in, so re-runs converge.
+#   3. everything else, SHUFFLED. Capacity for the big GPU instances comes
+#      and goes, and a fixed order means every cluster in the sandbox fleet
+#      hammers the same zone and queues behind each other. Random spreads it.
+- name: Decide which zones to try, in order
+  ansible.builtin.set_fact:
+    gpu_az_candidates: >-
+      {{ [gpu_availability_zone] if gpu_availability_zone | default('') | length > 0
+         else (gpu_az_existing + (gpu_az_available | difference(gpu_az_existing) | shuffle)) }}
+
+- name: Report the zones that will be tried
+  ansible.builtin.debug:
+    msg: >-
+      GPU zones to try, in order: {{ gpu_az_candidates | join(', ') }}.
+      {{ 'Pinned by gpu_availability_zone, so there is no fallback.'
+         if gpu_availability_zone | default('') | length > 0
+         else ('Resuming in ' + (gpu_az_existing | join(', ')) + ' first.'
+               if gpu_az_existing | length > 0
+               else 'Order is random, to spread load across zones.') }}
+
+- name: Provision the GPU MachineSets, trying each zone until one works
+  ansible.builtin.include_tasks: try_az.yml
+  loop: "{{ gpu_az_candidates }}"
   loop_control:
-    label: "{{ item.instance_type }} (replicas: {{ item.replicas }})"
+    loop_var: gpu_az_effective
+  when: not (gpu_provisioned | default(false) | bool)
+
+# Every zone refused. Fail here with what each one said, rather than letting
+# the roles after this one run against a cluster with no GPU.
+- name: Fail when no zone could provide the GPU nodes
+  ansible.builtin.fail:
+    msg: >-
+      No availability zone could provide
+      {{ gpu_machinesets | selectattr('replicas', '>', 0)
+         | map(attribute='instance_type') | join(', ') }}.
+      Tried {{ gpu_az_candidates | join(', ') }}.
+      {{ gpu_az_failures | default([]) | join('  //  ') }}
+      ---
+      If this is InsufficientInstanceCapacity everywhere, the instance type
+      is the lever, not the zone: a 4-GPU g6e.12xlarge is far scarcer than a
+      1-GPU g6e.4xlarge, and model_preset qwen3.8-27b-fp8 serves the same
+      model on one card.
+  when: not (gpu_provisioned | default(false) | bool)
+
 
 - name: Gather GPU nodes
   kubernetes.core.k8s_info:
@@ -116,8 +193,10 @@
 - name: Display GPU MachineSet status
   ansible.builtin.debug:
     msg: >-
-      GPU MachineSet {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}
+      GPU MachineSet {{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_provisioned }}
       — {{ item.replicas }} replica(s)
+      {{ '(zone chosen after ' + (gpu_az_failures | length | string) + ' other(s) had no capacity)'
+         if (gpu_az_failures | default([])) | length > 0 else '' }}
   loop: "{{ gpu_machinesets }}"
   loop_control:
     label: "{{ item.instance_type }}"

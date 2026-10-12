@@ -1,0 +1,168 @@
+---
+# One attempt at provisioning the GPU MachineSets in a single availability
+# zone. main.yml includes this once per candidate AZ.
+#
+# The zone under test arrives as gpu_az_effective - the same variable the
+# template reads - so nothing has to be threaded through explicitly.
+#
+# TWO THINGS ABOUT THE GUARD, both learned the hard way on sandbox1079.
+#
+# It belongs HERE, not only on the include. main.yml also carries
+# "when: not gpu_provisioned" on its include_tasks, and that is not enough:
+# with a loop, the condition on an include is not re-evaluated against facts
+# set by earlier iterations, so every zone runs whatever the earlier ones
+# did. us-east-2c provisioned, the loop carried on to us-east-2a anyway, and
+# started a second 4-GPU node. A block-level when IS evaluated per include.
+#
+# And gpu_provisioned must be set by the LAST task in the block, never in
+# the middle. A block's when is ANDed onto every task inside it, so the
+# instant the guard variable flips true, every REMAINING task in that same
+# block skips - including the ones that record which zone won and report
+# it. The first version set it halfway through and silently lost both, so
+# the role then failed on an undefined gpu_az_provisioned having just
+# succeeded. gpu_zone_ok carries the decision within the zone;
+# gpu_provisioned is the loop's business and is written once, at the end.
+- name: "{{ gpu_az_effective }}: attempt this zone"
+  when: not (gpu_provisioned | default(false) | bool)
+  block:
+
+    - name: "{{ gpu_az_effective }}: create the GPU MachineSets"
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: present
+        apply: true
+        definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
+      loop: "{{ gpu_machinesets }}"
+      loop_control:
+        label: "{{ item.instance_type }} in {{ gpu_az_effective }} (replicas: {{ item.replicas }})"
+
+    # Watch the MACHINES first, not the MachineSet, and give this poll two
+    # ways to finish. Waiting only for readyReplicas means a zone with no
+    # capacity costs the entire budget before anyone finds out, and the
+    # eventual message says "not ready" rather than naming the cause. AWS
+    # answers RunInstances with
+    #
+    #   InsufficientInstanceCapacity: We currently do not have sufficient
+    #   g6e.12xlarge capacity in the Availability Zone you requested
+    #
+    # and that lands on the Machine as an errorMessage, a Failed phase, or
+    # both - usually within a minute. Either is enough to stop waiting.
+    - name: "{{ gpu_az_effective }}: wait for the machines, or for a reason not to"
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: machine.openshift.io/v1beta1
+        kind: Machine
+        namespace: openshift-machine-api
+        label_selectors:
+          - "machine.openshift.io/cluster-api-machineset={{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
+      register: gpu_machines
+      until: >-
+        (gpu_machines.resources | default([])
+           | selectattr('status.phase', 'defined')
+           | selectattr('status.phase', 'equalto', 'Running')
+           | list | length) >= (item.replicas | int)
+        or
+        (gpu_machines.resources | default([])
+           | selectattr('status.errorMessage', 'defined') | list | length) > 0
+        or
+        (gpu_machines.resources | default([])
+           | selectattr('status.phase', 'defined')
+           | selectattr('status.phase', 'equalto', 'Failed')
+           | list | length) > 0
+      retries: "{{ gpu_az_attempt_retries }}"
+      delay: "{{ gpu_az_attempt_delay }}"
+      # This task failing IS the signal. An unusable zone must not abort.
+      failed_when: false
+      loop: "{{ gpu_machinesets | selectattr('replicas', '>', 0) | list }}"
+      loop_control:
+        label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
+
+    - name: "{{ gpu_az_effective }}: collect what AWS said"
+      ansible.builtin.set_fact:
+        gpu_az_errors: >-
+          {{ (gpu_machines.results | default([]))
+             | map(attribute='resources') | map('default', [], true) | sum(start=[])
+             | selectattr('status.errorMessage', 'defined')
+             | map(attribute='status.errorMessage')
+             | map('truncate', 220, true) | list | unique }}
+
+    # Machine phase Running comes before the node registers, so the zone has
+    # only really worked once readyReplicas catches up. Skipped when the zone
+    # already errored - otherwise a dead zone burns this budget as well.
+    - name: "{{ gpu_az_effective }}: wait for the nodes to join"
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: machine.openshift.io/v1beta1
+        kind: MachineSet
+        namespace: openshift-machine-api
+        name: "{{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
+      register: gpu_ms_check
+      until: >-
+        gpu_ms_check.resources | length > 0 and
+        (gpu_ms_check.resources[0].status.readyReplicas | default(0) | int) >= (item.replicas | int)
+      retries: "{{ gpu_node_join_retries }}"
+      delay: "{{ gpu_az_attempt_delay }}"
+      # ignore_errors, not failed_when: false - this keeps failed: true on
+      # each item result, which is how the next task decides.
+      ignore_errors: true
+      loop: "{{ gpu_machinesets | selectattr('replicas', '>', 0) | list }}"
+      loop_control:
+        label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
+      when: gpu_az_errors | length == 0
+
+    # Local to this zone, deliberately. See the header: naming this
+    # gpu_provisioned would make every task below it skip.
+    - name: "{{ gpu_az_effective }}: decide whether the zone worked"
+      ansible.builtin.set_fact:
+        # Every requested MachineSet reached its replica count and nothing
+        # errored. A skipped wait leaves results empty, which must NOT read
+        # as success - hence the length check.
+        gpu_zone_ok: >-
+          {{ gpu_az_errors | length == 0
+             and (gpu_ms_check.results | default([])) | length > 0
+             and (gpu_ms_check.results | default([])
+                  | selectattr('failed', 'defined')
+                  | selectattr('failed') | list | length) == 0 }}
+
+    - name: "{{ gpu_az_effective }}: say what the zone did"
+      ansible.builtin.debug:
+        msg: >-
+          {{ gpu_az_effective }} -
+          {{ 'provisioned' if gpu_zone_ok | bool else 'no' }}.
+          {{ gpu_az_errors | join(' | ') if gpu_az_errors | length > 0
+             else ('' if gpu_zone_ok | bool
+                   else 'machines never became ready within the per-zone budget') }}
+
+    # Leaving a half-provisioned MachineSet in a zone that cannot fill it
+    # keeps Failed Machines around for someone else to find, and - because
+    # the names differ only by zone - lets a re-run end up with GPU
+    # MachineSets in two places, which is how you quietly pay for two nodes.
+    - name: "{{ gpu_az_effective }}: remove the MachineSets this zone could not fill"
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: absent
+        api_version: machine.openshift.io/v1beta1
+        kind: MachineSet
+        namespace: openshift-machine-api
+        name: "{{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
+        wait: true
+        wait_timeout: 300
+      loop: "{{ gpu_machinesets }}"
+      loop_control:
+        label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
+      when: not (gpu_zone_ok | bool)
+
+    - name: "{{ gpu_az_effective }}: remember why, for the final message"
+      ansible.builtin.set_fact:
+        gpu_az_failures: >-
+          {{ (gpu_az_failures | default([]))
+             + [gpu_az_effective + ' - ' + (gpu_az_errors | first
+                | default('machines never became ready within the per-zone budget', true))] }}
+      when: not (gpu_zone_ok | bool)
+
+    # LAST. Flipping the guard any earlier skips everything after it.
+    - name: "{{ gpu_az_effective }}: stop the loop if this zone worked"
+      ansible.builtin.set_fact:
+        gpu_provisioned: true
+        gpu_az_provisioned: "{{ gpu_az_effective }}"
+      when: gpu_zone_ok | bool
