@@ -1,0 +1,78 @@
+---
+# The credentials Omnigent projects into every agent session.
+#
+# Read off the cluster rather than taken from a variable, the same way the
+# openrag role does it: the key exists because the litellm role made it, and
+# copying it into group_vars would put a live credential in a file this repo
+# tracks.
+
+- name: Read the LiteLLM key for Omnigent
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    kind: Secret
+    namespace: "{{ litellm_namespace | default('litellm') }}"
+    label_selectors: []
+  register: omnigent_litellm_secrets
+  no_log: true
+
+# map(attribute=...) before first, not (... | first).data - Jinja's first
+# returns Undefined on an empty sequence rather than raising, and taking
+# .data off that Undefined raises a template error that the check below
+# would never get to report.
+- name: Extract the LiteLLM master key
+  ansible.builtin.set_fact:
+    omnigent_litellm_key: >-
+      {{ omnigent_litellm_secrets.resources
+         | selectattr('data.LITELLM_MASTER_KEY', 'defined')
+         | map(attribute='data.LITELLM_MASTER_KEY')
+         | first | default('', true)
+         | b64decode }}
+  no_log: true
+
+- name: Require a LiteLLM key when Omnigent is pointed at it
+  ansible.builtin.fail:
+    msg: >-
+      omnigent_use_litellm is true but no LITELLM_MASTER_KEY Secret exists in
+      the {{ litellm_namespace | default('litellm') }} namespace. Run the
+      litellm role first, or set omnigent_use_litellm=false and put your own
+      provider keys in the omnigent-creds Secret.
+  when: omnigent_litellm_key | length == 0
+
+# Projected into every runner Pod by envFrom, and read by the server for its
+# own harness calls. ANTHROPIC/OPENAI keys would go here too for anyone
+# wanting the vendor CLIs rather than the gateway.
+- name: Give Omnigent its harness credentials
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-creds
+        namespace: "{{ omnigent_namespace }}"
+      type: Opaque
+      stringData:
+        LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+  no_log: true
+
+# The same Secret has to exist in the RUNNER namespace, because that is
+# where the kubernetes provider resolves secret_name - the server reads it
+# from omnigent, the runner Pods mount it from omnigent-sandboxes.
+- name: Give the runner namespace the same credentials
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-creds
+        namespace: "{{ omnigent_sandbox_namespace }}"
+      type: Opaque
+      stringData:
+        LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+  no_log: true
+  when: omnigent_sandboxes | bool

@@ -1,0 +1,93 @@
+---
+# Omnigent - an open-source "meta-harness" that orchestrates agent CLIs
+# (Claude Code, Codex, Cursor, Pi) behind one server, with policies,
+# sandboxing and shareable live sessions. https://omnigent.ai
+#
+# Apache-2.0, github.com/omnigent-ai/omnigent. Upstream ships Kustomize
+# manifests under deploy/kubernetes, including openshift and
+# sandbox-runners overlays; this role builds the same objects as Ansible so
+# it can wire in two things the overlays do not: an oauth-proxy in front,
+# and the cluster's own LiteLLM as the model gateway.
+#
+# PINNED, and not to latest. v0.1.1 is the current release of software that
+# runs LLM-authored code with real credentials; "latest" on that is not a
+# version, it is a surprise.
+omnigent_version: v0.1.1
+
+# The -kubernetes variant, not the plain server image. It is the same build
+# with the kubernetes client extra (OMNIGENT_EXTRAS=kubernetes) compiled in,
+# and the managed-sandbox provider cannot import its client without it - a
+# launch fails at runtime rather than at deploy. Harmless when sandboxes are
+# off, so there is no second image to choose between.
+omnigent_image: "ghcr.io/omnigent-ai/omnigent-server-kubernetes:{{ omnigent_version }}"
+
+omnigent_namespace: omnigent
+omnigent_sandbox_namespace: omnigent-sandboxes
+
+# --- storage -----------------------------------------------------------
+# /data/artifacts in the container. Session artifacts and the minted cookie
+# secret live here.
+omnigent_artifacts_size: 10Gi
+omnigent_db_storage: 10Gi
+omnigent_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
+omnigent_db_name: omnigent
+omnigent_db_user: omnigent
+
+# --- auth --------------------------------------------------------------
+# An oauth-proxy sidecar terminates TLS, authenticates against the cluster,
+# and passes the identity upstream as X-Forwarded-Email; Omnigent runs in
+# "header" mode and trusts that header.
+#
+# header mode rather than Omnigent's built-in accounts, for two reasons.
+# Cluster users get in with their OpenShift identity and there is no second
+# password to hand out or revoke. And accounts mode REFUSES the per-session
+# runner dial-back with a 403, so it cannot be combined with the kubernetes
+# sandbox provider at all - upstream's own sandbox-runners README says so.
+#
+# The trust is only safe because the Service publishes the proxy's port and
+# nothing else: anything that could reach :8000 directly could set that
+# header and be anyone. Do not add an 8000 port to the Service.
+omnigent_auth: true
+omnigent_auth_header: X-Forwarded-Email
+
+# Who may log in. The default admits anyone who can get a token for this
+# cluster; tighten it to a namespace or a verb if that is too broad.
+omnigent_oauth_sar: >-
+  {"namespace":"{{ omnigent_namespace }}","resource":"services","verb":"get"}
+
+# Empty means "ask the cluster", which is what the milvus role does for
+# Attu - the oauth-proxy ImageStream in the openshift namespace tracks the
+# payload version, so it stays right across upgrades.
+omnigent_oauth_image: ""
+
+# --- model access ------------------------------------------------------
+# Omnigent treats LiteLLM as a gateway, so agents reach every model the
+# cluster already serves through one base_url and one key, and nothing here
+# needs its own Anthropic or OpenAI credential. The key is read off the
+# cluster at run time, never written to this repo.
+omnigent_use_litellm: true
+omnigent_litellm_url: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+
+# --- sandboxes ---------------------------------------------------------
+# Agent sessions run as their own short-lived Pods in a separate namespace
+# instead of inside the server. Worth understanding before enabling: the
+# server gets create/delete on Pods and Secrets in that namespace, and the
+# code it runs there is written by a model. The Role deliberately excludes
+# pods/exec, and the runner ServiceAccount is powerless.
+omnigent_sandboxes: true
+omnigent_sandbox_host_image: ""   # empty = upstream's official host image
+omnigent_sandbox_cpu_request: "500m"
+omnigent_sandbox_cpu_limit: "2"
+omnigent_sandbox_memory_request: 1Gi
+omnigent_sandbox_memory_limit: 4Gi
+
+# --- server sizing -----------------------------------------------------
+# Upstream's base manifest asks 512Mi/250m and caps at 1Gi/1000m.
+omnigent_cpu_request: "250m"
+omnigent_cpu_limit: "1"
+omnigent_memory_request: 512Mi
+omnigent_memory_limit: 1Gi
+
+# Comma-separated release features, all off by default upstream. Changing
+# this needs a Deployment restart - each pod reads one snapshot at startup.
+omnigent_features: ""

@@ -21,9 +21,9 @@ ocp-provisioning/
 │       ├── outputs.tf      # Cluster endpoints and credentials
 │       └── install-config.yaml.tpl
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
-│   ├── site.yml            # Main playbook (23 roles)
+│   ├── site.yml            # Main playbook (24 roles)
 │   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
-│   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, demos, verify, etc.
+│   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, omnigent, demos, verify, etc.
 │   └── README.md           # Ansible-specific docs
 ├── demos/                  # Seven MLflow / RHOAI demos, a README and walkthrough each
 ├── dashboard/              # Operations dashboard (Flask app, built via BuildConfig)
@@ -54,6 +54,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 - Deploys OpenRAG with OpenSearch, docling, CPU embeddings and Langflow, wired through LiteLLM so it serves the same models as everything else (on by default; needs `helm`)
 - Deploys Milvus (standalone, backed by NooBaa rather than a bundled MinIO) with the Attu UI, registered as a vector store in RHOAI's Gen AI studio (on by default; needs `helm`)
 - Optionally publishes public DNS via upstream ExternalDNS against Cloudflare, giving the dashboard and Dev Spaces routes on a real domain (off by default)
+- Deploys [Omnigent](https://omnigent.ai), an open-source meta-harness that orchestrates agent CLIs (Claude Code, Codex, Cursor, Pi) behind one web UI with policies and per-session sandboxing — signed in with your OpenShift identity via an oauth-proxy, and using the cluster's own LiteLLM as its model gateway so it needs no provider key (on by default)
 - Deploys seven MLflow and RHOAI demos — retrieval A/B across OpenSearch and Milvus, LLM-judged answer quality, a prompt registry comparison, a tabular MLOps run through to a served KServe endpoint, two workbenches, and AutoRAG — and runs their Jobs, so the dashboards have real results in them rather than empty panels (on by default; see [demos/](demos/))
 
 ### Prerequisites
@@ -68,7 +69,7 @@ Use this when you already have an OpenShift 4.22+ cluster on AWS and want to ins
 `helm` and `git` are checked in `site.yml`'s `pre_tasks`, before the run
 touches the cluster, and only when the roles that need them are actually
 enabled. That ordering is deliberate: the checks used to live inside the
-roles, which are the fifteenth and sixteenth of twenty-three, so a host
+roles, which are the fifteenth and sixteenth of twenty-four, so a host
 without `helm` built ODF, RHOAI, the GPU stack and the model — about an
 hour — and then stopped at the last task on a missing CLI.
 

@@ -69,7 +69,7 @@
     #
     # helm is why this block exists. kubernetes.core.helm shells out to the
     # binary and does not bundle it, and the only two roles that use it,
-    # openrag and milvus, are the fifteenth and sixteenth of twenty-three.
+    # openrag and milvus, are the fifteenth and sixteenth of twenty-four.
     # So a control host without helm built ODF, RHOAI, the GPU stack and the
     # model - an hour of work - and then stopped at task 258 of 258 on a
     # missing CLI that was knowable before task 1. That is the whole failure
@@ -415,6 +415,13 @@
     - role: milvus
       tags: [milvus, vector-store]
       when: deploy_milvus | default(false) | bool
+
+    # After litellm, whose master key it reads off the cluster to give its
+    # agents a model gateway. Nothing else depends on omnigent, so it sits
+    # here rather than earlier - a failure costs the roles after it nothing.
+    - role: omnigent
+      tags: [omnigent, agents]
+      when: deploy_omnigent | default(false) | bool
 
     # Late, and after openrag: it needs LiteLLM's master key for its AI page.
     #

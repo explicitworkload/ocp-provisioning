@@ -1,0 +1,42 @@
+{#
+  The server's sandbox: section, mounted at OMNIGENT_CONFIG.
+
+  server_url is in-cluster Service DNS and deliberately plain http on port
+  80: this is the runner Pod dialling back to the server, pod to pod, and
+  routing it out through the Route and back would depend on the proxy for
+  traffic that never leaves the cluster - and the proxy would demand an
+  OpenShift login the runner does not have.
+-#}
+sandbox:
+  provider: kubernetes
+  server_url: http://omnigent.{{ omnigent_namespace }}.svc.cluster.local
+{% if omnigent_use_litellm | bool %}
+  # Verbatim ~/.omnigent/config.yaml for the agent inside the sandbox,
+  # merged before "omnigent host" starts. This is what points the harness
+  # at the cluster's own gateway instead of a vendor API, so every model
+  # LiteLLM serves is available and no provider key is needed here.
+  #
+  # api_key_ref resolves INSIDE the runner Pod against the Secret named
+  # below, so the key itself never appears in this ConfigMap.
+  host_config:
+    providers:
+      litellm:
+        kind: gateway
+        default: [pi]
+        openai:
+          base_url: {{ omnigent_litellm_url }}
+          api_key_ref: env:LITELLM_API_KEY
+          wire_api: chat
+{% endif %}
+  kubernetes:
+    namespace: {{ omnigent_sandbox_namespace }}
+    secret_name: omnigent-creds
+    service_account: omnigent-runner
+{% if omnigent_sandbox_host_image | length > 0 %}
+    image: {{ omnigent_sandbox_host_image }}
+{% endif %}
+    resources:
+      cpu_request: "{{ omnigent_sandbox_cpu_request }}"
+      cpu_limit: "{{ omnigent_sandbox_cpu_limit }}"
+      memory_request: "{{ omnigent_sandbox_memory_request }}"
+      memory_limit: "{{ omnigent_sandbox_memory_limit }}"

@@ -1,0 +1,359 @@
+---
+# The Omnigent server, its oauth-proxy, and the Route in front of both.
+
+- name: Create the Omnigent artifact volume
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: omnigent-artifacts
+        namespace: "{{ omnigent_namespace }}"
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "{{ omnigent_artifacts_size }}"
+
+- name: Get cluster ingress domain for Omnigent
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: config.openshift.io/v1
+    kind: Ingress
+    name: cluster
+  register: omnigent_ingress
+
+- name: Set the Omnigent hostname
+  ansible.builtin.set_fact:
+    omnigent_host: "omnigent-{{ omnigent_namespace }}.{{ omnigent_ingress.resources[0].spec.domain }}"
+
+# Created once and reused. Rotating it on every run would invalidate every
+# session the proxy has issued, logging everyone out for no reason - the
+# same shape the attu and dashboard credentials use.
+- name: Look for an existing proxy session secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-oauth-session
+  register: omnigent_session
+  when: omnigent_auth | bool
+  no_log: true
+
+- name: Generate the proxy session secret on first run
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-oauth-session
+        namespace: "{{ omnigent_namespace }}"
+      type: Opaque
+      stringData:
+        session_secret: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+  when:
+    - omnigent_auth | bool
+    - (omnigent_session.resources | default([])) | length == 0
+  no_log: true
+
+# Omnigent's own cookie secret, separate from the proxy's and used to sign
+# its session cookies. Same create-once rule.
+- name: Look for an existing Omnigent cookie secret
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-secrets
+  register: omnigent_app_secret
+  no_log: true
+
+- name: Compose the Omnigent application secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-secrets
+        namespace: "{{ omnigent_namespace }}"
+      type: Opaque
+      stringData:
+        # psycopg3 dialect explicitly. The entrypoint normalises a bare
+        # postgres:// URL, but naming the driver means the connection
+        # string says what it is.
+        DATABASE_URL: >-
+          postgresql+psycopg://{{ omnigent_db_user }}:{{ omnigent_db_password }}@omnigent-db.{{ omnigent_namespace }}.svc.cluster.local:5432/{{ omnigent_db_name }}
+        OMNIGENT_ACCOUNTS_COOKIE_SECRET: >-
+          {{ (omnigent_app_secret.resources[0].data.OMNIGENT_ACCOUNTS_COOKIE_SECRET | b64decode)
+             if (omnigent_app_secret.resources | default([])) | length > 0
+             else lookup('password', '/dev/null length=64 chars=hexdigits') | lower }}
+  no_log: true
+
+- name: Configure Omnigent
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: omnigent-config
+        namespace: "{{ omnigent_namespace }}"
+      data:
+        HOST: "0.0.0.0"
+        PORT: "8000"
+        ARTIFACT_DIR: /data/artifacts
+        OMNIGENT_FEATURES: "{{ omnigent_features }}"
+        # Upstream points this at /data/admin-credentials, which is NOT on
+        # the volume - the PVC mounts at /data/artifacts. There it is lost
+        # on every restart, and on OpenShift the write fails outright,
+        # because the container runs as an arbitrary high UID that has no
+        # business writing to /data. Inside the mount it both persists and
+        # succeeds: the SCC's fsGroup makes the volume group-writable.
+        OMNIGENT_ADMIN_CREDENTIALS_PATH: /data/artifacts/admin-credentials
+        OMNIGENT_AUTH_ENABLED: "1"
+        # header, not accounts. The proxy in front has already established
+        # who the user is; Omnigent reads the identity out of the header it
+        # sets. accounts mode would also break sandboxes - it answers the
+        # per-session runner dial-back with a 403.
+        OMNIGENT_AUTH_PROVIDER: "{{ 'header' if omnigent_auth | bool else 'accounts' }}"
+        OMNIGENT_AUTH_HEADER: "{{ omnigent_auth_header }}"
+        OMNIGENT_ACCOUNTS_AUTO_OPEN: "0"
+        OMNIGENT_ACCOUNTS_BASE_URL: "https://{{ omnigent_host }}"
+        # The browser connects over the Route's hostname, so that origin
+        # has to be allowed or every WebSocket is rejected and the UI
+        # loads but never updates.
+        OMNIGENT_WS_ALLOWED_ORIGINS: "https://{{ omnigent_host }}"
+
+- name: Find the oauth-proxy image
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: image.openshift.io/v1
+    kind: ImageStream
+    namespace: openshift
+    name: oauth-proxy
+  register: omnigent_oauth_is
+  when:
+    - omnigent_auth | bool
+    - omnigent_oauth_image | length == 0
+
+- name: Settle on the oauth-proxy image
+  ansible.builtin.set_fact:
+    omnigent_oauth_image_resolved: >-
+      {{ omnigent_oauth_image
+         if omnigent_oauth_image | length > 0
+         else (omnigent_oauth_is.resources[0].spec.tags[0].from.name
+               | default('registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:latest')) }}
+  when: omnigent_auth | bool
+
+- name: Deploy Omnigent
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent
+        namespace: "{{ omnigent_namespace }}"
+        labels: {app: omnigent}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: omnigent}
+        strategy:
+          # ReadWriteOnce artifact volume, same deadlock as the database.
+          type: Recreate
+        template:
+          metadata:
+            labels: {app: omnigent}
+          spec:
+            serviceAccountName: "{{ 'omnigent-server' if omnigent_sandboxes | bool else 'default' }}"
+            # runAsNonRoot without runAsUser, exactly as upstream's
+            # openshift overlay has it. The image declares no USER, so it
+            # would otherwise run as root; the SCC assigns a UID from the
+            # namespace range and this asserts that one was assigned.
+            securityContext:
+              runAsNonRoot: true
+            containers: "{{ [app_container] + ([oauth_container] if omnigent_auth | bool else []) }}"
+            volumes: "{{ [artifact_volume]
+                         + ([sandbox_volume] if omnigent_sandboxes | bool else [])
+                         + (oauth_volumes if omnigent_auth | bool else []) }}"
+  vars:
+    app_container:
+      name: omnigent
+      image: "{{ omnigent_image }}"
+      ports:
+        - {containerPort: 8000, name: http}
+      envFrom:
+        - configMapRef: {name: omnigent-config}
+        - secretRef: {name: omnigent-secrets}
+        - secretRef: {name: omnigent-creds, optional: true}
+      env: "{{ [{'name': 'OMNIGENT_CONFIG', 'value': '/etc/omnigent/config.yaml'}]
+               if omnigent_sandboxes | bool else [] }}"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts: "{{ [{'name': 'artifacts', 'mountPath': '/data/artifacts'}]
+                        + ([{'name': 'sandbox-config', 'mountPath': '/etc/omnigent', 'readOnly': true}]
+                           if omnigent_sandboxes | bool else []) }}"
+      # Upstream's probes, plus a startupProbe they do not have. Their
+      # liveness starts at 20s with a 30s period, and their own notes say
+      # first-boot migrations take about a minute over the network - so on
+      # a slow cluster the probe can kill the container mid-migration,
+      # which is how a half-applied schema and a crash loop get made. The
+      # startupProbe holds liveness off for up to five minutes and only
+      # then hands over.
+      startupProbe:
+        httpGet: {path: /health, port: http}
+        periodSeconds: 10
+        failureThreshold: 30
+      livenessProbe:
+        httpGet: {path: /health, port: http}
+        periodSeconds: 30
+        timeoutSeconds: 5
+      readinessProbe:
+        httpGet: {path: /health, port: http}
+        periodSeconds: 10
+        timeoutSeconds: 5
+      resources:
+        requests: {cpu: "{{ omnigent_cpu_request }}", memory: "{{ omnigent_memory_request }}"}
+        limits: {cpu: "{{ omnigent_cpu_limit }}", memory: "{{ omnigent_memory_limit }}"}
+    oauth_container:
+      name: oauth-proxy
+      image: "{{ omnigent_oauth_image_resolved | default('') }}"
+      ports:
+        - {containerPort: 8443, name: https}
+      args:
+        - -provider=openshift
+        - -https-address=:8443
+        # Empty, so the proxy serves no plaintext listener at all.
+        - -http-address=
+        - -email-domain=*
+        - -upstream=http://localhost:8000/
+        # What makes header auth work: the proxy sets X-Forwarded-User and
+        # X-Forwarded-Email upstream, and OMNIGENT_AUTH_HEADER reads the
+        # second. Without it Omnigent sees no identity and rejects
+        # everyone.
+        - -pass-user-headers=true
+        - -tls-cert=/etc/tls/private/tls.crt
+        - -tls-key=/etc/tls/private/tls.key
+        - -cookie-secret-file=/etc/proxy/secrets/session_secret
+        - -openshift-service-account={{ 'omnigent-server' if omnigent_sandboxes | bool else 'default' }}
+        - -openshift-sar={{ omnigent_oauth_sar | trim }}
+        - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - {name: omnigent-tls, mountPath: /etc/tls/private}
+        - {name: omnigent-oauth-session, mountPath: /etc/proxy/secrets}
+      resources:
+        requests: {cpu: 10m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 256Mi}
+    artifact_volume:
+      name: artifacts
+      persistentVolumeClaim: {claimName: omnigent-artifacts}
+    sandbox_volume:
+      name: sandbox-config
+      configMap: {name: omnigent-sandbox-config}
+    oauth_volumes:
+      - name: omnigent-tls
+        secret: {secretName: omnigent-tls}
+      - name: omnigent-oauth-session
+        secret: {secretName: omnigent-oauth-session}
+
+# Only the proxy's port is published when auth is on, and that is the whole
+# basis of trusting X-Forwarded-Email: with no route to :8000, nothing can
+# reach Omnigent without going through the proxy and setting that header
+# itself. The serving-cert annotation has service-ca mint the certificate
+# the proxy presents, which is also what lets the Route reencrypt.
+- name: Expose Omnigent
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: omnigent
+        namespace: "{{ omnigent_namespace }}"
+        labels: {app: omnigent}
+        annotations: "{{ {'service.beta.openshift.io/serving-cert-secret-name': 'omnigent-tls'}
+                         if omnigent_auth | bool else {} }}"
+      spec:
+        selector: {app: omnigent}
+        ports: "{{ [{'name': 'https', 'port': 443, 'targetPort': 8443}]
+                   if omnigent_auth | bool
+                   else [{'name': 'http', 'port': 80, 'targetPort': 8000}] }}"
+
+- name: Create the Omnigent route
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: omnigent
+        namespace: "{{ omnigent_namespace }}"
+        labels: {app: omnigent}
+      spec:
+        host: "{{ omnigent_host }}"
+        to: {kind: Service, name: omnigent}
+        port:
+          targetPort: "{{ 'https' if omnigent_auth | bool else 'http' }}"
+        tls:
+          # reencrypt when the proxy holds a service-CA certificate, edge
+          # otherwise. Either way the browser gets HTTP/2 from the router,
+          # which matters here more than usual: over HTTP/1.1 browsers cap
+          # about six connections per origin, and every open Omnigent
+          # session holds a streaming response, so a seventh window hangs.
+          termination: "{{ 'reencrypt' if omnigent_auth | bool else 'edge' }}"
+          insecureEdgeTerminationPolicy: Redirect
+
+- name: Wait for Omnigent to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent
+  register: omnigent_ready
+  until: >-
+    omnigent_ready.resources | length > 0 and
+    (omnigent_ready.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 40
+  delay: 15
+  ignore_errors: true
+
+- name: Report what Omnigent said when it would not start
+  ansible.builtin.debug:
+    msg: >-
+      Omnigent is not ready. Its first boot runs database migrations and
+      can take a few minutes; past that, "oc logs -n {{ omnigent_namespace }}
+      deploy/omnigent -c omnigent" has the reason. A pod stuck
+      CreateContainerConfigError usually means the omnigent-creds Secret is
+      missing, and a CrashLoopBackOff right after a schema change is worth
+      reading closely before restarting - a half-applied migration does not
+      fix itself by trying again.
+  when: omnigent_ready is failed

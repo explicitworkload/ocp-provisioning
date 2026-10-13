@@ -1,0 +1,189 @@
+---
+# Omnigent server, its database, and - when omnigent_sandboxes is on - the
+# second namespace its agent runner Pods live in.
+#
+# Built as Ansible rather than by applying upstream's Kustomize overlays.
+# The overlays are good and this role follows their shape closely, but two
+# things have to be woven into the Deployment itself: the oauth-proxy
+# sidecar, and the LiteLLM gateway block inside the sandbox config. Running
+# kustomize and then patching its output would need the kustomize CLI as a
+# new control-host dependency and leave the result harder to read than the
+# objects themselves.
+
+- name: Create the Omnigent namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ omnigent_namespace }}"
+        labels:
+          app.kubernetes.io/name: omnigent
+
+# --- database ----------------------------------------------------------
+# Postgres rather than the SQLite tier. SQLite pins the server to one
+# replica and has no backup story; Postgres is what upstream calls the
+# production default, and the cluster already runs this exact image for
+# LiteLLM.
+- name: Look for existing Omnigent database credentials
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-db-credentials
+  register: omnigent_db_existing
+  no_log: true
+
+# Generated once and then left alone. Regenerating on every run would
+# rotate the password out from under a database that still has the old one.
+- name: Settle on the database password
+  ansible.builtin.set_fact:
+    omnigent_db_password: >-
+      {{ (omnigent_db_existing.resources[0].data.POSTGRESQL_PASSWORD | b64decode)
+         if (omnigent_db_existing.resources | length) > 0
+         else lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}
+  no_log: true
+
+- name: Store the Omnigent database credentials
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-db-credentials
+        namespace: "{{ omnigent_namespace }}"
+      type: Opaque
+      stringData:
+        POSTGRESQL_USER: "{{ omnigent_db_user }}"
+        POSTGRESQL_PASSWORD: "{{ omnigent_db_password }}"
+        POSTGRESQL_DATABASE: "{{ omnigent_db_name }}"
+  no_log: true
+
+- name: Create the Omnigent database volume
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: omnigent-db
+        namespace: "{{ omnigent_namespace }}"
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "{{ omnigent_db_storage }}"
+
+- name: Deploy the Omnigent database
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent-db
+        namespace: "{{ omnigent_namespace }}"
+        labels: {app: omnigent-db}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: omnigent-db}
+        strategy:
+          # The PVC is ReadWriteOnce, so a rolling update deadlocks: the new
+          # pod cannot mount the volume until the old one lets go, and the
+          # old one is not terminated until the new one is ready.
+          type: Recreate
+        template:
+          metadata:
+            labels: {app: omnigent-db}
+          spec:
+            containers:
+              - name: postgresql
+                image: "{{ omnigent_db_image }}"
+                ports:
+                  - {containerPort: 5432, name: postgresql}
+                envFrom:
+                  - secretRef:
+                      name: omnigent-db-credentials
+                readinessProbe:
+                  exec:
+                    command: ["/usr/libexec/check-container"]
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/pgsql/data
+                resources:
+                  requests: {cpu: 100m, memory: 256Mi}
+                  limits: {cpu: "1", memory: 1Gi}
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: omnigent-db
+
+- name: Create the Omnigent database service
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: omnigent-db
+        namespace: "{{ omnigent_namespace }}"
+      spec:
+        selector: {app: omnigent-db}
+        ports:
+          - {name: postgresql, port: 5432, targetPort: 5432}
+
+- name: Wait for the Omnigent database
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-db
+  register: omnigent_db_ready
+  until: >-
+    omnigent_db_ready.resources | length > 0 and
+    (omnigent_db_ready.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+# Sandboxes first, and the order matters: the credentials below are written
+# into BOTH namespaces, and the runner one does not exist until this runs.
+- name: Include the sandbox namespace and RBAC
+  ansible.builtin.include_tasks: sandboxes.yml
+  when: omnigent_sandboxes | bool
+
+- name: Include the model-gateway wiring
+  ansible.builtin.include_tasks: litellm.yml
+  when: omnigent_use_litellm | bool
+
+- name: Include the server
+  ansible.builtin.include_tasks: server.yml
+
+- name: Report where Omnigent is
+  ansible.builtin.debug:
+    msg: >-
+      Omnigent is at https://{{ omnigent_host }} - sign in with your
+      OpenShift account.
+      {{ 'Agent sandboxes run as Pods in ' ~ omnigent_sandbox_namespace ~ '.'
+         if omnigent_sandboxes | bool
+         else 'Sandboxes are off; agents run inside the server pod.' }}
+      {{ 'Models come from LiteLLM, so every model the cluster serves is available.'
+         if omnigent_use_litellm | bool
+         else 'No model gateway configured - add credentials to the omnigent-creds Secret.' }}

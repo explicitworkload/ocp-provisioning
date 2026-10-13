@@ -1,0 +1,147 @@
+---
+# The second namespace, where each agent session gets its own short-lived
+# runner Pod. Mirrors upstream's sandbox-runners overlay.
+#
+# Read the Role below before enabling this. The server can create and delete
+# Pods and Secrets here, and what runs in those Pods is written by a model.
+# Two things keep that bounded: the Role is namespaced to omnigent-sandboxes
+# and nothing else, and it deliberately omits pods/exec - the server can
+# start a runner and read its log, but cannot open a shell inside one.
+
+- name: Create the Omnigent sandbox namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ omnigent_sandbox_namespace }}"
+        labels:
+          app.kubernetes.io/name: omnigent
+          app.kubernetes.io/component: runner
+          # Pod Security admission on top of the SCC. OpenShift enforces
+          # restricted-v2 through SCC anyway, but these labels mean a Pod
+          # that would need more is refused at admission with a message
+          # naming the policy, rather than failing later and obscurely.
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/enforce-version: latest
+          pod-security.kubernetes.io/warn: restricted
+          pod-security.kubernetes.io/audit: restricted
+
+- name: Create the Omnigent server service account
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: omnigent-server
+        namespace: "{{ omnigent_namespace }}"
+        annotations:
+          # What lets oauth-proxy use this ServiceAccount as an OAuth
+          # client: the proxy's redirect URL is derived from the Route
+          # named here. Without it the login round-trip fails with
+          # "invalid redirect_uri".
+          serviceaccounts.openshift.io/oauth-redirectreference.omnigent: >-
+            {"kind":"OAuthRedirectReference","apiVersion":"v1",
+             "reference":{"kind":"Route","name":"omnigent"}}
+
+# Deliberately powerless, and automountServiceAccountToken is false on
+# purpose: a runner Pod has no business holding a cluster credential. It
+# talks to the server over the launch-token tunnel, not the API.
+- name: Create the Omnigent runner service account
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: omnigent-runner
+        namespace: "{{ omnigent_sandbox_namespace }}"
+        labels:
+          app.kubernetes.io/name: omnigent
+          app.kubernetes.io/component: runner
+      automountServiceAccountToken: false
+
+- name: Grant the server rights over runner pods
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: omnigent-sandbox-manager
+        namespace: "{{ omnigent_sandbox_namespace }}"
+      rules:
+        - apiGroups: ["batch"]
+          resources: ["jobs"]
+          verbs: ["create", "get", "delete"]
+        # The kubernetes-sigs agent-sandbox CRD, used when a gateway
+        # delegates to that controller. Harmless when the CRD is absent -
+        # RBAC rules may name resources that do not exist.
+        - apiGroups: ["agents.x-k8s.io"]
+          resources: ["sandboxes"]
+          verbs: ["create", "get", "patch", "delete"]
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["create", "list", "get", "delete"]
+        - apiGroups: [""]
+          resources: ["pods/log"]
+          verbs: ["get"]
+        # Per-launch token Secrets, created and destroyed with each runner.
+        # No get or list: the server writes them and forgets them.
+        - apiGroups: [""]
+          resources: ["secrets"]
+          verbs: ["create", "delete"]
+        - apiGroups: [""]
+          resources: ["events"]
+          verbs: ["list"]
+
+# Cross-namespace by design: the subject lives in omnigent, the Role and
+# the binding live in omnigent-sandboxes. That is what keeps the grant
+# scoped to the runner namespace instead of the server's own.
+- name: Bind the server service account to that role
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: omnigent-sandbox-manager
+        namespace: "{{ omnigent_sandbox_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: omnigent-sandbox-manager
+      subjects:
+        - kind: ServiceAccount
+          name: omnigent-server
+          namespace: "{{ omnigent_namespace }}"
+
+# The sandbox: section of the server's config. It comes from a mounted file
+# rather than the env ConfigMap - the managed-sandbox backend is only read
+# from OMNIGENT_CONFIG, so putting these keys in the environment does
+# nothing at all.
+- name: Configure the kubernetes sandbox provider
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: omnigent-sandbox-config
+        namespace: "{{ omnigent_namespace }}"
+      data:
+        config.yaml: "{{ lookup('template', 'sandbox-config.yaml.j2') }}"

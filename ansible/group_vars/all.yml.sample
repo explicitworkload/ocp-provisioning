@@ -65,6 +65,13 @@ gpu_machinesets:
   replicas: 0
 - instance_type: g7e.8xlarge
   replicas: 0
+# Where g7e actually adds cards: 2 at 12xlarge, 4 at 24xlarge. A 2-GPU
+# g7e.12xlarge holds 192 GB, the same as four L40S on a g6e.12xlarge, in
+# half the cards.
+- instance_type: g7e.12xlarge
+  replicas: 0
+- instance_type: g7e.24xlarge
+  replicas: 0
 - instance_type: p4d.24xlarge
   replicas: 0
 - instance_type: p4de.24xlarge
@@ -212,6 +219,28 @@ deploy_openrag: true
 # the role grants anyuid to a dedicated service account in the milvus
 # namespace. Everything else there stays non-root.
 deploy_milvus: true
+
+# --- Omnigent ---------------------------------------------------------------
+# An open-source meta-harness that orchestrates agent CLIs - Claude Code,
+# Codex, Cursor, Pi - behind one server with policies, sandboxing and live
+# session sharing. https://omnigent.ai, Apache-2.0.
+#
+# Logs in with your OpenShift identity through an oauth-proxy, and gets its
+# models from the cluster's own LiteLLM, so it needs no provider key of its
+# own. Needs the litellm role to have run.
+deploy_omnigent: true
+
+# Agent sessions run as their own short-lived Pods in an omnigent-sandboxes
+# namespace rather than inside the server. The server gets create/delete on
+# Pods and Secrets THERE and nowhere else, deliberately without pods/exec -
+# but the code those Pods run is written by a model, so this is a real
+# decision rather than a default to skim past. false keeps agents in the
+# server pod and grants nothing.
+omnigent_sandboxes: true
+
+# Pinned, and not to latest: this is v0.1.x software that runs LLM-authored
+# code with real credentials.
+omnigent_version: v0.1.1
 
 # -------------------------------------------------------------------
 #

@@ -552,6 +552,76 @@ as the cause.
 The image tag must track the OpenSearch server's major line — both are
 3.8.0 as shipped.
 
+### Omnigent — on by default
+
+[Omnigent](https://omnigent.ai) is an open-source (Apache-2.0) *meta-harness*:
+one server that orchestrates agent CLIs — Claude Code, Codex, Cursor, Pi —
+behind a shared web UI, with policies, sandboxing and live session sharing.
+
+```bash
+./run.sh --tags omnigent
+```
+
+Two things make it fit this cluster rather than just run on it:
+
+**It uses the cluster's LiteLLM as its model gateway**, so agents reach every
+model already served — the local GPU model and every MaaS endpoint — through
+one base URL and one key. No Anthropic or OpenAI credential is needed, and
+the key is read off the cluster at run time rather than written into
+`group_vars`.
+
+**You sign in with your OpenShift identity.** An `oauth-proxy` sidecar
+terminates TLS and passes the authenticated user upstream as
+`X-Forwarded-Email`; Omnigent runs in `header` auth mode and trusts it. That
+trust is only sound because the Service publishes the proxy's port and
+nothing else — anything able to reach `:8000` directly could set that header
+and be anybody. **Do not add an 8000 port to the Service.**
+
+Built as Ansible rather than by applying upstream's Kustomize overlays
+(`deploy/kubernetes/overlays/openshift`), which are good and which this role
+follows closely. The overlays cannot express the two things above without a
+`kustomize` CLI dependency and a patch-on-generated-output step harder to
+read than the objects themselves.
+
+#### Sandboxes
+
+`omnigent_sandboxes` (default `true`) runs each agent session as its own
+short-lived Pod in an `omnigent-sandboxes` namespace instead of inside the
+server. Worth an actual decision rather than a skim:
+
+- the server gets `create`/`delete` on Pods and Secrets **in that namespace
+  only**, deliberately without `pods/exec`;
+- the runner ServiceAccount is powerless and sets
+  `automountServiceAccountToken: false`;
+- the namespace carries `pod-security.kubernetes.io/enforce: restricted`;
+- and the code running in those Pods is written by a model.
+
+Set it `false` to keep agents in the server pod and grant nothing. Note that
+sandboxes **require** the oauth-proxy path: Omnigent's built-in `accounts`
+auth answers the per-session runner dial-back with a 403, so the two cannot
+be combined.
+
+#### Three upstream things this role changes
+
+**The admin credentials path.** Upstream's ConfigMap writes them to
+`/data/admin-credentials`, but the PVC mounts at `/data/artifacts` — so they
+land outside the volume and are lost on restart, and on OpenShift the write
+fails outright, because the container runs as an arbitrary high UID. Moved
+inside the mount, where `fsGroup` makes it writable.
+
+**A startupProbe.** Upstream's liveness probe starts at 20s with a 30s
+period while their own notes say first-boot migrations take about a minute.
+On a slow cluster that kills the container mid-migration, which is how a
+half-applied schema and a permanent crash loop get made.
+
+**A pinned version.** `omnigent_version` defaults to `v0.1.1` rather than
+`latest`. This is v0.1.x software that runs LLM-authored code with real
+credentials; "latest" on that is not a version, it is a surprise.
+
+The image is `omnigent-server-kubernetes`, not the plain `omnigent-server` —
+same build with the kubernetes client extra compiled in, which the sandbox
+provider needs to import its client. Harmless when sandboxes are off.
+
 ### Demos — on by default
 
 Seven demonstrations of what the platform can be shown doing, deployed as a
@@ -844,6 +914,7 @@ ansible-playbook site.yml --tags devspaces          # OpenShift Dev Spaces
 ansible-playbook site.yml --tags ztwim              # SPIFFE/SPIRE workload identity
 ansible-playbook site.yml --tags milvus             # Milvus + Attu + vector store
 ansible-playbook site.yml --tags openrag            # OpenSearch, docling, embeddings, OpenRAG
+ansible-playbook site.yml --tags omnigent           # Omnigent agent meta-harness
 ansible-playbook site.yml --tags demos              # The seven demos under demos/
 ```
 
@@ -878,6 +949,7 @@ ansible/
     ├── gatus/                  # Gatus health monitoring
     ├── openrag/                # OpenRAG, OpenSearch, docling, embeddings
     ├── milvus/                 # Milvus operator, standalone instance, Attu UI
+    ├── omnigent/               # Omnigent meta-harness, oauth-proxy, sandbox runners
     ├── demos/                  # The seven demos under demos/, one task file each
     ├── verify/                 # Asserts the deployment; collects every failure
     └── summary/                # Prints URLs, credentials and total run time
