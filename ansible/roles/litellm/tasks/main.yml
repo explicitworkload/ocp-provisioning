@@ -533,6 +533,51 @@
                 ports:
                   - containerPort: 4000
                     name: http
+                # Without this the Service advertises the pod the instant
+                # the container process starts, long before LiteLLM can
+                # answer - and on a first run it cannot, because it is
+                # applying 213 Prisma migrations. Three things went wrong
+                # for want of it on sandbox721:
+                #
+                #   - "Wait for LiteLLM proxy to be ready" passed in 17s
+                #     against a pod that was dead, because availableReplicas
+                #     means "container started" when nothing is checking;
+                #   - the run then spent 354s failing on "Status code was
+                #     503", which is a symptom three layers from the cause
+                #     (a crash-looping pod, stopped on a failed migration);
+                #   - the Route flapped between 503 and 200 as the container
+                #     restarted, so the same curl gave different answers a
+                #     minute apart.
+                #
+                # /health/liveliness, not /health/readiness: it answers
+                # unauthenticated, and it is the endpoint the role already
+                # polls, so the probe and the check agree on what "up"
+                # means.
+                #
+                # failureThreshold is high on purpose. Failing readiness
+                # during a long migration is CORRECT - it keeps an unusable
+                # pod out of the Service - and costs nothing, because
+                # nothing restarts the container for it.
+                readinessProbe:
+                  httpGet:
+                    path: /health/liveliness
+                    port: 4000
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 60
+                # DELIBERATELY NO livenessProbe. This container runs its
+                # database migrations at startup, and a liveness probe that
+                # fires mid-migration kills it partway through - which
+                # leaves Prisma with a migration that has a start record and
+                # no completion, and LiteLLM then refuses to start at all:
+                #
+                #   Error: P3009 - migrate found failed migrations in the
+                #   target database
+                #
+                # That state is not self-healing; it needs prisma migrate
+                # resolve by hand. A liveness probe here would be a way to
+                # manufacture it.
                 # envFrom as well as the explicit entries below: extra
                 # endpoints add keys to this Secret at run time, and naming
                 # each one here would mean editing the Deployment to add a
@@ -639,6 +684,12 @@
   # the database no longer has.
   when: litellm_config.changed or litellm_db_cred.changed | default(false)
 
+# readyReplicas, not availableReplicas, and it means something now that the
+# Deployment above carries a readiness probe. Before that probe existed this
+# task passed in 17 seconds against a pod that could not serve a request.
+#
+# Not fatal on its own - the diagnosis below is worth more than the failure,
+# so let it run first.
 - name: Wait for LiteLLM proxy to be ready
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
@@ -652,6 +703,62 @@
     (litellm_deploy.resources[0].status.readyReplicas | default(0)) >= 1
   retries: 20
   delay: 15
+  ignore_errors: true
+
+# What the pod itself says, which is the thing worth reading. A LiteLLM that
+# will not start is usually a database problem, and the container names it;
+# the Deployment just reports zero ready replicas, and the Route - five
+# minutes later - reports 503. Both are symptoms.
+- name: Read the LiteLLM pod state after a failed wait
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    label_selectors:
+      - app=litellm
+  register: litellm_pods
+  when: litellm_deploy is failed
+
+- name: Read the LiteLLM container log after a failed wait
+  kubernetes.core.k8s_log:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    name: "{{ (litellm_pods.resources | first).metadata.name }}"
+    tail_lines: 40
+  register: litellm_log
+  failed_when: false
+  when:
+    - litellm_deploy is failed
+    - (litellm_pods.resources | default([])) | length > 0
+
+- name: Fail with what the LiteLLM container actually said
+  ansible.builtin.fail:
+    msg: >-
+      LiteLLM never became ready.
+      Pod {{ pod.metadata.name | default('(none found)') }} is
+      {{ pod.status.phase | default('?') }}, restarts={{ cs.restartCount | default(0) }},
+      lastExit={{ cs.lastState.terminated.exitCode | default('-') }}
+      ({{ cs.lastState.terminated.reason | default('-') }}).
+      ---
+      {{ (litellm_log.log | default('')) | regex_findall('(?m)^.*(?:Error|error|FATAL|P3009|migration).*$')
+         | unique | join(' // ') | truncate(900, true) | default('no matching lines in the last 40', true) }}
+      ---
+      A P3009 above means a Prisma migration has a start record and no
+      completion, and LiteLLM will not start until that is resolved by
+      hand - restarting cannot fix it. Verify whether the migration's
+      changes are present, then run "prisma migrate resolve --applied" or
+      "--rolled-back" accordingly, from a pod with this image and
+      DATABASE_URL. See roles/litellm/README or the comment on the
+      readinessProbe above.
+  vars:
+    pod: "{{ (litellm_pods.resources | default([]) | first) | default({}, true) }}"
+    cs: >-
+      {{ (pod.status.containerStatuses | default([])
+          | selectattr('name', 'equalto', 'litellm') | first) | default({}, true) }}
+  when: litellm_deploy is failed
 
 # --- Reusable Credential ---
 

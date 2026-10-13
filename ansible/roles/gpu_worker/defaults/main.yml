@@ -38,10 +38,22 @@ gpu_machinesets:
 #
 # Only used for reporting - it never changes what is deployed. An instance
 # missing from this table is reported as unknown rather than assumed to fit.
+#
+# gpu_memory_gb is the VENDOR figure in GB, not the GiB number AWS prints.
+# site.yml converts (x 0.9313) and then takes vLLM's default 0.9 of the
+# card. Mixing the two units silently inflates every budget by 7%: AWS
+# lists the L40S as "44 GiB", which is the same 48 GB card.
 gpu_instance_specs:
   g4dn.4xlarge:  {gpus: 1, gpu_memory_gb: 16,  gpu: "T4"}
   g6e.4xlarge:   {gpus: 1, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.12xlarge:  {gpus: 4, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.48xlarge:  {gpus: 8, gpu_memory_gb: 48,  gpu: "L40S"}
+  # RTX PRO 6000 Blackwell Server Edition, 96 GB each. The three sizes
+  # below differ only in vCPU and host RAM - 8/64, 16/128, 32/256 - and all
+  # carry exactly ONE GPU, so there is no reason to pay for 8xlarge unless
+  # the workload needs the cores. Multi-GPU starts at g7e.12xlarge (2).
+  g7e.2xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
+  g7e.4xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
+  g7e.8xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
   p4d.24xlarge:  {gpus: 8, gpu_memory_gb: 40,  gpu: "A100 40GB"}
   p4de.24xlarge: {gpus: 8, gpu_memory_gb: 80,  gpu: "A100 80GB"}

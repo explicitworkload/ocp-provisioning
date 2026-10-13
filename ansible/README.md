@@ -57,6 +57,31 @@ records (topology still renders, from Prometheus metrics).
 
 Creates GPU MachineSets by auto-discovering the cluster's AMI, security groups, and region from existing worker MachineSets. Supports multiple instance types with configurable replica counts (use `replicas: 0` for scale-up-ready MachineSets). Creates a dedicated `gpu` MachineConfigPool so GPU nodes get their own update rollout cycle, separate from regular workers.
 
+| Instance | GPUs | VRAM | vCPU | Notes |
+|---|---|---|---|---|
+| `g4dn.4xlarge` | 1 × T4 | 16 GB | 16 | Turing: fp16 only, no bf16 or FlashAttention 2 |
+| `g6e.4xlarge` | 1 × L40S | 48 GB | 16 | |
+| `g6e.12xlarge` | 4 × L40S | 192 GB | 48 | smallest instance with four GPUs on one node |
+| `g7e.2xlarge` | 1 × RTX PRO 6000 | 96 GB | 8 | Blackwell |
+| `g7e.4xlarge` | 1 × RTX PRO 6000 | 96 GB | 16 | Blackwell |
+| `g7e.8xlarge` | 1 × RTX PRO 6000 | 96 GB | 32 | Blackwell |
+| `p4d.24xlarge` | 8 × A100 40GB | 320 GB | 96 | |
+| `p4de.24xlarge` | 8 × A100 80GB | 640 GB | 96 | |
+
+**The three g7e sizes carry one GPU each** and differ only in vCPU and host
+RAM, so the larger ones buy cores, not VRAM — multi-GPU g7e starts at
+`g7e.12xlarge` (2 GPUs), which is not offered here. 96 GB on a single card
+is the interesting part: a model that needed four L40S can fit on one, which
+also sidesteps the capacity problem, since a 1-GPU instance is far easier to
+place than four cards on one node.
+
+`gpu_instance_specs` in the role's defaults feeds the preflight fit check,
+and its `gpu_memory_gb` is the **vendor GB figure, not the GiB AWS prints** —
+`site.yml` converts with `× 0.9313` and then takes vLLM's default 0.9 of the
+card. AWS lists the L40S as "44 GiB"; that is the same 48 GB card. Entering
+AWS's number would overstate every budget by about 7%, and the fit check
+would say yes to a model that then fails to load.
+
 ### ODF (OpenShift Data Foundation)
 
 Deploys ODF with Ceph storage on all non-GPU worker nodes using dynamically provisioned gp3 EBS volumes (512Gi per OSD by default, `odf_storage_size`). Automatically excludes GPU nodes via label filtering. Device set count scales with the number of eligible workers. NooBaa is left alone to bootstrap and choose its own default backing store —

@@ -78,18 +78,26 @@ if [[ $# -eq 0 && -t 0 ]]; then
 
   echo
   echo "GPU instance to create (Enter keeps gpu_machinesets in all.yml):"
-  echo "    1) g4dn.4xlarge   1 x T4         16 GB"
-  echo "    2) g6e.4xlarge    1 x L40S       48 GB"
-  echo "    3) g6e.12xlarge   4 x L40S      192 GB"
-  echo "    4) p4d.24xlarge   8 x A100 40G  320 GB"
-  echo "    5) p4de.24xlarge  8 x A100 80G  640 GB"
+  echo "    1) g4dn.4xlarge   1 x T4         16 GB    4 vCPU"
+  echo "    2) g6e.4xlarge    1 x L40S       48 GB   16 vCPU"
+  echo "    3) g6e.12xlarge   4 x L40S      192 GB   48 vCPU"
+  echo "    4) g7e.2xlarge    1 x RTX6000    96 GB    8 vCPU"
+  echo "    5) g7e.4xlarge    1 x RTX6000    96 GB   16 vCPU"
+  echo "    6) g7e.8xlarge    1 x RTX6000    96 GB   32 vCPU"
+  echo "    7) p4d.24xlarge   8 x A100 40G  320 GB   96 vCPU"
+  echo "    8) p4de.24xlarge  8 x A100 80G  640 GB   96 vCPU"
+  echo "  4-6 are one Blackwell card each and differ only in CPU and host"
+  echo "  RAM; 96 GB on a single GPU often replaces four L40S at option 3."
   read -r -p "  choice [Enter to keep current]: " GPU_CHOICE
   case "${GPU_CHOICE:-}" in
     1) EXTRA_GPU="g4dn.4xlarge" ;;
     2) EXTRA_GPU="g6e.4xlarge" ;;
     3) EXTRA_GPU="g6e.12xlarge" ;;
-    4) EXTRA_GPU="p4d.24xlarge" ;;
-    5) EXTRA_GPU="p4de.24xlarge" ;;
+    4) EXTRA_GPU="g7e.2xlarge" ;;
+    5) EXTRA_GPU="g7e.4xlarge" ;;
+    6) EXTRA_GPU="g7e.8xlarge" ;;
+    7) EXTRA_GPU="p4d.24xlarge" ;;
+    8) EXTRA_GPU="p4de.24xlarge" ;;
     "") EXTRA_GPU="" ;;
     *) echo "  not one of the choices - keeping the configured instances" >&2; EXTRA_GPU="" ;;
   esac
