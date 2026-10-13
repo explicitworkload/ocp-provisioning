@@ -48,12 +48,15 @@ gpu_instance_specs:
   g6e.4xlarge:   {gpus: 1, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.12xlarge:  {gpus: 4, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.48xlarge:  {gpus: 8, gpu_memory_gb: 48,  gpu: "L40S"}
-  # RTX PRO 6000 Blackwell Server Edition, 96 GB each. The three sizes
-  # below differ only in vCPU and host RAM - 8/64, 16/128, 32/256 - and all
-  # carry exactly ONE GPU, so there is no reason to pay for 8xlarge unless
-  # the workload needs the cores. Multi-GPU starts at g7e.12xlarge (2).
+  # RTX PRO 6000 Blackwell Server Edition, 96 GB each. The family does NOT
+  # scale GPUs with the size name the way g6e does - 2xl through 8xl all
+  # carry exactly one card and differ only in vCPU and host RAM (8/64,
+  # 16/128, 32/256), so those three buy cores, not VRAM. The GPU count only
+  # moves at 12xlarge and above: 2, then 4, then 8 at 48xlarge.
   g7e.2xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
   g7e.4xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
   g7e.8xlarge:   {gpus: 1, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
+  g7e.12xlarge:  {gpus: 2, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
+  g7e.24xlarge:  {gpus: 4, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
   p4d.24xlarge:  {gpus: 8, gpu_memory_gb: 40,  gpu: "A100 40GB"}
   p4de.24xlarge: {gpus: 8, gpu_memory_gb: 80,  gpu: "A100 80GB"}

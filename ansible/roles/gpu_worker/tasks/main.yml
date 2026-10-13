@@ -148,6 +148,43 @@
       - "nvidia.com/gpu.present=true"
   register: _gpu_nodes
 
+# Control-plane nodes are excluded, and this is not a tidiness rule.
+#
+# The MachineConfigPool below selects node-role.kubernetes.io/gpu. A master
+# is already claimed by the master pool, and a node matched by two pools is
+# one the MachineConfigOperator refuses to manage - it reports the node as
+# degraded and stops applying config to it, which on a single-node cluster
+# means the only node.
+#
+# That is not hypothetical. Single-node OpenShift on AWS runs
+# control-plane,master,worker on one machine, and the sandbox flavours come
+# on GPU instances - sandbox258 is a g6.8xlarge whose one node already
+# reports nvidia.com/gpu.present=true. Without this filter, running the role
+# there labels the control plane and builds a pool that fights the master
+# pool over it.
+- name: Leave control-plane nodes out of the GPU pool
+  ansible.builtin.set_fact:
+    _gpu_worker_nodes: >-
+      {{ _gpu_nodes.resources | default([])
+         | rejectattr('metadata.labels', 'contains', 'node-role.kubernetes.io/master')
+         | rejectattr('metadata.labels', 'contains', 'node-role.kubernetes.io/control-plane')
+         | map(attribute='metadata.name') | list }}
+
+- name: Report a GPU on the control plane
+  ansible.builtin.debug:
+    msg: >-
+      {{ _skipped | join(', ') }} has a GPU but is a control-plane node, so
+      it is being left out of the gpu MachineConfigPool - a node in two
+      pools is one the MachineConfigOperator will not manage. The GPU still
+      works and the NVIDIA operator still schedules on it; only the pool
+      membership is withheld. On a single-node cluster this is the normal
+      outcome and nothing is wrong.
+  vars:
+    _skipped: >-
+      {{ (_gpu_nodes.resources | default([]) | map(attribute='metadata.name') | list)
+         | difference(_gpu_worker_nodes) }}
+  when: _skipped | length > 0
+
 - name: Label existing GPU nodes with gpu role
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -160,13 +197,10 @@
         name: "{{ item }}"
         labels:
           node-role.kubernetes.io/gpu: ""
-  loop: >-
-    {{ _gpu_nodes.resources
-       | map(attribute='metadata.name')
-       | list }}
+  loop: "{{ _gpu_worker_nodes }}"
   loop_control:
     label: "{{ item }}"
-  when: _gpu_nodes.resources | length > 0
+  when: _gpu_worker_nodes | length > 0
 
 - name: Create GPU MachineConfigPool
   kubernetes.core.k8s:

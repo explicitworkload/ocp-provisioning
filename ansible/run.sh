@@ -84,10 +84,13 @@ if [[ $# -eq 0 && -t 0 ]]; then
   echo "    4) g7e.2xlarge    1 x RTX6000    96 GB    8 vCPU"
   echo "    5) g7e.4xlarge    1 x RTX6000    96 GB   16 vCPU"
   echo "    6) g7e.8xlarge    1 x RTX6000    96 GB   32 vCPU"
-  echo "    7) p4d.24xlarge   8 x A100 40G  320 GB   96 vCPU"
-  echo "    8) p4de.24xlarge  8 x A100 80G  640 GB   96 vCPU"
+  echo "    7) g7e.12xlarge   2 x RTX6000   192 GB   48 vCPU"
+  echo "    8) g7e.24xlarge   4 x RTX6000   384 GB   96 vCPU"
+  echo "    9) p4d.24xlarge   8 x A100 40G  320 GB   96 vCPU"
+  echo "   10) p4de.24xlarge  8 x A100 80G  640 GB   96 vCPU"
   echo "  4-6 are one Blackwell card each and differ only in CPU and host"
   echo "  RAM; 96 GB on a single GPU often replaces four L40S at option 3."
+  echo "  g7e only adds cards at 12xlarge and above."
   read -r -p "  choice [Enter to keep current]: " GPU_CHOICE
   case "${GPU_CHOICE:-}" in
     1) EXTRA_GPU="g4dn.4xlarge" ;;
@@ -96,8 +99,10 @@ if [[ $# -eq 0 && -t 0 ]]; then
     4) EXTRA_GPU="g7e.2xlarge" ;;
     5) EXTRA_GPU="g7e.4xlarge" ;;
     6) EXTRA_GPU="g7e.8xlarge" ;;
-    7) EXTRA_GPU="p4d.24xlarge" ;;
-    8) EXTRA_GPU="p4de.24xlarge" ;;
+    7) EXTRA_GPU="g7e.12xlarge" ;;
+    8) EXTRA_GPU="g7e.24xlarge" ;;
+    9) EXTRA_GPU="p4d.24xlarge" ;;
+    10) EXTRA_GPU="p4de.24xlarge" ;;
     "") EXTRA_GPU="" ;;
     *) echo "  not one of the choices - keeping the configured instances" >&2; EXTRA_GPU="" ;;
   esac
