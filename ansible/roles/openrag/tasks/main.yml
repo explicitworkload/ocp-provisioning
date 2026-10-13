@@ -975,6 +975,80 @@
     openrag_ui_host: >-
       {{ openrag_routes.resources | map(attribute='spec.host')
          | select('match', '^openrag[.]') | first | default('', true) }}
+    openrag_api_route_name: >-
+      {{ openrag_routes.resources
+         | selectattr('spec.host', 'match', '^openrag-api[.]')
+         | map(attribute='metadata.name') | first | default('', true) }}
+  tags: [openrag-config]
+
+# POST /onboarding is not the quick config write its name suggests. It
+# validates both models against LiteLLM and then INGESTS the default
+# document set - measured at 32s for two files on sandbox2154, with the
+# whole call comfortably past a minute.
+#
+# The router does not wait that long. Its default timeout is 30s, so the
+# call comes back 504 Gateway Time-out while the backend carries on and
+# finishes successfully. The play then fails on a task whose work actually
+# completed, which is the worst of both: onboarded: true in the database,
+# the step counter still at 0, and the wizard still covering the UI.
+#
+# ON THE INGRESS, NOT THE ROUTE, and that distinction is the whole task.
+#
+# The chart does not create Routes. It creates an Ingress, and OpenShift's
+# ingress-to-route controller generates the Routes from it with
+# ownerReferences controller: true. Annotate the generated Route and the
+# controller reconciles it straight back off - "oc annotate" reports
+# success, "oc get" shows nothing, and there is no error anywhere to say
+# why. Measured on sandbox2154: the annotation never appeared, on either
+# the module patch or a hand-run oc annotate.
+#
+# Put it on the Ingress and the controller copies it down to every Route it
+# generates, which here is both openrag-api and openrag.
+- name: Find the Ingress behind the OpenRAG API route
+  ansible.builtin.set_fact:
+    openrag_api_ingress: >-
+      {{ openrag_routes.resources
+         | selectattr('spec.host', 'match', '^openrag-api[.]')
+         | map(attribute='metadata.ownerReferences') | map('default', [], true)
+         | sum(start=[])
+         | selectattr('kind', 'equalto', 'Ingress')
+         | map(attribute='name') | first | default('', true) }}
+  tags: [openrag-config]
+
+- name: Give the OpenRAG API route time to onboard
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    namespace: "{{ openrag_namespace }}"
+    name: "{{ openrag_api_ingress }}"
+    definition:
+      metadata:
+        annotations:
+          haproxy.router.openshift.io/timeout: "{{ openrag_api_route_timeout }}"
+  when: openrag_api_ingress | length > 0
+  tags: [openrag-config]
+
+# A Route with no Ingress owner is one something else made, and then the
+# annotation does belong on the Route itself. Not the shape this chart
+# produces, but the fallback costs one task and the alternative is a silent
+# no-op if the chart ever changes.
+- name: Give the OpenRAG API route time to onboard, when it has no Ingress
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: patched
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ openrag_namespace }}"
+    name: "{{ openrag_api_route_name }}"
+    definition:
+      metadata:
+        annotations:
+          haproxy.router.openshift.io/timeout: "{{ openrag_api_route_timeout }}"
+  when:
+    - openrag_api_ingress | length == 0
+    - openrag_api_route_name | length > 0
   tags: [openrag-config]
 
 - name: Fail when the OpenRAG API route is missing
@@ -1028,7 +1102,10 @@
           api_key: "{{ openrag_litellm_key }}"
     validate_certs: false
     status_code: [200, 201]
-    timeout: 120
+    # Was 120, which was never the binding constraint - the router gave up
+    # at 30s long before this did. Now that the route allows longer, this
+    # has to allow longer too, or Ansible becomes the thing that times out.
+    timeout: 300
   register: openrag_onboarding_post
   no_log: true
   when:

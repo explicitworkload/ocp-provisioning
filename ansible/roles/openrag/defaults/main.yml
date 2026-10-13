@@ -59,6 +59,14 @@ openrag_docling_image: quay.io/docling-project/docling-serve:latest
 #
 # Override to use something else LiteLLM serves, a MaaS model say, if the
 # cluster-hosted one is not what OpenRAG should chat with.
+# How long the router gives the onboarding POST before answering 504. The
+# default 30s is not enough: that call ingests the default documents as
+# well as validating the models, and took over a minute on sandbox2154.
+# Generous on purpose - it only caps a call that is already failing, and
+# the cost of it being too small is a play that fails on work that
+# succeeded.
+openrag_api_route_timeout: 600s
+
 openrag_chat_model: "{{ model_name }}"
 openrag_chunk_size: 1000
 openrag_chunk_overlap: 200
