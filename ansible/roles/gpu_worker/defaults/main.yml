@@ -18,11 +18,16 @@ gpu_volume_size: 120
 # smaller than the single 30-minute wait they replace - three zones at these
 # settings is 24 minutes of worst case against the old 30 for one.
 #
-# gpu_az_attempt_retries covers EC2 accepting the instance, which is seconds
-# when it works and surfaces InsufficientInstanceCapacity about as fast when
-# it does not, so 10 x 30s is generous.
-gpu_az_attempt_retries: 10
-gpu_az_attempt_delay: 30
+# gpu_az_attempt_retries covers EC2 accepting the instance. Two minutes,
+# not five: a refusal reaches the cluster in about thirty seconds either as
+# a Failed Machine or as a FailedCreate Event, and try_az.yml reads both
+# the moment this poll gives up. Waiting longer only delays the question.
+#
+# A zone that is genuinely working but slow is not cut off by this - the
+# node-join wait below is what covers RHCOS booting and registering, and it
+# only runs when no refusal was found.
+gpu_az_attempt_retries: 8
+gpu_az_attempt_delay: 15
 
 # The node still has to boot RHCOS, pull ignition and register. That is the
 # slow part and it only runs in a zone that has already accepted the

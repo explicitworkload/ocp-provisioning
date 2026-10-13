@@ -77,13 +77,50 @@
       loop_control:
         label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
 
+# status.errorMessage catches only HALF of what AWS refuses, and the half
+# it misses is the common one.
+#
+# A terminal rejection - "not supported in your requested Availability
+# Zone" - sets errorReason/errorMessage and moves the Machine to Failed.
+# InsufficientInstanceCapacity does NOT. The machine controller treats it
+# as retryable, so it keeps calling RunInstances, the Machine sits in
+# Provisioning with both error fields EMPTY, and the only record is a
+# FailedCreate Event. Measured on sandbox3547: phase=Provisioning,
+# errorReason empty, errorMessage empty, and sixteen FailedCreate events
+# all saying InsufficientInstanceCapacity.
+#
+# The cost of missing it was the whole point of this file. The poll above
+# ran its budget out seeing nothing, gpu_az_errors came back empty, so the
+# node-join wait below did NOT skip and spent its budget too - about
+# eleven minutes per zone to discover something AWS had said in thirty
+# seconds, three times over.
+    - name: "{{ gpu_az_effective }}: ask the machine controller what AWS said"
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: Event
+        namespace: openshift-machine-api
+        field_selectors:
+          - reason=FailedCreate
+      register: gpu_create_events
+      failed_when: false
+
     - name: "{{ gpu_az_effective }}: collect what AWS said"
       ansible.builtin.set_fact:
         gpu_az_errors: >-
-          {{ (gpu_machines.results | default([]))
-             | map(attribute='resources') | map('default', [], true) | sum(start=[])
-             | selectattr('status.errorMessage', 'defined')
-             | map(attribute='status.errorMessage')
+          {{ (
+               (gpu_machines.results | default([]))
+               | map(attribute='resources') | map('default', [], true) | sum(start=[])
+               | selectattr('status.errorMessage', 'defined')
+               | map(attribute='status.errorMessage') | list
+               +
+               (gpu_create_events.resources | default([]))
+               | selectattr('involvedObject.name', 'defined')
+               | selectattr('involvedObject.name', 'search',
+                            '^' ~ (cluster_infra_id | regex_escape) ~ '-.*-'
+                            ~ (gpu_az_effective | regex_escape) ~ '-')
+               | map(attribute='message') | list
+             )
              | map('truncate', 220, true) | list | unique }}
 
     # Machine phase Running comes before the node registers, so the zone has
