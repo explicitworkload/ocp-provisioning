@@ -14,6 +14,28 @@
 gpu_availability_zone: ""
 gpu_volume_size: 120
 
+# Tried in order when the requested type has no capacity in ANY zone.
+#
+# Exhausting three zones of one type and giving up is a worse search than
+# it looks: on sandbox2134 g6e.4xlarge was unavailable in all of
+# us-east-2a/b/c while g6.4xlarge, g5.4xlarge and g4dn.4xlarge were all
+# available in the first zone tried. The region was not out of GPUs, it was
+# out of L40S.
+#
+# Ordered strongest first, so a fallback costs as little capability as the
+# situation allows: L4 and A10G are both 24 GB, the T4 16 GB and two
+# generations older.
+#
+# EVERY ENTRY IS FILTERED AGAINST THE SELECTED MODEL before it is tried, on
+# both GPU count and usable VRAM. A type that cannot hold the model is not
+# a fallback - it is a node that provisions and then fails at model load,
+# two roles later, with nothing pointing back here. Set this to [] to
+# disable fallback and fail on the requested type alone.
+gpu_instance_fallback:
+  - g6.4xlarge
+  - g5.4xlarge
+  - g4dn.4xlarge
+
 # Per-zone budgets. These multiply by the number of zones, so they are much
 # smaller than the single 30-minute wait they replace - three zones at these
 # settings is 24 minutes of worst case against the old 30 for one.
@@ -30,9 +52,22 @@ gpu_az_attempt_retries: 8
 gpu_az_attempt_delay: 15
 
 # The node still has to boot RHCOS, pull ignition and register. That is the
-# slow part and it only runs in a zone that has already accepted the
-# instance, so it gets the larger share: 6 minutes.
-gpu_node_join_retries: 12
+# slow part, it only runs in a zone that has already accepted the instance,
+# and it gets its OWN delay rather than reusing the one above.
+#
+# Sharing gpu_az_attempt_delay was a real bug, not a tidiness point.
+# Dropping that delay from 30s to 15s to detect refusals faster also
+# halved this wait, from 6 minutes to 3 - and a node takes 4 to 6 to boot
+# and register. The role then abandoned instances that were provisioning
+# perfectly well, deleted them, and moved to the next zone. Measured on
+# sandbox2134: g5.4xlarge reached Provisioned in 47s and was destroyed two
+# minutes later for not having become a node yet, three zones running.
+#
+# 20 x 30s = 10 minutes, which is past the slowest join seen and costs
+# nothing when the node is quick, because the wait ends as soon as
+# readyReplicas catches up.
+gpu_node_join_retries: 20
+gpu_node_join_delay: 30
 gpu_machinesets:
   - instance_type: g4dn.4xlarge
     replicas: 1
@@ -49,7 +84,18 @@ gpu_machinesets:
 # card. Mixing the two units silently inflates every budget by 7%: AWS
 # lists the L40S as "44 GiB", which is the same 48 GB card.
 gpu_instance_specs:
+  g4dn.xlarge:   {gpus: 1, gpu_memory_gb: 16,  gpu: "T4"}
   g4dn.4xlarge:  {gpus: 1, gpu_memory_gb: 16,  gpu: "T4"}
+  # A10G and L4 are both 24 GB cards; AWS prints them as "22 GiB", the same
+  # GB-vs-GiB difference as the L40S's "44 GiB" for a 48 GB card.
+  g5.2xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "A10G"}
+  g5.4xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "A10G"}
+  g5.8xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "A10G"}
+  g5.12xlarge:   {gpus: 4, gpu_memory_gb: 24,  gpu: "A10G"}
+  g6.2xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "L4"}
+  g6.4xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "L4"}
+  g6.8xlarge:    {gpus: 1, gpu_memory_gb: 24,  gpu: "L4"}
+  g6.12xlarge:   {gpus: 4, gpu_memory_gb: 24,  gpu: "L4"}
   g6e.4xlarge:   {gpus: 1, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.12xlarge:  {gpus: 4, gpu_memory_gb: 48,  gpu: "L40S"}
   g6e.48xlarge:  {gpus: 8, gpu_memory_gb: 48,  gpu: "L40S"}

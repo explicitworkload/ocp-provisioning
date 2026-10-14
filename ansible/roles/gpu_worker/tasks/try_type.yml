@@ -1,0 +1,37 @@
+---
+# One instance type (or one set of them) tried across every candidate zone.
+# main.yml includes this once per entry in gpu_type_attempts.
+#
+# The type under test arrives as gpu_try_types, a list of
+# {instance_type, replicas} - the same shape as gpu_machinesets, because
+# try_az.yml and the MachineSet template both read it that way.
+#
+# Guarded as a block for the same reason try_az.yml is: a when: on an
+# include_tasks with a loop is not re-evaluated against facts set by
+# earlier iterations, so without this every type would be tried even after
+# one succeeded.
+- name: "{{ gpu_try_types | map(attribute='instance_type') | join('+') }}: try this type"
+  when: not (gpu_provisioned | default(false) | bool)
+  block:
+
+    - name: "Announce the type being tried"
+      ansible.builtin.debug:
+        msg: >-
+          Trying {{ gpu_try_types | map(attribute='instance_type') | join(', ') }}
+          across {{ gpu_az_candidates | join(', ') }}.
+          {{ gpu_az_failures | default([]) | length }} zone attempt(s) have
+          failed so far.
+
+    # Zone failures are per type. Clearing the list keeps the final message
+    # about the type that was tried last rather than every type at once,
+    # and stops the "N zone attempts failed" count above running away.
+    - name: Reset the per-type zone failures
+      ansible.builtin.set_fact:
+        gpu_az_failures_type: []
+
+    - name: Try each zone for this type
+      ansible.builtin.include_tasks: try_az.yml
+      loop: "{{ gpu_az_candidates }}"
+      loop_control:
+        loop_var: gpu_az_effective
+      when: not (gpu_provisioned | default(false) | bool)

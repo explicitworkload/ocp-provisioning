@@ -59,15 +59,34 @@
 # list comes back empty, and an empty list is exactly what "no GPU
 # MachineSets exist" looks like. instanceType is an exact string compare
 # with no escaping at all.
+# Fallback types count as "ours" here, not just the requested ones. The
+# node this role ends up running is often a fallback - that is the whole
+# point of having them - and matching only gpu_machinesets made the resume
+# check blind to exactly the case it exists for: a re-run saw no GPU of a
+# requested type, concluded nothing was running, and started the search
+# from the top.
 - name: Look for GPU MachineSets that already have nodes
   ansible.builtin.set_fact:
-    gpu_az_existing: >-
+    gpu_ms_running: >-
       {{ machinesets.resources
          | selectattr('spec.template.spec.providerSpec.value.instanceType',
-                      'in', gpu_machinesets | map(attribute='instance_type') | list)
+                      'in', (gpu_machinesets | map(attribute='instance_type') | list)
+                            + (gpu_instance_fallback | default([])))
          | selectattr('status.readyReplicas', 'defined')
-         | selectattr('status.readyReplicas', '>', 0)
+         | selectattr('status.readyReplicas', '>', 0) | list }}
+
+- name: Note the zone and type already running a GPU node
+  ansible.builtin.set_fact:
+    gpu_az_existing: >-
+      {{ gpu_ms_running
          | map(attribute='spec.template.spec.providerSpec.value.placement.availabilityZone')
+         | select('string') | unique | list }}
+    # Same idea one axis over. Without it a re-run re-proves that the
+    # requested type still has no capacity - three zones, six minutes -
+    # before falling back to the type already serving a node.
+    gpu_type_existing: >-
+      {{ gpu_ms_running
+         | map(attribute='spec.template.spec.providerSpec.value.instanceType')
          | select('string') | unique | list }}
 
 # Zero-replica GPU MachineSets from earlier attempts in other zones. Not
@@ -114,12 +133,116 @@
                if gpu_az_existing | length > 0
                else 'Order is random, to spread load across zones.') }}
 
-- name: Provision the GPU MachineSets, trying each zone until one works
-  ansible.builtin.include_tasks: try_az.yml
-  loop: "{{ gpu_az_candidates }}"
+# Zones are not the only lever, and on sandbox2134 they were the wrong one.
+# g6e.4xlarge had no capacity in any of us-east-2a/b/c, so the role gave up
+# having built nothing - while g6.4xlarge, g5.4xlarge and g4dn.4xlarge were
+# all available in the first zone it tried. Three zones of one type is a
+# worse search than one zone of four types.
+#
+# So after the requested type is exhausted everywhere, fall back through
+# gpu_instance_fallback. Each fallback is filtered against the selected
+# model first: a type that cannot hold it is not a fallback, it is a node
+# that provisions and then fails at model load, several roles later and
+# much harder to read.
+# Built with a loop rather than one clever expression: the filter needs a
+# per-item VRAM calculation, and a when: that can be read line by line is
+# worth more here than a one-liner nobody will check.
+- name: Work out which fallback types still fit the model
+  ansible.builtin.set_fact:
+    gpu_fallback_viable: "{{ (gpu_fallback_viable | default([])) + [item] }}"
+  loop: "{{ gpu_instance_fallback | default([]) }}"
   loop_control:
-    loop_var: gpu_az_effective
+    label: "{{ item }}"
+  vars:
+    _s: "{{ gpu_instance_specs[item] | default({}) }}"
+    _m: "{{ model_presets[model_preset] | default({}) if model_preset is defined else {} }}"
+    # Same arithmetic as site.yml's preflight, and it has to stay the same:
+    # vendor GB to GiB, then the 0.9 of the card vLLM takes by default.
+    _have: >-
+      {{ ((_m.gpu_count | default(1) | int) * (_s.gpu_memory_gb | default(0) | int)
+          * 0.9313 * 0.9) | round(1) }}
+    _need: >-
+      {{ (((_m.weights_gb | default(0) | int) * 0.9313)
+          + ((_m.max_model_len | default(0) | int) * (_m.kv_kb_per_token | default(0) | int) / 1048576)
+          + ((_m.max_num_seqs | default(0) | int) * (_m.state_mb_per_seq | default(0) | int) / 1024)
+          + 1) | round(1) }}
+  when:
+    - model_preset is defined
+    - item in gpu_instance_specs
+    - item not in (gpu_machinesets | selectattr('replicas', '>', 0)
+                   | map(attribute='instance_type') | list)
+    - (_s.gpus | default(0) | int) >= (_m.gpu_count | default(1) | int)
+    - (_have | float) >= (_need | float)
+
+# The requested types go first, as one attempt - they are what was asked
+# for, and several at once is a supported shape. Each fallback is then its
+# own attempt, one type at a time, because the point of falling back is to
+# ask for less, not to ask for more things at once.
+- name: Note how many replicas were asked for
+  ansible.builtin.set_fact:
+    gpu_attempt_replicas: "{{ gpu_machinesets | selectattr('replicas', '>', 0) | map(attribute='replicas') | first | default(1) }}"
+
+# Three sources, in priority order, each a list of {instance_type,
+# replicas} entries. Built as separate facts rather than one expression:
+# the first version folded a multi-line template and produced a STRING,
+# which then failed on "can only concatenate str (not list) to str" in the
+# append below - a confusing error a long way from its cause.
+- name: Put the type already running a node first
+  ansible.builtin.set_fact:
+    gpu_attempt_running: "{{ [[{'instance_type': gpu_type_existing | first, 'replicas': gpu_attempt_replicas | int}]] }}"
+  when: (gpu_type_existing | default([])) | length > 0
+
+- name: Then the requested types that are not already running
+  ansible.builtin.set_fact:
+    gpu_attempt_requested: "{{ [gpu_machinesets | selectattr('replicas', '>', 0) | rejectattr('instance_type', 'in', gpu_type_existing | default([])) | list] }}"
+
+- name: Combine them into the attempt list
+  ansible.builtin.set_fact:
+    gpu_type_attempts: "{{ (gpu_attempt_running | default([])) + (gpu_attempt_requested | reject('equalto', []) | list) }}"
+
+- name: Append each viable fallback as an attempt of its own
+  ansible.builtin.set_fact:
+    gpu_type_attempts: "{{ gpu_type_attempts + [[{'instance_type': item, 'replicas': gpu_attempt_replicas | int}]] }}"
+  loop: "{{ gpu_fallback_viable | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  when: item not in (gpu_type_existing | default([]))
+
+- name: Report the instance types that will be tried
+  ansible.builtin.debug:
+    msg: >-
+      GPU instance types to try, in order:
+      {{ gpu_type_attempts | map('map', attribute='instance_type')
+         | map('join', '+') | join(' then ') }}.
+      {{ 'Fallbacks were filtered to those that still fit ' ~ model_preset ~ '.'
+         if gpu_type_attempts | length > 1
+         else 'No viable fallback - either none is configured, or none fits the selected model.' }}
+
+- name: Provision the GPU MachineSets, trying each type and zone until one works
+  ansible.builtin.include_tasks: try_type.yml
+  loop: "{{ gpu_type_attempts }}"
+  loop_control:
+    loop_var: gpu_try_types
+    label: "{{ gpu_try_types | map(attribute='instance_type') | join('+') }}"
   when: not (gpu_provisioned | default(false) | bool)
+
+# The zero-replica entries are scale-up-ready placeholders, and they are
+# created here rather than during the search. A failed attempt deletes
+# every MachineSet it made, so building them alongside each try would mean
+# creating and destroying the same empty objects once per zone per type -
+# and leaving some behind in whichever zone was abandoned last.
+- name: Create the scale-up-ready MachineSets alongside the one that worked
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition: "{{ lookup('template', 'gpu-machineset.yml.j2') | from_yaml }}"
+  loop: "{{ gpu_machinesets | rejectattr('replicas', '>', 0) | list }}"
+  loop_control:
+    label: "{{ item.instance_type }} in {{ gpu_az_provisioned | default('') }} (replicas: 0)"
+  vars:
+    gpu_az_effective: "{{ gpu_az_provisioned | default('') }}"
+  when: gpu_provisioned | default(false) | bool
 
 # Every zone refused. Fail here with what each one said, rather than letting
 # the roles after this one run against a cluster with no GPU.
@@ -231,6 +354,8 @@
       — {{ item.replicas }} replica(s)
       {{ '(zone chosen after ' + (gpu_az_failures | length | string) + ' other(s) had no capacity)'
          if (gpu_az_failures | default([])) | length > 0 else '' }}
-  loop: "{{ gpu_machinesets }}"
+  loop: >-
+    {{ (gpu_types_provisioned | default([]))
+       + (gpu_machinesets | rejectattr('replicas', '>', 0) | list) }}
   loop_control:
     label: "{{ item.instance_type }}"
