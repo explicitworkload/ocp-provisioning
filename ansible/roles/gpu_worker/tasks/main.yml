@@ -167,6 +167,12 @@
           + ((_m.max_num_seqs | default(0) | int) * (_m.state_mb_per_seq | default(0) | int) / 1024)
           + 1) | round(1) }}
   when:
+    # Nothing requested means nothing to fall back FROM. Without this, a
+    # cluster deliberately configured with every entry at 0 replicas - a
+    # supported setting that site.yml prints a notice for - would have a
+    # GPU built for it by the fallback path, at one replica, because
+    # gpu_attempt_replicas defaults to 1 when nothing asked for any.
+    - (gpu_machinesets | selectattr('replicas', '>', 0) | list) | length > 0
     - gpu_fallback_mode != 'never'
     - model_preset is defined
     - item in gpu_instance_specs
@@ -253,6 +259,8 @@
 
 # Every zone refused. Fail here with what each one said, rather than letting
 # the roles after this one run against a cluster with no GPU.
+# Only a failure if something was actually asked for. A run with every
+# entry at 0 replicas has nothing to provision and nothing to report.
 - name: Fail when no zone could provide the GPU nodes
   ansible.builtin.fail:
     msg: >-
@@ -266,7 +274,9 @@
       is the lever, not the zone: a 4-GPU g6e.12xlarge is far scarcer than a
       1-GPU g6e.4xlarge, and model_preset qwen3.8-27b-fp8 serves the same
       model on one card.
-  when: not (gpu_provisioned | default(false) | bool)
+  when:
+    - not (gpu_provisioned | default(false) | bool)
+    - (gpu_machinesets | selectattr('replicas', '>', 0) | list) | length > 0
 
 
 - name: Gather GPU nodes
@@ -366,3 +376,19 @@
        + (gpu_machinesets | rejectattr('replicas', '>', 0) | list) }}
   loop_control:
     label: "{{ item.instance_type }}"
+  # gpu_az_provisioned only exists once a zone has worked. Without this
+  # guard the summary fails on an undefined variable in exactly the case
+  # where there is nothing to summarise - a run that asked for no GPU at
+  # all, which is a supported setting rather than a mistake.
+  when: gpu_provisioned | default(false) | bool
+
+- name: Report that no GPU was asked for
+  ansible.builtin.debug:
+    msg: >-
+      No GPU MachineSet was created: every gpu_machinesets entry is at 0
+      replicas. Nothing was attempted and nothing failed. Set a replica
+      count, or use run.sh's GPU prompt, if this cluster is meant to have
+      one.
+  when:
+    - not (gpu_provisioned | default(false) | bool)
+    - (gpu_machinesets | selectattr('replicas', '>', 0) | list) | length == 0
