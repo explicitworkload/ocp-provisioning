@@ -167,6 +167,7 @@
           + ((_m.max_num_seqs | default(0) | int) * (_m.state_mb_per_seq | default(0) | int) / 1024)
           + 1) | round(1) }}
   when:
+    - gpu_fallback_mode != 'never'
     - model_preset is defined
     - item in gpu_instance_specs
     - item not in (gpu_machinesets | selectattr('replicas', '>', 0)
@@ -196,9 +197,15 @@
   ansible.builtin.set_fact:
     gpu_attempt_requested: "{{ [gpu_machinesets | selectattr('replicas', '>', 0) | rejectattr('instance_type', 'in', gpu_type_existing | default([])) | list] }}"
 
+# The requested attempt is repeated gpu_requested_rounds times. Each copy
+# is a full sweep of every zone, and try_type.yml waits gpu_round_wait
+# between repeats - so insisting on a scarce type is a matter of raising a
+# number rather than babysitting the run.
 - name: Combine them into the attempt list
   ansible.builtin.set_fact:
-    gpu_type_attempts: "{{ (gpu_attempt_running | default([])) + (gpu_attempt_requested | reject('equalto', []) | list) }}"
+    gpu_type_attempts: "{{ (gpu_attempt_running | default([])) + (_requested * (gpu_requested_rounds | int)) }}"
+  vars:
+    _requested: "{{ gpu_attempt_requested | reject('equalto', []) | list }}"
 
 - name: Append each viable fallback as an attempt of its own
   ansible.builtin.set_fact:

@@ -14,20 +14,98 @@
   when: not (gpu_provisioned | default(false) | bool)
   block:
 
+    - name: Work out what kind of attempt this is
+      ansible.builtin.set_fact:
+        _gpu_this_type: "{{ gpu_try_types | map(attribute='instance_type') | join('+') }}"
+        _gpu_is_repeat: >-
+          {{ (gpu_try_types | map(attribute='instance_type') | join('+'))
+             in (gpu_types_attempted | default([])) }}
+        _gpu_is_fallback: >-
+          {{ (gpu_try_types | map(attribute='instance_type') | first)
+             not in (gpu_machinesets | selectattr('replicas', '>', 0)
+                     | map(attribute='instance_type') | list) }}
+
+    # Capacity is not a fixed property, it is a queue. g7e.2xlarge was
+    # refused in every zone of two regions one afternoon and provisioned
+    # fine a few hours later, so a type worth insisting on is worth asking
+    # for more than once. gpu_requested_rounds controls how many sweeps the
+    # REQUESTED type gets; this is the gap between them.
+    - name: "Wait before asking for {{ _gpu_this_type }} again"
+      ansible.builtin.pause:
+        seconds: "{{ gpu_round_wait | int }}"
+        prompt: >-
+          No capacity for {{ _gpu_this_type }} in any zone yet. Waiting
+          {{ gpu_round_wait }}s before another sweep (Ctrl-C then A to abort)
+      when:
+        - _gpu_is_repeat | bool
+        - (gpu_round_wait | int) > 0
+
+    # The one decision a human might reasonably want to make, offered at
+    # the only moment the information exists - the requested type has just
+    # been refused everywhere, and the alternatives are known.
+    #
+    # seconds: is what makes this safe to leave running. Without a timeout
+    # a pause blocks forever on a TTY and an unattended run would hang at
+    # the worst possible moment. With one, a nohup or CI run returns
+    # immediately with empty input and carries on as mode=auto.
+    - name: "Ask before falling back from the requested instance type"
+      ansible.builtin.pause:
+        seconds: "{{ gpu_fallback_ask_timeout | int }}"
+        prompt: >-
+
+
+          The requested instance type had no capacity in any zone.
+          About to fall back to {{ _gpu_this_type }}
+          ({{ _spec.gpus | default('?') }} x {{ _spec.gpu | default('?') }},
+          {{ _spec.gpu_memory_gb | default('?') }} GB) - which does still fit
+          {{ model_preset | default('the selected model') }}.
+
+          Press Enter, or wait {{ gpu_fallback_ask_timeout }}s, to accept.
+          Type "n" then Enter to stop instead and keep the requested type
+        echo: true
+      register: _gpu_fallback_answer
+      vars:
+        _spec: "{{ gpu_instance_specs[gpu_try_types | map(attribute='instance_type') | first] | default({}) }}"
+      when:
+        - gpu_fallback_mode == 'ask'
+        - _gpu_is_fallback | bool
+        - not (gpu_fallback_decided | default(false) | bool)
+
+    # Asked once, not once per fallback type. Someone who said yes to the
+    # first alternative does not want the question three more times.
+    - name: Remember that the question was asked
+      ansible.builtin.set_fact:
+        gpu_fallback_decided: true
+      when:
+        - gpu_fallback_mode == 'ask'
+        - _gpu_is_fallback | bool
+
+    - name: Stop rather than fall back, because that is what was asked for
+      ansible.builtin.fail:
+        msg: >-
+          Stopped at your request rather than falling back from the
+          requested instance type. Nothing was left behind - every
+          MachineSet this run created has been deleted.
+          To wait for the requested type instead of answering this each
+          time, set gpu_requested_rounds higher (it sweeps the zones that
+          many times, {{ gpu_round_wait }}s apart). To never be asked, set
+          gpu_fallback_mode to auto or never.
+      when:
+        - gpu_fallback_mode == 'ask'
+        - _gpu_is_fallback | bool
+        - (_gpu_fallback_answer.user_input | default('') | trim | lower) in ['n', 'no']
+
     - name: "Announce the type being tried"
       ansible.builtin.debug:
         msg: >-
-          Trying {{ gpu_try_types | map(attribute='instance_type') | join(', ') }}
-          across {{ gpu_az_candidates | join(', ') }}.
+          Trying {{ _gpu_this_type }} across {{ gpu_az_candidates | join(', ') }}.
           {{ gpu_az_failures | default([]) | length }} zone attempt(s) have
           failed so far.
+          {{ '(repeat sweep - this type was tried before)' if _gpu_is_repeat | bool else '' }}
 
-    # Zone failures are per type. Clearing the list keeps the final message
-    # about the type that was tried last rather than every type at once,
-    # and stops the "N zone attempts failed" count above running away.
-    - name: Reset the per-type zone failures
+    - name: Record that this type has been attempted
       ansible.builtin.set_fact:
-        gpu_az_failures_type: []
+        gpu_types_attempted: "{{ (gpu_types_attempted | default([])) + [_gpu_this_type] }}"
 
     - name: Try each zone for this type
       ansible.builtin.include_tasks: try_az.yml

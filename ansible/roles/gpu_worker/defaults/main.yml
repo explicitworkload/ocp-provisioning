@@ -14,6 +14,38 @@
 gpu_availability_zone: ""
 gpu_volume_size: 120
 
+# What to do when the requested instance type has no capacity anywhere.
+#
+#   auto  - fall back to the next viable type without asking. The default,
+#           and the right one for an unattended run.
+#   ask   - pause and offer the choice at the moment the answer is known:
+#           Enter accepts the fallback, "n" stops. The prompt times out
+#           after gpu_fallback_ask_timeout and proceeds as auto, so a
+#           nohup or CI run never hangs on it - verified: a pause with
+#           seconds: returns immediately with empty input when there is no
+#           TTY.
+#   never - do not fall back at all; fail on the requested type. Same
+#           effect as gpu_instance_fallback: [], said more plainly.
+#
+# This belongs here rather than in run.sh, and not for tidiness: capacity
+# is only knowable by asking AWS for the instance. run.sh executes before
+# the playbook, probing would take minutes and duplicate this role, and
+# ec2:DescribeInstanceTypeOfferings is denied to the cluster's scoped
+# credential. The decision point is mid-play because the information is.
+gpu_fallback_mode: auto
+gpu_fallback_ask_timeout: 120
+
+# How many times to sweep every zone for the REQUESTED type before any
+# fallback is considered, and how long to wait between sweeps.
+#
+# For holding out rather than choosing. Capacity is a queue, not a fixed
+# property: g7e.2xlarge was refused in every zone of two regions one
+# afternoon and provisioned normally a few hours later. 1 keeps today's
+# behaviour; 3 with the default wait spends about half an hour trying to
+# get the card actually asked for before settling for another.
+gpu_requested_rounds: 1
+gpu_round_wait: 300
+
 # Tried in order when the requested type has no capacity in ANY zone.
 #
 # Exhausting three zones of one type and giving up is a worse search than
