@@ -669,6 +669,41 @@
 # spec does not change when it does - so adding or editing a model silently
 # had no effect until the pod was bounced by hand. Guarded on the ConfigMap
 # actually changing so repeat runs do not restart the proxy.
+# Only pods that are ALREADY SERVING get bounced, and that guard is the
+# whole point of this task pair.
+#
+# On a fresh cluster litellm-config is necessarily "changed" - it is being
+# created - so the restart below fired every single first install. It
+# fired seconds after the Deployment, while the brand-new pod was partway
+# through 217 Prisma migrations, and deleting it there leaves a migration
+# with a start record and no completion. The replacement then refuses to
+# start at all:
+#
+#   Error: P3009 - migrate found failed migrations in the target database
+#
+# which is not self-healing and needs prisma migrate resolve by hand.
+# Seen on sandbox721 and again on sandbox2250, where the killed pod and
+# its replacement shared one ReplicaSet - no rollout, just a delete into
+# a running migration.
+#
+# It looked like it worked for a long time because it was a race, and the
+# migration count only grows: when there were few enough to finish inside
+# the gap between those two tasks, the restart landed harmlessly after
+# startup. litellm_image tracks main-latest, so that count moves without
+# anything in this repo changing.
+#
+# A pod that has never been Ready does not need this restart anyway - it
+# reads the ConfigMap at startup, and the ConfigMap is already current.
+- name: Look for a LiteLLM pod that is already serving
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace }}"
+    label_selectors:
+      - app=litellm
+  register: litellm_serving_pods
+
 - name: Restart LiteLLM to pick up config changes
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -682,7 +717,14 @@
   # from litellm-db-credentials, and Kubernetes does not refresh env in a
   # running container - after a rotation the old pod keeps using the password
   # the database no longer has.
-  when: litellm_config.changed or litellm_db_cred.changed | default(false)
+  when:
+    - litellm_config.changed or litellm_db_cred.changed | default(false)
+    # At least one pod reporting Ready=True. Mid-migration pods are not
+    # Ready, so this skips exactly the case that breaks.
+    - litellm_serving_pods.resources | default([])
+      | map(attribute='status.conditions') | map('default', [], true) | sum(start=[])
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True') | list | length > 0
 
 # readyReplicas, not availableReplicas, and it means something now that the
 # Deployment above carries a readiness probe. Before that probe existed this

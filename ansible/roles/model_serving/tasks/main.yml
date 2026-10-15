@@ -507,6 +507,10 @@
             modelFormat:
               name: vLLM
             runtime: vllm-cuda-runtime
+            # Merged with the ServingRuntime's own env rather than replacing
+            # it - KServe combines the two, verified on sandbox2154 where
+            # HF_HOME and INFERENCE_SERVICE_NAME survived this being added.
+            env: "{{ model_serving_env }}"
             # Full URI from the preset rather than an oci:// prefix bolted on
             # here: the FP8 preset is hf://, which KServe's default storage
             # container supports alongside oci://.

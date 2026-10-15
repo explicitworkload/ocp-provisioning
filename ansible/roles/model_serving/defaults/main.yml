@@ -166,6 +166,41 @@ model_presets:
     cpu_request: "4"
     memory_request: 24Gi
 
+# Extra environment for the vLLM container, merged with whatever the
+# ServingRuntime already sets rather than replacing it.
+#
+# VLLM_DEEP_GEMM_WARMUP=skip is here because of a vLLM defect that costs a
+# whole deployment. On an RTX PRO 6000 Blackwell, vLLM decides DeepGEMM is
+# wrong for the architecture and says so -
+#
+#   Auto-disabled DeepGemm for model_type=qwen3_5_text on Blackwell.
+#   DeepGemm E8M0 scale format causes accuracy degradation
+#   Selected CutlassFp8BlockScaledMMKernel for Fp8LinearMethod
+#
+# - and then runs the DeepGEMM WARMUP anyway, which asks for a kernel
+# recipe that does not exist on that card:
+#
+#   RuntimeError: Assertion error (deepgemm/.../layout.hpp:76): Unknown recipe
+#
+# The engine dies after three and a half minutes of successfully loading
+# and profiling the model, and the pod crash-loops. The auto-disable
+# simply does not reach the warmup path.
+#
+# Set unconditionally rather than gated on detecting Blackwell. A product
+# check would be one more thing to be wrong about the next time NVIDIA
+# ships an architecture, and the cost of skipping here is small and
+# bounded: the warmup only pre-compiles DeepGEMM kernels, so where
+# DeepGEMM is genuinely used - Hopper, which none of the presets here run
+# on - the first request pays a JIT compile instead. Nothing else changes,
+# because vLLM had already picked Cutlass for the actual GEMMs.
+#
+# Verified on sandbox2154: the 27B FP8 went from 3 restarts and
+# CrashLoopBackOff to 2/2 Running with 0 restarts, engine init 188s, and
+# "Application startup complete".
+model_serving_env:
+  - name: VLLM_DEEP_GEMM_WARMUP
+    value: skip
+
 # Everything below is derived from the preset. Override any of it explicitly
 # if you need to; the preset only supplies the default.
 model_selected: "{{ model_presets[model_preset] }}"

@@ -1,6 +1,22 @@
 ---
 litellm_namespace: litellm
-litellm_image: "ghcr.io/berriai/litellm:main-latest"
+# Pinned to a digest, not main-latest, and the reason is worth keeping.
+#
+# main-latest moves whenever upstream pushes, so two identical runs of this
+# repo a week apart got different LiteLLM builds - and with them a
+# different number of Prisma migrations to apply at first boot. That count
+# only grows (217 at this digest), and it is what turned a long-standing
+# latent race in this role into a reproducible first-install failure:
+# see the "Look for a LiteLLM pod that is already serving" comment in
+# tasks/main.yml.
+#
+# A tag that changes under you also makes "it worked last week" impossible
+# to act on, which is exactly where the sandbox2250 diagnosis started.
+#
+# To move it: pick a digest deliberately, read upstream's changelog for
+# migrations, and expect first boot to take longer the further you jump.
+#   skopeo inspect docker://ghcr.io/berriai/litellm:main-latest | jq -r .Digest
+litellm_image: "ghcr.io/berriai/litellm@sha256:847b8cd7b600e9a68c71a3b74692c054a75706aca3596344f01e90bfc3e7d534"
 litellm_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
 litellm_db_storage: 5Gi
 litellm_db_user: litellm
