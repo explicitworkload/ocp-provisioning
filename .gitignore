@@ -70,6 +70,14 @@ ansible/**/vault.yml
 # `git add -A` publishing it. Copy the sample to all.yml to get started;
 # run.sh refuses to run without it.
 ansible/group_vars/all.yml
+# ...and anything run.sh leaves beside it while rewriting it. `sed -i.bak`
+# writes all.yml.bak and only removes it when the sed SUCCEEDS, so the one
+# case that leaves a copy of your HF token and API keys on disk is the
+# failure case. The bare path above does not cover these - checked with
+# `git check-ignore`, which reported all.yml.bak and all.yml.tmp as NOT
+# ignored - so a later `git add -A` would have committed them.
+ansible/group_vars/all.yml.*
+!ansible/group_vars/all.yml.sample
 
 # Python virtualenvs. Note: running `python3 -m venv .` in a project root
 # overwrites that root's .gitignore with venv's own (a single `*`), silently

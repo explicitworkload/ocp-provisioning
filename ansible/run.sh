@@ -47,111 +47,46 @@ MSG
   exit 1
 fi
 
-# Interactive choice of model and GPU instance, but only for a full run.
+# Interactive configuration, but only for a full run.
 #
 # Deliberately here rather than in Ansible's vars_prompt: vars_prompt is
 # evaluated at play start, before tags are filtered, so it would also stop
 # and ask on `./run.sh --tags summary` and on every other partial re-run.
-# Here the prompt is skipped whenever any argument is passed, which is
+# Here the prompts are skipped whenever any argument is passed, which is
 # exactly the case where someone is not doing a full deploy.
 #
 # Skipped as well when stdin is not a terminal, so CI and nohup keep working,
-# and when the caller already set either value with -e.
-if [[ $# -eq 0 && -t 0 ]]; then
-  echo
-  echo "Model to serve (Enter keeps the value in group_vars/all.yml):"
-  echo "    1) qwen3-4b          bf16  1 GPU    8 GB    32k context"
-  echo "    2) qwen3-8b          bf16  1 GPU   16 GB    40k context"
-  echo "    3) qwen3-14b         bf16  1 GPU   29 GB    40k context"
-  echo "    4) qwen3.8-27b       bf16  4 GPUs  56 GB   256k context   (needs g6e.12xlarge)"
-  echo "    5) qwen3.8-27b-fp8   FP8   1 GPU   31 GB    64k context   (Hugging Face, needs hf_token)"
-  read -r -p "  choice [Enter to keep current]: " MODEL_CHOICE
-  case "${MODEL_CHOICE:-}" in
-    1) EXTRA_MODEL="qwen3-4b" ;;
-    2) EXTRA_MODEL="qwen3-8b" ;;
-    3) EXTRA_MODEL="qwen3-14b" ;;
-    4) EXTRA_MODEL="qwen3.8-27b" ;;
-    5) EXTRA_MODEL="qwen3.8-27b-fp8" ;;
-    "") EXTRA_MODEL="" ;;
-    *) echo "  not one of the choices - keeping the configured model" >&2; EXTRA_MODEL="" ;;
-  esac
-
-  echo
-  echo "GPU instance to create (Enter keeps gpu_machinesets in all.yml):"
-  echo "    1) g4dn.4xlarge   1 x T4         16 GB    4 vCPU"
-  echo "    2) g6e.4xlarge    1 x L40S       48 GB   16 vCPU"
-  echo "    3) g6e.12xlarge   4 x L40S      192 GB   48 vCPU"
-  echo "    4) g7e.2xlarge    1 x RTX6000    96 GB    8 vCPU"
-  echo "    5) g7e.4xlarge    1 x RTX6000    96 GB   16 vCPU"
-  echo "    6) g7e.8xlarge    1 x RTX6000    96 GB   32 vCPU"
-  echo "    7) g7e.12xlarge   2 x RTX6000   192 GB   48 vCPU"
-  echo "    8) g7e.24xlarge   4 x RTX6000   384 GB   96 vCPU"
-  echo "    9) p4d.24xlarge   8 x A100 40G  320 GB   96 vCPU"
-  echo "   10) p4de.24xlarge  8 x A100 80G  640 GB   96 vCPU"
-  echo "  4-6 are one Blackwell card each and differ only in CPU and host"
-  echo "  RAM; 96 GB on a single GPU often replaces four L40S at option 3."
-  echo "  g7e only adds cards at 12xlarge and above."
-  read -r -p "  choice [Enter to keep current]: " GPU_CHOICE
-  case "${GPU_CHOICE:-}" in
-    1) EXTRA_GPU="g4dn.4xlarge" ;;
-    2) EXTRA_GPU="g6e.4xlarge" ;;
-    3) EXTRA_GPU="g6e.12xlarge" ;;
-    4) EXTRA_GPU="g7e.2xlarge" ;;
-    5) EXTRA_GPU="g7e.4xlarge" ;;
-    6) EXTRA_GPU="g7e.8xlarge" ;;
-    7) EXTRA_GPU="g7e.12xlarge" ;;
-    8) EXTRA_GPU="g7e.24xlarge" ;;
-    9) EXTRA_GPU="p4d.24xlarge" ;;
-    10) EXTRA_GPU="p4de.24xlarge" ;;
-    "") EXTRA_GPU="" ;;
-    *) echo "  not one of the choices - keeping the configured instances" >&2; EXTRA_GPU="" ;;
-  esac
-
-  # Written into group_vars/all.yml rather than passed as -e, because -e
-  # lasts exactly one run. A later ./run.sh --tags litellm or --tags summary
-  # skips this prompt and reads all.yml, so an unpersisted choice would leave
-  # those roles wiring everything to a model the cluster does not have - the
-  # same class of mismatch that had OpenRAG pointing at a stale model name.
-  #
-  # all.yml is untracked, so this is editing local configuration, not the
-  # repo. Both edits are line-level on purpose: rewriting the file through a
-  # YAML library would strip its comments, which are the only documentation
-  # of what these settings mean.
-  if [[ -n "$EXTRA_MODEL" ]]; then
-    sed -i.bak -E "s|^model_preset: .*$|model_preset: ${EXTRA_MODEL}|" group_vars/all.yml \
-      && rm -f group_vars/all.yml.bak
-    echo "  model_preset set to $EXTRA_MODEL in group_vars/all.yml"
+# and when RUN_SH_NO_PROMPT is set - which exists because passing an argument
+# was previously the only way to suppress the questions, and an argument also
+# changes what Ansible does.
+#
+# The answers are written into group_vars/all.yml rather than passed as -e,
+# because -e lasts exactly one run. A later ./run.sh --tags litellm skips
+# these prompts and reads all.yml, so an unpersisted choice would leave those
+# roles wiring everything to a model the cluster does not have - the same
+# class of mismatch that had OpenRAG pointing at a stale model name. It also
+# keeps the secrets out of the process table: run.sh:197 builds a shell
+# command string for `script -c`, so an -e'd token would be visible in ps.
+#
+# The questions themselves live in lib/configure.sh, which exists so they can
+# be tested - lib/configure.test.sh covers the cases that are painful to
+# reach by hand, like a token containing the sed delimiter, a key missing
+# from all.yml, and EOF on stdin part way through.
+if [[ $# -eq 0 && -t 0 && -z "${RUN_SH_NO_PROMPT:-}" ]]; then
+  if [[ ! -f lib/configure.sh ]]; then
+    # Deliberately not fatal. Without the questions this script still does
+    # its actual job, which is to run the playbook against whatever all.yml
+    # already says - and refusing to deploy because a prompt is missing
+    # would be a worse failure than the one it is reporting.
+    echo "WARNING: lib/configure.sh is missing, so the setup questions are" >&2
+    echo "         skipped. group_vars/all.yml is used exactly as it is." >&2
+    echo "         Restore it with: git checkout ansible/lib/configure.sh" >&2
+    echo >&2
+  else
+    # shellcheck source=lib/configure.sh
+    source lib/configure.sh
+    configure_interactive
   fi
-  if [[ -n "$EXTRA_GPU" ]]; then
-    # Appends the chosen type when the file does not already list it. Without
-    # that, picking an instance all.yml had never heard of zeroed every entry
-    # and added nothing: the run then built four MachineSets at 0 replicas and
-    # model_serving sat waiting half an hour for a GPU node nobody had asked
-    # AWS for. Hit on sandbox3270, where all.yml came from the sample and the
-    # sample had no g6e.12xlarge while the menu above offered it.
-    awk -v want="$EXTRA_GPU" '
-      /^gpu_machinesets:/ { inblock=1; print; next }
-      inblock && /^[^ -]/ {
-        if (!seen) { print "- instance_type: " want; print "  replicas: 1"; seen=1 }
-        inblock=0
-      }
-      inblock && /^- instance_type:/ { cur=$3; if (cur==want) seen=1; print; next }
-      inblock && /^  replicas:/ { print "  replicas: " (cur==want ? 1 : 0); next }
-      { print }
-      END {
-        if (inblock && !seen) { print "- instance_type: " want; print "  replicas: 1" }
-      }
-    ' group_vars/all.yml > group_vars/all.yml.tmp \
-      && mv group_vars/all.yml.tmp group_vars/all.yml
-    echo "  gpu_machinesets set to $EXTRA_GPU x1 in group_vars/all.yml"
-    # Say it out loud rather than trusting the edit, because the failure this
-    # replaces was silent in exactly this spot.
-    if ! grep -A1 "^- instance_type: ${EXTRA_GPU}\$" group_vars/all.yml | grep -q "replicas: 1"; then
-      echo "  WARNING: ${EXTRA_GPU} is still not at 1 replica in group_vars/all.yml." >&2
-      echo "           Check the gpu_machinesets block by hand before continuing." >&2
-    fi
-  fi
-  echo
 fi
 
 # Install required collections if not present.

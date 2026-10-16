@@ -730,15 +730,62 @@ that needs them is enabled — so a run with `deploy_openrag=false` and
    ./run.sh
    ```
 
-   With no arguments and a terminal attached, this asks which model to serve
-   and which GPU instance to create, defaulting to whatever `all.yml` already
-   says — press Enter twice to keep it. Your answers are written back into
-   `group_vars/all.yml`, not just applied to that one run, so a later
-   `./run.sh --tags litellm` reads the same values rather than wiring
-   everything to a model the cluster does not have.
+   With no arguments and a terminal attached, this prints what is currently
+   configured, flags anything inconsistent about it, and asks one question:
 
-   The prompt is skipped whenever any argument is given, and when stdin is
-   not a terminal, so partial runs and unattended runs are unaffected.
+   ```
+    ------------------------------------------------------------------
+     cluster     default/api-ocp-bbjw2-sandbox235-opentlc-com:6443/admin
+     model       qwen3.8-27b                  gpu       g6e.12xlarge x1
+     openrag     yes                          milvus    yes
+     demos       yes (8 of 8)                 omnigent  not set
+     hf_token    (set, 37 chars, ends veGF)   maas key  (set, 25 chars)
+     aws keys    (not set)                    maas models 6
+    ------------------------------------------------------------------
+     Deploy with these? [Y/n]
+   ```
+
+   Enter deploys — one keystroke, which is the point. `n` walks through the
+   settings instead: cluster context, model, GPU instance, OpenRAG + Milvus,
+   the demos, Omnigent, and the credentials (`hf_token`, the MaaS API key,
+   the dashboard's AWS keys). Enter keeps the current value at every step,
+   so a full reconfiguration is about ten keystrokes.
+
+   Two of those are not simple questions. The cluster context is a menu built
+   from `oc config get-contexts`, because a free-text field is how `all.yml`
+   ends up pinning a sandbox that was deleted last week — if the pinned
+   context is not in your kubeconfig, Enter clears the pin rather than keeping
+   it. And the MaaS endpoint is asked what it serves, so the model list comes
+   from the endpoint rather than from whatever was true when someone last
+   edited the file.
+
+   Your answers are written back into `group_vars/all.yml`, not just applied
+   to that one run, so a later `./run.sh --tags litellm` reads the same values
+   rather than wiring everything to a model the cluster does not have. Secrets
+   are read without echo, never printed back — only their length and last four
+   characters — and never passed to `ansible-playbook` with `-e`, which would
+   put them in the process table. Writing one tightens `all.yml` to mode 600.
+
+   Only values that change an outcome are written. Answering "yes, deploy the
+   demos" does not copy the eight `demos_*` switches into your file: they are
+   already `true` in `roles/demos/defaults/main.yml`, and pinning them locally
+   would freeze them against any later change in the repo. `deploy_omnigent`
+   is the one exception, written on every run because it has no role default
+   at all — absent, `site.yml` reads it as false and the role is skipped with
+   nothing saying so.
+
+   The questions are skipped whenever any argument is given, when stdin is not
+   a terminal, and when `RUN_SH_NO_PROMPT` is set — the last of these because
+   passing an argument used to be the only way to suppress them, and an
+   argument also changes what Ansible does.
+
+   The logic lives in [`lib/configure.sh`](lib/configure.sh) rather than in
+   `run.sh`, so that it can be tested. [`lib/configure.test.sh`](lib/configure.test.sh)
+   needs no cluster and no network:
+
+   ```bash
+   ./lib/configure.test.sh
+   ```
 
    Before anything is created, the run prints the target cluster and whether
    the model fits the instance:
@@ -950,6 +997,8 @@ ansible/
 ├── inventory/hosts.yml
 ├── group_vars/all.yml.sample   # copy to all.yml (untracked)
 ├── group_vars/all.README.md    # what every all.yml variable does, and why
+├── lib/configure.sh            # the interactive questions run.sh asks
+├── lib/configure.test.sh       # and their tests (no cluster needed)
 └── roles/
     ├── operators/              # Namespaces, OperatorGroups, Subscriptions (13 operators)
     ├── service_mesh/           # Istio, IstioCNI, Kiali, OSSMConsole, monitoring
