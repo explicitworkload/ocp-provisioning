@@ -7,6 +7,41 @@ Automated provisioning and day-2 configuration of OpenShift Container Platform (
 
 Both are designed for repeatable demo and sandbox environments.
 
+## Contents
+
+Start with **Option A** if you already have a cluster, **Option B** if you need
+one built first. They overlap: Terraform installs the base operators too, so
+running Ansible afterwards reconfigures rather than duplicates them.
+
+- [Project Structure](#project-structure) — what is in this repo, directory by directory
+- [**Option A: Ansible Playbook**](#option-a-ansible-playbook-day-2-on-an-existing-cluster) — day-2 configuration of a cluster you already have
+  - [Prerequisites](#prerequisites) — what must be true before you start
+  - [Quick Start](#quick-start) — venv, variables, `oc login`, `./run.sh`, and the common `--tags` re-runs
+- [**Option B: Terraform**](#option-b-terraform-full-cluster-from-scratch) — a full cluster from scratch, via `openshift-install`
+  - [Prerequisites](#prerequisites-1) —
+    [AWS](#aws) ·
+    [Red Hat Pull Secret](#red-hat-pull-secret) ·
+    [SSH Key Pair](#ssh-key-pair) ·
+    [Tools](#tools)
+  - [Bastion Host](#bastion-host) —
+    [Deploy Bastion](#deploy-bastion)
+  - [OpenShift Cluster](#openshift-cluster) —
+    [Topology](#cluster-topology) ·
+    [Provisioning Phases](#provisioning-phases) ·
+    [Operators](#operators) ·
+    [Lightspeed (Azure OpenAI)](#openshift-lightspeed-azure-openai) ·
+    [Networking](#networking) ·
+    [Deploy](#deploy-cluster) ·
+    [Outputs](#cluster-outputs) ·
+    [Destroy](#destroy-cluster)
+- [License](#license)
+
+Two companion documents, both under `ansible/`:
+[README.md](ansible/README.md) is the playbook's own reference — every
+component it installs, the tags, and the troubleshooting notes.
+[group_vars/all.README.md](ansible/group_vars/all.README.md) describes every
+variable you can set, and why you would set it differently.
+
 ## Project Structure
 
 ```

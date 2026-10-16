@@ -4,6 +4,54 @@ Ansible playbook for configuring an existing OpenShift 4.22+ cluster with operat
 
 This playbook does **not** create the cluster from scratch. It assumes you already have an OpenShift cluster running on AWS and are authenticated via `oc login`.
 
+## Contents
+
+If you are deploying rather than reading, you need
+[Prerequisites](#prerequisites) and [Quick start](#quick-start); everything
+else is reference.
+
+- [**What gets installed**](#what-gets-installed) — one section per component, grouped here by kind. For the order they actually run in, see [Playbook structure](#playbook-structure)
+  - Platform:
+    [Operators](#operators-13-subscriptions) ·
+    [Service Mesh 3](#service-mesh-3) ·
+    [Network Observability](#network-observability) ·
+    [GPU Worker](#gpu-worker) ·
+    [ODF storage](#odf-openshift-data-foundation) ·
+    [Quay Registry](#quay-registry) ·
+    [Dev Spaces](#dev-spaces) ·
+    [Gatus](#gatus) ·
+    [Bookinfo Demo](#bookinfo-demo)
+  - AI:
+    [OpenShift AI 3.5](#openshift-ai-35) ·
+    [Model Serving](#model-serving) ·
+    [GenAI Studio (OGX)](#genai-studio-playground-ogx) ·
+    [LiteLLM Proxy](#litellm-proxy) ·
+    [OpenRAG](#openrag--on-by-default) ·
+    [Milvus](#milvus--on-by-default) ·
+    [Omnigent](#omnigent--on-by-default)
+    ([Sandboxes](#sandboxes),
+    [upstream changes](#three-upstream-things-this-role-changes)) ·
+    [Demos](#demos--on-by-default)
+  - Operations:
+    [Operations Dashboard](#operations-dashboard) ·
+    [External DNS / Cloudflare](#external-dns-cloudflare--optional-off-by-default) ·
+    [Zero Trust Workload Identity](#zero-trust-workload-identity-manager-spiffespire)
+  - Worth reading before you debug one of these:
+    [Where Milvus keeps its data](#where-milvus-keeps-its-data) ·
+    [Why the OpenRAG chart is pinned](#why-the-openrag-chart-is-pinned) ·
+    [Seeing what OpenRAG chunked](#seeing-what-openrag-chunked)
+- [**Prerequisites**](#prerequisites) — tools, access and cluster state the run assumes
+- [**Quick start**](#quick-start) — from a fresh clone to a running deploy, and what `./run.sh` asks you
+- [**Configuration**](#configuration) — the variables index; full prose in [group_vars/all.README.md](group_vars/all.README.md)
+- [Dashboard password](#dashboard-password) — where it comes from and how to change it
+- [Cloudflare API token](#cloudflare-api-token) — scope it needs, and
+  [TLS and the Cloudflare proxy](#tls-and-the-cloudflare-proxy)
+- [Node resiliency testing](#node-resiliency-testing) — the AWS key the Stop/Start tests need
+- [Quay without ODF](#quay-without-odf) — using external S3 instead of NooBaa
+- [**Tags**](#tags) — re-running one part without the other twenty
+- [Playbook structure](#playbook-structure) — role order, and why it is that order
+- [Idempotency](#idempotency) — what a second run does, and what it deliberately does not
+
 ## What gets installed
 
 ### Operators (13 subscriptions)
