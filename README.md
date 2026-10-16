@@ -23,6 +23,7 @@ ocp-provisioning/
 ├── ansible/                # Day-2 Ansible playbook for existing clusters
 │   ├── site.yml            # Main playbook (24 roles)
 │   ├── group_vars/all.yml.sample  # Configuration template; copy to all.yml (untracked)
+│   ├── group_vars/all.README.md   # What every all.yml variable does, and why
 │   ├── roles/              # operators, odf, service_mesh, gpu_worker, model_serving, litellm, milvus, omnigent, demos, verify, etc.
 │   └── README.md           # Ansible-specific docs
 ├── demos/                  # Seven MLflow / RHOAI demos, a README and walkthrough each

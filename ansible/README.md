@@ -754,13 +754,22 @@ that needs them is enabled — so a run with `deploy_openrag=false` and
 
 ## Configuration
 
-All variables are in `group_vars/all.yml`:
+The variables you set are in `group_vars/all.yml`, and
+[`group_vars/all.README.md`](group_vars/all.README.md) describes every one of
+them — what it does and why it is set the way it is. `all.yml.sample` itself
+carries no prose, so that it stays readable as a config file and so that
+`run.sh` can rewrite the `gpu_machinesets` block safely.
+
+The table below is a quick index, and includes role-level variables that are
+not in `all.yml`. For those, the owning `roles/*/defaults/main.yml` is
+authoritative.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ocp_context` | (empty) | Kube context from `oc config current-context` |
-| `gpu_machinesets` | `[{instance_type: g4dn.4xlarge, replicas: 1}]` | List of GPU MachineSets to create (instance type + replica count) |
-| `gpu_availability_zone` | `us-east-2a` | AZ for GPU MachineSets |
+| `ocp_expected_api` | (empty) | Abort unless the target cluster's API URL contains this substring |
+| `gpu_machinesets` | `g6e.4xlarge` at 1, nine others at 0 | List of GPU MachineSets to create (instance type + replica count) |
+| `gpu_availability_zone` | (empty) | AZ for GPU MachineSets. Empty derives it from the cluster's worker MachineSets |
 | `gpu_volume_size` | `120` | Root volume size (GB) for GPU workers |
 | `model_preset` | `qwen3-4b` | Which model to serve. Sets image, GPU count, context length and limits together — see Model Serving above |
 | `hf_token` | (empty) | Hugging Face token, needed only by `hf://` presets. Supply at run time or in the untracked `all.yml` |
@@ -770,7 +779,9 @@ All variables are in `group_vars/all.yml`:
 | `model_max_num_seqs` | from preset | `--max-num-seqs`. Derived; `0` leaves it to vLLM, and only the hybrid 27B presets set it |
 | `model_tool_call_parser` | from preset | `--tool-call-parser`. `hermes` for the dense Qwen3 models, `qwen3_xml` for the 3.8 pair |
 | `model_reasoning_parser` | from preset | `--reasoning-parser`. `qwen3`; empty omits the flag |
-| `deploy_milvus` | `false` | Deploy Milvus, Attu, and register the vector store with RHOAI. Needs `helm` |
+| `deploy_openrag` | `true` | Deploy OpenRAG (Langflow + OpenSearch + Docling). A prerequisite for the demos |
+| `openrag_auto_configure` | `true` | Point OpenRAG at LiteLLM and skip its first-run wizard |
+| `deploy_milvus` | `true` | Deploy Milvus, Attu, and register the vector store with RHOAI. Needs `helm` |
 | `milvus_operator_version` | `1.3.11` | Pinned milvus-operator chart release |
 | `milvus_attu_image` | `zilliz/attu:v2.6.5` | Attu image, matched to the Milvus 2.6 line |
 | `milvus_embedding_model` | `bge-small-en-v1.5` | Embedding model the vector store is registered against |
@@ -781,7 +792,7 @@ All variables are in `group_vars/all.yml`:
 | `milvus_etcd_storage_class` | (empty) | Empty uses the cluster default (`gp3-csi`, EBS). `ocs-storagecluster-ceph-rbd` puts etcd on ODF |
 | `model_rope_override` | `{}` | Rope scaling passed through as `--hf-overrides`, to go past the native context. Off by default |
 | `model_max_output_tokens` | `4096` | Max output tokens per generation request |
-| `deploy_quay_registry` | `false` | Deploy QuayRegistry CR (ODF-backed or S3) |
+| `deploy_quay_registry` | `true` | Deploy QuayRegistry CR (ODF-backed or S3) |
 | `console_plugins` | `[pipelines-console-plugin, gitops-plugin, kuadrant-console-plugin, odf-console, odf-client-console]` | Console plugins to enable |
 | `litellm_master_key` | (random) | LiteLLM API master key (auto-generated, persisted in cluster secret) |
 | `litellm_ui_password` | (random) | LiteLLM UI password (auto-generated, persisted in cluster secret) |
@@ -796,6 +807,16 @@ All variables are in `group_vars/all.yml`:
 | `devspaces_custom_host` | `devspaces28.kubernetes.day` | Extra Dev Spaces Route, created only when ExternalDNS is on |
 | `dashboard_aws_access_key_id` | (empty) | AWS key for node Stop/Start (pass at runtime) |
 | `dashboard_aws_secret_access_key` | (empty) | AWS secret for node Stop/Start (pass at runtime) |
+| `mcp_write_rules` | pods, apps, batch, routes | Write permissions granted to callers of the MCP server. Secrets, RBAC, service accounts and `pods/exec` are deliberately excluded |
+| `litellm_extra_models` | `[]` | External OpenAI-compatible endpoints to register in LiteLLM and publish to RHOAI. Never commit a key |
+| `deploy_omnigent` | `true` | Deploy Omnigent, the agent-CLI meta-harness. Needs the `litellm` role |
+| `omnigent_sandboxes` | `true` | Run agent sessions as short-lived Pods in their own namespace rather than inside the server |
+| `omnigent_version` | `v0.1.1` | Pinned deliberately — v0.1.x software that runs LLM-authored code |
+| `deploy_ztwim` | `false` | Zero Trust Workload Identity Manager (SPIFFE/SPIRE). Trust domain is immutable once created |
+| `deploy_demos` | `true` | Deploy the demos under `demos/`. Needs MLflow, OpenSearch and LiteLLM |
+| `demos_run_jobs` | `true` | Run the demo jobs, not merely create them. ~10 minutes of build time |
+| `demos_workbenches` | `true` | Deploy the GPU workbench, which holds its card for as long as it runs |
+| `demos_*` | `true` | Individually switchable demos — see [`group_vars/all.README.md`](group_vars/all.README.md) |
 
 ## Dashboard password
 
@@ -928,6 +949,7 @@ ansible/
 ├── site.yml
 ├── inventory/hosts.yml
 ├── group_vars/all.yml.sample   # copy to all.yml (untracked)
+├── group_vars/all.README.md    # what every all.yml variable does, and why
 └── roles/
     ├── operators/              # Namespaces, OperatorGroups, Subscriptions (13 operators)
     ├── service_mesh/           # Istio, IstioCNI, Kiali, OSSMConsole, monitoring

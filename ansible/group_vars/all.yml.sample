@@ -3,48 +3,23 @@
 #
 #     cp group_vars/all.yml.sample group_vars/all.yml
 #
-# all.yml is in .gitignore so a pull secret, API key or endpoint credential
-# can live in it without a stray `git add -A` publishing it to a public repo.
-# This file is the tracked copy and must stay free of real values.
+# What each variable does, and why it is set this way: ./all.README.md
+# Deeper detail on any default: the owning roles/*/defaults/main.yml
 #
-# It is also the only documentation of what these settings do, so when you
-# add or change a variable in all.yml, make the same edit here - with the
-# value left empty or an example. Nothing enforces that; a drifting sample
-# is how the next person ends up with a cluster configured by role defaults.
-# OpenShift cluster context.
-# Empty = whatever `oc config current-context` points at, so a rebuilt sandbox
-# needs no commit here. Pinning a name is still supported and is worth doing
-# when more than one cluster is in reach of the same kubeconfig.
+#   !! THIS FILE IS COMMITTED TO A PUBLIC REPO. NEVER PUT A REAL TOKEN, KEY
+#      OR PASSWORD IN IT. The empty strings below are empty on purpose. !!
+#
+# Keep this file free of prose: the gpu_machinesets block is rewritten by
+# run.sh with an awk that treats a '#' at column 0 as the end of the list.
+# When you add a variable here, document it in all.README.md.
+
+# --- Cluster context -------------------------------------------------------
 ocp_context: ""
-
-# Seatbelt for the empty default above. When set, the target cluster's
-# apiServerURL must contain this substring or the run aborts before it changes
-# anything. Unset means no check - just the banner the preflight prints.
-# Worth setting for a destructive re-run: this playbook creates MachineSets,
-# installs cluster-wide operators and rotates database passwords, so a run
-# against the wrong context costs more than a run that simply fails.
-#   ./run.sh -e ocp_expected_api=sandbox1234
 ocp_expected_api: ""
-
-# What shell tasks must interpolate instead of "--context {{ ocp_context }}".
-#
-# `| quote` on an empty string renders the two characters '' - and bash does
-# not strip quotes from the result of a parameter expansion, so
-#     OC="oc --context '' -n openshift-storage"; $OC get ...
-# word-splits into five argv entries and oc is handed a context literally
-# named '', failing every call with: error: context "''" does not exist.
-# Tasks that redirect stderr to /dev/null then read that as "nothing found"
-# rather than as an error, which is how it stays invisible.
-#
-# So the flag has to disappear entirely when nothing is pinned, not become an
-# empty argument. Module tasks use "{{ ocp_context or omit }}" for the same
-# reason; this is the shell equivalent.
 ocp_context_arg: >-
   {{ ('--context ' ~ (ocp_context | quote)) if ocp_context | length > 0 else '' }}
 
-# GPU Worker configuration
-# Empty = derived from the cluster's worker MachineSets, so pointing the
-# playbook at a cluster in another region just works. Set to pin a zone.
+# --- GPU workers -----------------------------------------------------------
 gpu_availability_zone: ""
 gpu_volume_size: 120
 gpu_machinesets:
@@ -52,22 +27,14 @@ gpu_machinesets:
   replicas: 0
 - instance_type: g6e.4xlarge
   replicas: 1
-# Needed by the bf16 qwen3.8-27b preset, which wants four GPUs on one node.
-# Every type run.sh offers has to appear here, even at zero replicas.
 - instance_type: g6e.12xlarge
   replicas: 0
-# One RTX PRO 6000 Blackwell each, 96 GB - twice an L40S on a single card,
-# so a model that needed four GPUs on a g6e.12xlarge may fit on one of
-# these. They differ only in vCPU and host RAM (8/64, 16/128, 32/256).
 - instance_type: g7e.2xlarge
   replicas: 0
 - instance_type: g7e.4xlarge
   replicas: 0
 - instance_type: g7e.8xlarge
   replicas: 0
-# Where g7e actually adds cards: 2 at 12xlarge, 4 at 24xlarge. A 2-GPU
-# g7e.12xlarge holds 192 GB, the same as four L40S on a g6e.12xlarge, in
-# half the cards.
 - instance_type: g7e.12xlarge
   replicas: 0
 - instance_type: g7e.24xlarge
@@ -77,42 +44,12 @@ gpu_machinesets:
 - instance_type: p4de.24xlarge
   replicas: 0
 
-# --- Model serving -------------------------------------------------------
-# One name sets the image, GPU count, context length and resource limits
-# together. Full definitions, including why each context length is what it
-# is, are in roles/model_serving/defaults/main.yml.
-#
-#   qwen3-4b          bf16, modelcar,  1 GPU,   8 GB weights,  32k context
-#   qwen3-8b          bf16, modelcar,  1 GPU,  16 GB weights,  40k context
-#   qwen3-14b         bf16, modelcar,  1 GPU,  29 GB weights,  40k context
-#   qwen3.8-27b       bf16, modelcar,  4 GPUs, 56 GB weights, 256k context
-#   qwen3.8-27b-fp8   FP8,  HuggingFace, 1 GPU, 31 GB weights, 64k context
-#
-# 40k is the whole native length of the dense Qwen3 models. Only qwen3-4b is
-# held below its own - its default g4dn.4xlarge has a 16 GB T4, and weights
-# plus 32k of cache is all of it. Set model_max_model_len to 40960 by hand if
-# it is going on a 48 GB card.
-#
-# The GPU instance is chosen separately, in gpu_machinesets above - you pick
-# the hardware. The run prints a fit check before it changes anything, so a
-# model that cannot fit the instance you chose is called out rather than
-# discovered at model load.
-#
-# qwen3.8-27b needs four GPUs on one node: g6e.12xlarge is the smallest that
-# has them, and with that much VRAM it serves the model's full native 256k.
-# qwen3.8-27b-fp8 fits one L40S but downloads ~31 GB from Hugging Face at pod
-# start instead of pulling a cached image, and one card caps it at 64k.
+# --- Model serving ---------------------------------------------------------
+# qwen3-4b | qwen3-8b | qwen3-14b | qwen3.8-27b | qwen3.8-27b-fp8
 model_preset: qwen3-4b
-
-# Hugging Face token. Only the hf:// presets need it - today just
-# qwen3.8-27b-fp8 - and a run that selects one without it fails before
-# anything is created rather than after a 28 GB download returns 401.
-#
-# Safe to put a real token here: this file is untracked. all.yml.sample is
-# what the repo carries, and it keeps this empty.
 hf_token: ""
 
-# Console plugins to enable
+# --- Console ---------------------------------------------------------------
 console_plugins:
 - pipelines-console-plugin
 - gitops-plugin
@@ -120,52 +57,19 @@ console_plugins:
 - odf-console
 - odf-client-console
 
-# Quay configuration
-# With ODF installed, Quay can use managed object storage (NooBaa).
-# Set to true to deploy the QuayRegistry CR.
+# --- Quay ------------------------------------------------------------------
 deploy_quay_registry: true
-# S3 config only needed when ODF is not available:
-# quay_s3_bucket: ""
-# quay_s3_region: ""
-# quay_s3_access_key: ""
-# quay_s3_secret_key: ""
+# Only when ODF is not available:
+#quay_s3_bucket: ""
+#quay_s3_region: ""
+#quay_s3_access_key: ""
+#quay_s3_secret_key: ""
 
-# Dedicated AWS key for the dashboard's node Stop/Start resiliency tests.
-# Needs only: ec2:DescribeInstances, ec2:StopInstances, ec2:StartInstances.
-#
-#   !! THIS FILE IS COMMITTED TO A PUBLIC REPO — DO NOT PASTE LIVE KEYS HERE !!
-#
-# Leave empty and supply them one of these ways instead:
-#   1. Already in the cluster — if the ops-dashboard-aws Secret exists in the
-#      dashboard namespace it is used as-is and these can stay empty.
-#   2. At runtime, kept out of shell history:
-#        read -rs AWS_KEY; read -rs AWS_SECRET
-#        ansible-playbook site.yml --tags dashboard \
-#          -e dashboard_aws_access_key_id="$AWS_KEY" \
-#          -e dashboard_aws_secret_access_key="$AWS_SECRET"
-#   3. From a vault file (ansible/**/vault.yml is gitignored):
-#        ansible-playbook site.yml -e @vault.yml --tags dashboard
-#
-# When set, these overwrite the cluster Secret. Note the cluster's own
-# machine-api credential is NOT reused: scaling uses ec2:RunInstances /
-# TerminateInstances, which does not imply Stop/Start.
-# Destroy & Rebuild needs none of this — it is pure Machine API.
+# --- Operations dashboard --------------------------------------------------
 dashboard_aws_access_key_id: ""
 dashboard_aws_secret_access_key: ""
 
-# Write permissions handed to callers of the OpenShift MCP server — both the
-# Operations Dashboard AI assistant and the server's own mcp-viewer identity.
-# Paired with cluster-reader, which supplies read on everything else.
-#
-# Deliberately omitted, because an LLM drives these tools:
-#   secrets            - would expose the pull secret, LiteLLM key, Cloudflare
-#                        token and the dashboard password
-#   rolebindings/roles - self-escalation back to cluster-admin
-#   serviceaccounts    - token minting is escalation by another route
-#   pods/exec, attach  - a shell in any container sidesteps every limit above
-#
-# The MCP server itself still runs read_only = false; this ClusterRole, not
-# that flag, is what actually bounds the blast radius.
+# --- MCP server ------------------------------------------------------------
 mcp_write_rules:
 - apiGroups: [ "" ]
   resources: [ pods, pods/log, services, configmaps, persistentvolumeclaims ]
@@ -186,205 +90,56 @@ mcp_write_rules:
   resources: [ routes ]
   verbs: [ get, list, watch, create, update, patch, delete ]
 
-# OpenRAG — document RAG platform (Langflow + OpenSearch + Docling).
-# OFF by default: it adds a 3-node OpenSearch cluster (~9Gi RAM, 3x20Gi PVCs)
-# plus docling-serve and a CPU embedding model, which is a lot to carry on a
-# cluster that is not using it.
-# Configure OpenRAG without anyone clicking through its setup wizard: point
-# it at the cluster's own models through LiteLLM using OpenRAG's Red Hat
-# OpenShift AI provider, and advance the wizard's step counter past the end.
-#
-# false leaves a freshly deployed OpenRAG on its first-run wizard, for setting
-# up by hand. Note that doing it by hand is not equivalent: the wizard offers
-# only the providers OpenRAG advertises, and whoever clicks through picks a
-# model from whatever LiteLLM happens to serve - on this cluster that included
-# the Azure model, which does not exist where Lightspeed is absent.
+# --- OpenRAG ---------------------------------------------------------------
+deploy_openrag: true
 openrag_auto_configure: true
 
-deploy_openrag: true
-
 # --- Milvus ----------------------------------------------------------------
-# A vector database, with Attu as its UI, published to RHOAI's Vector stores
-# tab. It is a third vector store next to the OpenSearch that openrag deploys
-# and the pgvector the Gen AI playground ships with - on by default because
-# demo 1 exists to compare the three, and demo 7 (AutoRAG) uses Milvus as its
-# vector_io provider. Turn it off and those two have nothing to measure.
-#
-# Milvus is in no operator catalog, so this comes from the upstream zilliztech
-# Helm chart - needs the helm CLI, like openrag - and carries no Red Hat
-# support path. Object storage is the cluster's own NooBaa rather than a
-# bundled MinIO, so ODF has to be up.
-#
-# The Milvus image declares no USER and will not run as anything but root, so
-# the role grants anyuid to a dedicated service account in the milvus
-# namespace. Everything else there stays non-root.
 deploy_milvus: true
 
-# --- Omnigent ---------------------------------------------------------------
-# An open-source meta-harness that orchestrates agent CLIs - Claude Code,
-# Codex, Cursor, Pi - behind one server with policies, sandboxing and live
-# session sharing. https://omnigent.ai, Apache-2.0.
-#
-# Logs in with your OpenShift identity through an oauth-proxy, and gets its
-# models from the cluster's own LiteLLM, so it needs no provider key of its
-# own. Needs the litellm role to have run.
+# --- Omnigent --------------------------------------------------------------
 deploy_omnigent: true
-
-# Agent sessions run as their own short-lived Pods in an omnigent-sandboxes
-# namespace rather than inside the server. The server gets create/delete on
-# Pods and Secrets THERE and nowhere else, deliberately without pods/exec -
-# but the code those Pods run is written by a model, so this is a real
-# decision rather than a default to skim past. false keeps agents in the
-# server pod and grants nothing.
 omnigent_sandboxes: true
-
-# Pinned, and not to latest: this is v0.1.x software that runs LLM-authored
-# code with real credentials.
 omnigent_version: v0.1.1
 
-# -------------------------------------------------------------------
-#
-#
-# OPTIONAL - Anything below is not necessary.
-#
-#
-#
-#
+# ===========================================================================
+# OPTIONAL - nothing below here is necessary.
+# ===========================================================================
 
-# Zero Trust Workload Identity Manager (SPIFFE/SPIRE).
-# Deploys a SPIRE server StatefulSet plus an agent and CSI-driver DaemonSet on
-# every node, so workloads can obtain cryptographic identities (SVIDs) instead
-# of long-lived secrets.
-#
-# The trust domain defaults to the cluster's apps domain and is IMMUTABLE once
-# the CR is created - see roles/ztwim/defaults/main.yml to override before the
-# first run.
+# --- Zero Trust Workload Identity Manager ----------------------------------
 deploy_ztwim: false
 
-# External DNS / Cloudflare — OFF by default. Runs last in the playbook.
-# Enable only when you want real records written to the Cloudflare zone:
-#   ansible-playbook site.yml -e deploy_external_dns=true
+# --- External DNS / Cloudflare ---------------------------------------------
 deploy_external_dns: false
 external_dns_domain: kubernetes.day
-
-# Cloudflare API token (Zone:Read + DNS:Edit on the zone above).
-#
-#   !! THIS FILE IS COMMITTED TO A PUBLIC REPO — DO NOT PASTE A LIVE TOKEN HERE !!
-#
-# If this IS set, it takes precedence and overwrites the cluster Secret.
 cloudflare_api_token: ""
-
-# Publish records through the Cloudflare proxy (orange cloud) so Cloudflare
-# terminates TLS with its own kubernetes.day certificate — this is what avoids
-# the browser cert warning, since the cluster wildcard only covers *.apps.
-# Requires the zone's SSL/TLS mode to be "Full" (see ansible/README.md).
 external_dns_cloudflare_proxied: true
-
-# Extra Routes on the ExternalDNS-managed domain are named automatically as
-#   dashboard<NN>.<domain>  /  devspaces<NN>.<domain>
-# where NN is two digits derived from the cluster's infrastructure name — the
-# same cluster always gets the same hostnames, different clusters do not
-# collide. They are only created when deploy_external_dns is true.
-# Override dashboard_custom_host / devspaces_custom_host to pin a name, or set
-# either to "" to skip that Route.
-#
-#
-# -------------------------------------------------------------------
+#dashboard_custom_host: ""
+#devspaces_custom_host: ""
 
 # --- Extra model endpoints -------------------------------------------------
-# External OpenAI-compatible model APIs to offer alongside the cluster's own
-# models - Red Hat's MaaS, another cluster's LiteLLM, anything that speaks
-# /v1/chat/completions.
-#
-# Declared once, here. Each endpoint is registered as a model in LiteLLM,
-# which is what puts it in OpenRAG, Dev Spaces/Continue and the Ops
-# Dashboard - all three ask LiteLLM what it serves - and is published to
-# RHOAI's Gen AI playground as an AI asset endpoint pointing back at
-# LiteLLM. One base_url, one key, one list of models, one proxy in front of
-# them all.
-#
-# Do NOT list a model that already has an InferenceService on this cluster.
-# RHOAI lists those from the InferenceService itself, with a description and
-# a real status; naming it here as well puts a second, statusless row beside
-# it in the AI asset endpoints table.
-#
-# NEVER put a real api_key here. This repo is public, and a committed key is
-# a key to rotate. Leave it empty and supply it at run time:
-#
-#     ./run.sh --tags litellm -e @$HOME/.openshift-ai-endpoints.yml
-#
-# where that file, kept outside the repo, holds the same structure with the
-# keys filled in. An endpoint with no key is skipped with a warning rather
-# than published half-configured, because one that 401s on first use is
-# worse than one that is absent.
-#
-# Per endpoint:
-#   name       short id; becomes the provider id and the Secret/ConfigMap
-#              suffix, so keep it to lowercase and dashes
-#   base_url   the OpenAI-compatible root, the part ending in /v1 - the same
-#              URL the provider's own curl example posts /chat/completions to
-#   models     the ids as that endpoint serves them
-#   mode       chat (default) or embedding
-#   provider   openai (default), right for anything OpenAI-compatible
-#   credential_name
-#              the shared LiteLLM credential the models are bound to, shown
-#              on the LLM Credentials page and reused by every model on the
-#              endpoint, so a rotated key is one edit. Defaults to name.
-#   namespace  where the AI asset is published; defaults to model_namespace
-#   publish_as_ai_asset
-#              whether it appears in the Gen AI playground. Defaults to true
-#              for chat, false for embedding - the playground is a chat UI
-#              and has no use for an embeddings model. Set it explicitly to
-#              serve a model through LiteLLM without listing it in RHOAI.
-#
-# Uncomment and fill in to add endpoints. The default is an empty list in
-# roles/litellm/defaults, so there is nothing here to delete first.
+# Never commit an api_key. Supply at run time instead:
+#   ./run.sh --tags litellm -e @$HOME/.openshift-ai-endpoints.yml
 #litellm_extra_models:
-#     - name: maas-rhdp
-#       credential_name: rhdp-maas
-#       base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
-#       api_key: ""
-#       models:
-#         - gpt-oss-120b
-#         - qwen36-35b-a3b
-#         - qwen38-27b
-#         - granite-3-2-8b-instruct
-#         - Docling
-#         - qwen38-27b
+#- name: maas-rhdp
+#  credential_name: rhdp-maas
+#  base_url: https://maas-rhdp.apps.maas.redhatworkshops.io/v1
+#  api_key: ""
+#  models:
+#  - gpt-oss-120b
+#  - qwen36-35b-a3b
+#  - qwen38-27b
+#  - granite-3-2-8b-instruct
+#  - Docling
 
 # --- Demos -----------------------------------------------------------------
-# The demos under demos/ in this repo: retrieval A/B, answer judging, prompt
-# versions, tabular MLOps, model serving, workbenches and AutoRAG. All are
-# deployed into one Data Science Project (rag-eval by default) and all log to
-# MLflow.
-#
-# The role refuses to run if MLflow, OpenSearch or LiteLLM is missing, naming
-# which, rather than failing later inside a Job where nobody is tailing the
-# logs. So deploy_openrag=true is effectively a prerequisite.
 deploy_demos: true
-
-# Individually switchable. Turn one off and the rest still deploy.
-demos_rag_eval: true          # retrieval A/B across OpenSearch and Milvus
-demos_rag_judge: true         # tracing plus LLM judges on answer quality
-demos_prompt_versions: true   # three prompt versions, compared head to head
-demos_tabular: true           # sklearn grid, autologged, winner registered
-demos_model_serving: true     # that registered model served on KServe
-demos_autorag: true           # Pipeline Server and AutoRAG prerequisites
-
-# The GPU workbench holds its card for as long as it runs, idle or not. On a
-# cluster with one spare accelerator that blocks training jobs, so set this
-# false if the GPU is needed elsewhere.
+demos_rag_eval: true
+demos_rag_judge: true
+demos_prompt_versions: true
+demos_tabular: true
+demos_model_serving: true
+demos_autorag: true
 demos_workbenches: true
-
-# Run the jobs, not merely create them. A demo that has never run shows empty
-# panels, which is worse than no demo - the MLflow experiments, traces,
-# judges and registered model only exist once something has executed.
-#
-# Costs roughly ten minutes of build time and some MaaS tokens. Set false to
-# deploy the manifests and run them by hand later.
 demos_run_jobs: true
-
-# Generation defaults to a MaaS model rather than the cluster's own GPU
-# model, so the demos survive the GPU node going away. Set to the value of
-# model_name to exercise the local model instead.
 #demos_gen_model: granite-3-2-8b-instruct
