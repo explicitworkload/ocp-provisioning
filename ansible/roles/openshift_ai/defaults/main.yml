@@ -44,7 +44,26 @@ mcp_server_namespace: mcp-servers
 #
 # So: release-03 until either a release branch ships netobserv or the config
 # here is migrated to main's schema.
-mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03:latest"
+# Pinned to a digest because :latest DOES NOT EXIST in this repository and
+# the pod sat in ImagePullBackOff for 25 hours on sandbox2250:
+#
+#   Back-off pulling image "...openshift-mcp-server-release-03:latest"
+#
+# This is a Konflux build repo (redhat-user-workloads), not a release
+# registry. It publishes commit-SHA tags and cosign artifacts; nothing
+# ever creates or moves a "latest". Confirmed against the Quay API - no
+# tag of that name is present, and a manifest request for it answers 404.
+#
+# sha256:c9678bb... is commit 4bb2e767bd677db36c91f6dd3ae9ad47a4316242,
+# built 2026-09-26, the newest real image in the repo at time of writing
+# and a four-platform index (amd64, arm64, ppc64le, s390x).
+#
+# To move it, list the tags and take the newest that is neither a
+# cosign artifact (sha256-... prefix) nor a per-arch build (-linux-...):
+#   curl -s 'https://quay.io/api/v1/repository/redhat-user-workloads/\
+#     ocp-mcp-server-tenant/openshift-mcp-server-release-03/tag/\
+#     ?limit=100&onlyActiveTags=true'
+mcp_server_image: "quay.io/redhat-user-workloads/ocp-mcp-server-tenant/openshift-mcp-server-release-03@sha256:c9678bb5e1fb594020861d83ed12daa87f20df8bcfa0fb1d8c1d48b7ae80f7f1"
 
 # --- RHOAI 3.5 feature CRs -------------------------------------------------
 # Enabling a component in the DSC registers its CRD and lights up the
