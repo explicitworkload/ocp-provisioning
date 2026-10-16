@@ -176,14 +176,45 @@ set_block() {
 # way - and line-level editing of YAML can always be defeated by a file
 # shaped unexpectedly. Reverting beats corrupting the one file in this repo
 # that is not in git and cannot be recovered from it.
+_yaml_ok() { python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' "$1" >/dev/null 2>&1; }
+_NO_PYYAML_WARNED=0
+_WAS_INVALID_WARNED=0
+
 guard_yaml() {
   local label="$1"; shift
   [ "${1:-}" = "--" ] && shift
-  local snap rc=0
+  local snap rc=0 check=1
+
+  # Two reasons this write must not be judged, both of which previously
+  # reverted every answer and blamed the write for it.
+  #
+  # No PyYAML: the validator cannot run. Reverting everything because the
+  # checker is missing turns a missing library into "none of your answers
+  # were saved", which is a far worse failure than the one it guards.
+  if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+    check=0
+    if [ "$_NO_PYYAML_WARNED" = 0 ]; then
+      echo "  note: python3 has no PyYAML here, so writes are not" >&2
+      echo "        re-checked for validity. They still happen." >&2
+      _NO_PYYAML_WARNED=1
+    fi
+  # Already unparseable before we touched it: whatever is wrong with
+  # group_vars/all.yml, this write did not cause it, and refusing every
+  # write leaves the user unable to fix it from here either.
+  elif ! _yaml_ok "$AY"; then
+    check=0
+    if [ "$_WAS_INVALID_WARNED" = 0 ]; then
+      echo "  note: group_vars/all.yml does not parse as YAML already, so" >&2
+      echo "        writes cannot be verified. Fix it by hand if a later" >&2
+      echo "        task complains." >&2
+      _WAS_INVALID_WARNED=1
+    fi
+  fi
+
   snap="$(_mktemp)" || return 1
   cp "$AY" "$snap"
   if ! "$@"; then rc=1
-  elif ! python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' "$AY" >/dev/null 2>&1; then
+  elif [ "$check" = 1 ] && ! _yaml_ok "$AY"; then
     rc=2
   fi
   case "$rc" in
@@ -302,17 +333,51 @@ print("\n".join(sorted(ok)))
 ' 2>/dev/null || { echo "the endpoint returned no usable model list" >&2; return 1; }
 }
 
-# render_maas_block <api_key> <model...> - the YAML body for one endpoint.
-# Sorted, so re-running with the same answers rewrites the same bytes.
+# render_maas_block <api_key> <model...> - the YAML body for the WHOLE
+# litellm_extra_models list, with the maas entry replaced or appended and
+# every other endpoint carried through untouched.
+#
+# It has to emit the whole list because set_block replaces the whole block,
+# and rendering only the maas entry silently deleted any sibling - a
+# corporate Azure gateway, a second MaaS, a local vLLM. That produced valid
+# YAML, so the guard passed, and the only thing printed was "registered N
+# models"; all.yml is untracked, so the deleted entry was not in git either.
+#
+# Sorted model ids, so re-running with the same answers rewrites the same
+# bytes. Built with yaml.safe_dump rather than printf, because the siblings
+# are arbitrary user data and hand-rolling their quoting is how this breaks.
 render_maas_block() {
   local key="$1"; shift
-  printf -- '- name: %s\n' "$MAAS_NAME"
-  printf -- '  credential_name: %s\n' "$MAAS_CREDENTIAL"
-  printf -- '  base_url: %s\n' "$MAAS_BASE_URL"
-  printf -- '  api_key: %s\n' "$(yaml_quote "$key")"
-  printf -- '  models:\n'
-  local m
-  for m in "$@"; do printf -- '  - %s\n' "$m"; done
+  _K="$key" _N="$MAAS_NAME" _C="$MAAS_CREDENTIAL" _U="$MAAS_BASE_URL" \
+  _M="$*" python3 - "$AY" <<'PY'
+import os, sys, yaml
+try:
+    doc = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception:
+    doc = {}
+existing = doc.get("litellm_extra_models")
+if not isinstance(existing, list):
+    existing = []
+name = os.environ["_N"]
+entry = {
+    "name": name,
+    "credential_name": os.environ["_C"],
+    "base_url": os.environ["_U"],
+    "api_key": os.environ["_K"],
+    "models": sorted(os.environ["_M"].split()),
+}
+out, replaced = [], False
+for e in existing:
+    if isinstance(e, dict) and e.get("name") == name:
+        # Keep any key the questions do not ask about - mode, provider,
+        # namespace, publish_as_ai_asset - rather than dropping it.
+        merged = dict(e); merged.update(entry); out.append(merged); replaced = True
+    else:
+        out.append(e)
+if not replaced:
+    out.append(entry)
+sys.stdout.write(yaml.safe_dump(out, default_flow_style=False, sort_keys=False))
+PY
 }
 
 # maas_current_models - the ids already configured for the maas endpoint.
@@ -417,9 +482,16 @@ kube_contexts() { oc config get-contexts -o name 2>/dev/null || true; }
 # Printed before the single accept-or-change question, because the fast path
 # is only safe if what you are accepting is on the screen.
 summarise() {
-  local ctx model gpu hf maaskey nmodels aws_id ndemos warn ctxlist fit
+  local ctx model gpu hf hf_src hf_show maaskey nmodels aws_id ndemos warn ctxlist fit mode_path
   ctx=$(get_var ocp_context); model=$(get_var model_preset); gpu=$(gpu_selected)
-  hf=$(get_var hf_token); maaskey=$(maas_current_key)
+  # Read the same two sources the role does. model_hf_token in
+  # roles/model_serving/defaults is `hf_token if set else env HF_TOKEN`, so
+  # reporting all.yml alone told someone with HF_TOKEN exported - the setup
+  # the defaults explicitly document - that their run would stop, and
+  # invited them to paste a live token into a file they did not need to.
+  hf=$(get_var hf_token); hf_src="all.yml"
+  if [ -z "$hf" ] && [ -n "${HF_TOKEN:-}" ]; then hf="$HF_TOKEN"; hf_src="\$HF_TOKEN"; fi
+  maaskey=$(maas_current_key)
   nmodels=$(maas_current_models | grep -c . || true)
   aws_id=$(get_var dashboard_aws_access_key_id)
   ndemos=0
@@ -445,7 +517,15 @@ summarise() {
   printf '   demos       %-28s omnigent  %s\n' \
     "$(truthy deploy_demos true && echo "yes ($ndemos of 8)" || echo no)" \
     "$(has_var deploy_omnigent && { truthy deploy_omnigent false && echo yes || echo no; } || echo 'not set')"
-  printf '   hf_token    %-28s maas key  %s\n' "$(mask "$hf")" "$(mask "$maaskey")"
+  if [ "$hf_src" = "all.yml" ]; then hf_show="$(mask "$hf")"
+  else hf_show="$(mask "$hf") from \$HF_TOKEN"; fi
+  printf '   hf_token    %-28s maas key  %s\n' "$hf_show" "$(mask "$maaskey")"
+  # Say what litellm will actually register. An entry with an empty api_key
+  # is dropped by roles/litellm, so printing a bare count beside an unset
+  # key claimed N remote models the cluster will not serve.
+  if [ "$nmodels" -gt 0 ] && [ -z "$maaskey" ]; then
+    nmodels="$nmodels (dropped, no api_key)"
+  fi
   printf '   aws keys    %-28s maas models %s\n' "$(mask "$aws_id")" "$nmodels"
   echo "  ------------------------------------------------------------------"
 
@@ -486,10 +566,11 @@ summarise() {
     echo "      and getting a 401."
     warn=1
   fi
-  case "$(_mode "$AY")" in
+  mode_path="${_REAL_AY:-$AY}"
+  case "$(_mode "$mode_path")" in
     600|400) ;;
     *) if [ -n "$hf$maaskey$aws_id" ]; then
-         echo "   -  group_vars/all.yml is mode $(_mode "$AY") and holds a"
+         echo "   -  group_vars/all.yml is mode $(_mode "$mode_path") and holds a"
          echo "      credential in cleartext. chmod 600 it, or answer the"
          echo "      questions and it is tightened when a secret is written."
        fi ;;
@@ -522,10 +603,20 @@ ask_context() {
   fi
   echo >&2
   if [ "$n" -eq 0 ]; then
-    echo "  No contexts in your kubeconfig - run 'oc login' first." >&2
-    echo "  Leaving ocp_context empty, so the run follows whatever" >&2
-    echo "  'oc config current-context' says at the time." >&2
-    printf ''
+    # Keep whatever is pinned. Returning '' here erased an existing pin with
+    # no prompt, two lines after the banner promised "Enter keeps the
+    # current value at every step".
+    if command -v oc >/dev/null 2>&1; then
+      echo "  No contexts in your kubeconfig - run 'oc login' first." >&2
+    else
+      echo "  oc is not on PATH, so the context list cannot be read." >&2
+    fi
+    if [ -n "$cur" ]; then
+      echo "  Keeping the pinned ocp_context: $cur" >&2
+    else
+      echo "  ocp_context stays empty, so the run follows current-context." >&2
+    fi
+    printf '%s' "$cur"
     return 0
   fi
   echo "  Cluster to deploy to:" >&2
@@ -597,9 +688,14 @@ ask_maas() {
   fi
 
   echo "    asking the endpoint what it serves..." >&2
-  if ! models=$(maas_models "$MAAS_BASE_URL" "$key" 2>/tmp/.maaserr); then
-    echo "    $(cat /tmp/.maaserr 2>/dev/null)" >&2
-    rm -f /tmp/.maaserr
+  # mktemp, not a fixed /tmp/.maaserr: that path is in a world-writable
+  # directory, so any other user on the host can pre-plant it as a symlink
+  # to something of ours and have `2>` follow it. group_vars/all.yml is an
+  # obvious target.
+  local errf; errf="$(mktemp -t maaserr)" || errf=""
+  if ! models=$(maas_models "$MAAS_BASE_URL" "$key" 2>"${errf:-/dev/null}"); then
+    [ -n "$errf" ] && echo "    $(cat "$errf" 2>/dev/null)" >&2
+    [ -n "$errf" ] && rm -f "$errf"
     # A failed lookup must not lose a working configuration.
     picked=$(maas_current_models | tr '\n' ' ')
     if [ -n "$picked" ]; then
@@ -608,7 +704,7 @@ ask_maas() {
     fi
     return 1
   fi
-  rm -f /tmp/.maaserr
+  [ -n "$errf" ] && rm -f "$errf"
   n=$(printf '%s\n' "$models" | grep -c . || true)
   echo "    $n models available:" >&2
   i=0
@@ -715,7 +811,16 @@ set_gpu() {
       if (!seen) { print "- instance_type: " want; print "  replicas: 1"; seen=1 }
       inblock=0
     }
-    inblock && /^- instance_type:/ { cur=$3; if (cur==want) seen=1; print; next }
+    # Normalise before comparing. `- instance_type: "g6e.4xlarge"` gives
+    # cur with the quotes attached and a CRLF file gives a trailing \r;
+    # either way the compare failed, the existing entry was zeroed and a
+    # SECOND entry for the same type was inserted at 1 replica. That is the
+    # sandbox3270 duplicate this function exists to prevent, and grep -A1
+    # cannot see it.
+    inblock && /^- instance_type:/ {
+      cur=$3; sub(/\r$/, "", cur); gsub(/^["'"'"']|["'"'"']$/, "", cur)
+      if (cur==want) seen=1; print; next
+    }
     inblock && /^  replicas:/ { print "  replicas: " (cur==want ? 1 : 0); next }
     { print }
     END { if (inblock && !seen) { print "- instance_type: " want; print "  replicas: 1" } }
@@ -733,12 +838,22 @@ set_gpu() {
 # hidden prompt reasonably implies the value is not going somewhere
 # world-readable. It currently is - the default umask here is 022 - so say
 # what happened rather than quietly leaving it, or quietly changing it.
-secure_file() {
-  case "$(_mode "$AY")" in
+# Only records the intent. The walkthrough runs against a staged copy that
+# _mktemp already created under umask 077, so a mode check here would always
+# see 0600, always take the early return, and never tighten the real file -
+# which is exactly what it did until this was split in two. The decision has
+# to be applied at the hand-off, against the path that survives.
+_NEEDS_600=0
+secure_file() { _NEEDS_600=1; }
+
+# apply_file_mode <path> - act on the intent recorded above.
+apply_file_mode() {
+  [ "$_NEEDS_600" = 1 ] || return 0
+  case "$(_mode "$1")" in
     600|400) return 0 ;;
   esac
-  chmod 600 "$AY" 2>/dev/null \
-    && echo "    group_vars/all.yml set to mode 600: it now holds a credential"
+  chmod 600 "$1" 2>/dev/null \
+    && echo "  group_vars/all.yml set to mode 600: it now holds a credential"
 }
 
 # seed_absent <key> <value> - write only when the key is not there.
@@ -791,6 +906,22 @@ materialise_defaults() {
 _STAGED=""
 _stage_cleanup() { [ -n "$_STAGED" ] && rm -f "$_STAGED"; _STAGED=""; }
 
+# An INT trap that only cleans up does not abort: bash runs the handler and
+# then CARRIES ON, so Ctrl-C half way through the questions deleted the
+# staged file and left the rest of the walkthrough writing to a path that no
+# longer existed. A Ctrl-C has to end the run, which means the handler must
+# exit, and with 130 so callers can tell it from a failure.
+_stage_interrupt() {
+  _stage_cleanup
+  echo >&2
+  echo "  Interrupted. Nothing was written to group_vars/all.yml." >&2
+  exit 130
+}
+
+# The real path, for the things that must not be answered from inside the
+# staged copy: its permissions, and the summary line about them.
+_REAL_AY=""
+
 configure_interactive() {
   summarise
   if ask_yn "Deploy with these?" y; then
@@ -801,18 +932,21 @@ configure_interactive() {
 
   local real="$AY" rc=0
   _STAGED="$(_mktemp)" || return 1
-  trap '_stage_cleanup' EXIT INT TERM
+  trap '_stage_cleanup' EXIT
+  trap '_stage_interrupt' INT TERM
   cp "$real" "$_STAGED"
-  AY="$_STAGED"
+  AY="$_STAGED"; _REAL_AY="$real"
   _walkthrough || rc=$?
   AY="$real"
   if [ "$rc" = 0 ]; then
     _replace "$_STAGED"
     _STAGED=""
+    apply_file_mode "$real"
   else
     echo "  Nothing was written to group_vars/all.yml." >&2
     _stage_cleanup
   fi
+  _REAL_AY=""
   trap - EXIT INT TERM
   return 0
 }
@@ -904,10 +1038,23 @@ _walkthrough() {
   if preset_needs_hf "$model"; then
     echo
     echo "  $model pulls ~31 GB from Hugging Face at pod start, so it needs a"
-    echo "  token. The run stops before creating anything if it is missing."
-    new_hf=$(ask_secret "hf_token" "$hf")
-    guard_yaml hf_token -- set_string hf_token "$new_hf"
-    [ -n "$new_hf" ] && secure_file
+    echo "  token."
+    if [ -z "$hf" ] && [ -n "${HF_TOKEN:-}" ]; then
+      # roles/model_serving reads hf_token or else the HF_TOKEN environment
+      # variable, so this run already has one. Inviting a paste here would
+      # put a live token into a file that did not need to hold it.
+      echo "  \$HF_TOKEN is exported $(mask "$HF_TOKEN"), and the role uses it"
+      echo "  when hf_token is empty, so there is nothing to set."
+      if ask_yn "Store it in all.yml as well?" n; then
+        guard_yaml hf_token -- set_string hf_token "$HF_TOKEN"
+        secure_file
+      fi
+    else
+      echo "  The run stops before creating anything if it is missing."
+      new_hf=$(ask_secret "hf_token" "$hf")
+      guard_yaml hf_token -- set_string hf_token "$new_hf"
+      [ -n "$new_hf" ] && secure_file
+    fi
   elif [ -n "$hf" ]; then
     echo
     echo "  hf_token $(mask "$hf") - kept. $model is a modelcar and will not use it."

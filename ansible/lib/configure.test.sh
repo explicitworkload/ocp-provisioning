@@ -232,7 +232,11 @@ chk "no staged file left behind"         "$(ls "$AY".?????? 2>/dev/null | wc -l 
 _walkthrough() { set_bool deploy_demos true; return 0; }
 fresh; printf 'n\n' | configure_interactive >/dev/null 2>&1
 chk "a successful walkthrough lands"     "$(yget deploy_demos)" "True"
-unset -f _walkthrough
+# Re-source rather than `unset -f`: unset removes the REAL _walkthrough that
+# sourcing defined, not just the stub above it, and everything after would
+# then run against a configure_interactive whose walkthrough does not exist.
+source lib/configure.sh
+chk "the real _walkthrough is back"      "$(type -t _walkthrough)" "function"
 
 echo "== the fast path only fills in what is missing =="
 fresh; set_bool deploy_demos false
@@ -240,6 +244,109 @@ printf '\n' | configure_interactive >/dev/null 2>&1
 chk "a deliberate false is respected"    "$(python3 -c "import yaml;print(yaml.safe_load(open('$AY'))['deploy_demos'] is False)")" "True"
 chk "truthy matches the role defaults"   "$(truthy deploy_openrag false && echo y || echo n)" "y"
 chk "and the absent key is filled in"    "$(python3 -c "import yaml;print(yaml.safe_load(open('$AY'))['deploy_omnigent'] is False)")" "True"
+
+# ---------------------------------------------------------------------------
+# Regressions. Every one of these is a bug that shipped and was found by
+# review afterwards; the assertions are what would have caught them.
+echo "== regressions =="
+
+# secure_file ran against the staged 0600 copy, always took its early return,
+# and _replace then restored the real file's 644 - so a token typed at a
+# hidden prompt landed world-readable with nothing on screen saying so.
+fresh; chmod 644 "$AY"
+printf 'n\n\n5\n\n\n\n\nTOKEN123\n\n\n' | configure_interactive >/dev/null 2>&1
+chk "a typed secret leaves all.yml at 600" "$(_mode "$AY")" "600"
+chk "and the secret was actually written"  "$(yget hf_token)" "TOKEN123"
+fresh; chmod 644 "$AY"
+printf '\n' | configure_interactive >/dev/null 2>&1
+chk "no secret typed: mode left alone"     "$(_mode "$AY")" "644"
+
+# The INT trap only cleaned up; bash then CONTINUED, so the rest of the
+# walkthrough wrote to a path that had just been deleted.
+fresh; cp "$AY" "$WORK/pre3"
+cat > "$WORK/int.sh" <<INTEOF
+#!/bin/bash
+set -uo pipefail
+cd "$(pwd)"
+export AY="$AY"
+source lib/configure.sh
+# Stand in for a Ctrl-C arriving part way through the questions.
+_walkthrough() { set_bool deploy_demos true; kill -INT \$\$; set_string hf_token 'written-after-the-signal'; return 0; }
+# Redirected, not piped: a pipeline would run configure_interactive in a
+# subshell, where \$\$ is still the PARENT's pid, so the kill below would
+# signal a shell that has no trap. run.sh calls it directly, so this is the
+# arrangement that matches production.
+printf 'n\n' > "\$AY.in"
+configure_interactive < "\$AY.in"
+INTEOF
+chmod +x "$WORK/int.sh"
+"$WORK/int.sh" >/dev/null 2>&1
+chk "Ctrl-C exits 130, not 0"              "$?" "130"
+chk "Ctrl-C leaves all.yml untouched"      "$(cmp -s "$WORK/pre3" "$AY" && echo y || echo n)" y
+chk "nothing written after the signal"     "$(grep -c 'written-after-the-signal' "$AY")" "0"
+chk "Ctrl-C leaves no staged file"         "$(ls "$AY".?????? 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# guard_yaml validated after the write but never before, so a file that was
+# already unparseable made every answer look like the thing that broke it.
+printf -- '---\nbroken: [unclosed\n' > "$AY"
+guard_yaml deploy_demos -- set_bool deploy_demos true 2>/dev/null
+chk "a pre-broken file does not block writes" "$(grep -c '^deploy_demos: true' "$AY")" "1"
+
+# set_block replaced the whole list, deleting any endpoint the questions do
+# not know about - and all.yml is untracked, so it was not in git either.
+cat > "$AY" <<'YEOF'
+---
+litellm_extra_models:
+- name: corporate-azure
+  base_url: https://corp/v1
+  api_key: 'x'
+  mode: embedding
+  models:
+  - gpt-4o
+- name: maas-rhdp
+  base_url: https://maas/v1
+  api_key: 'y'
+  models:
+  - alpha
+YEOF
+set_block litellm_extra_models "$(render_maas_block newkey beta gamma)"
+chk "a sibling endpoint survives"          "$(python3 -c "
+import yaml;print(','.join(e['name'] for e in yaml.safe_load(open('$AY'))['litellm_extra_models']))")" "corporate-azure,maas-rhdp"
+chk "the sibling keeps its own keys"       "$(yget litellm_extra_models.0.mode)" "embedding"
+chk "the maas entry is updated"            "$(yget litellm_extra_models.1.api_key)" "newkey"
+chk "and its models replaced"              "$(python3 -c "
+import yaml;print(' '.join(yaml.safe_load(open('$AY'))['litellm_extra_models'][1]['models']))")" "beta gamma"
+cp "$AY" "$WORK/sib1"; set_block litellm_extra_models "$(render_maas_block newkey beta gamma)"
+chk "merge is still idempotent"            "$(cmp -s "$WORK/sib1" "$AY" && echo y || echo n)" y
+
+# set_gpu compared $3 raw, so a quoted value or a CRLF file never matched:
+# the existing entry was zeroed and a duplicate inserted at 1 replica - the
+# exact sandbox3270 failure the function exists to prevent.
+printf -- '---\ngpu_machinesets:\n- instance_type: "g6e.4xlarge"\n  replicas: 1\n' > "$AY"
+set_gpu g6e.4xlarge
+chk "a quoted instance_type is matched"    "$(python3 -c "
+import yaml;d=yaml.safe_load(open('$AY'))['gpu_machinesets']
+print(len([e for e in d if str(e['instance_type']).strip('\"')=='g6e.4xlarge']))")" "1"
+printf -- '---\r\ngpu_machinesets:\r\n- instance_type: g6e.4xlarge\r\n  replicas: 1\r\n' > "$AY"
+set_gpu g6e.4xlarge
+chk "a CRLF file is matched"               "$(python3 -c "
+import yaml;d=yaml.safe_load(open('$AY'))['gpu_machinesets']
+print(len([e for e in d if str(e['instance_type']).strip()=='g6e.4xlarge']))")" "1"
+
+# ask_context returned '' when oc listed nothing, erasing a pin with no
+# prompt, two lines after promising that Enter keeps the current value.
+printf -- "---\nocp_context: 'default/api-pinned:6443/admin'\n" > "$AY"
+chk "no contexts keeps the pin"            "$(KUBECONFIG=/nonexistent ask_context "$(get_var ocp_context)" 2>/dev/null)" "default/api-pinned:6443/admin"
+
+# The summary counted models litellm will drop, and ignored the HF_TOKEN
+# fallback the model_serving role actually reads.
+fresh; set_block litellm_extra_models "$(render_maas_block '' alpha beta)"
+chk "models with no key are marked dropped" "$(has 'dropped, no api_key' "$(summarise 2>&1)" && echo y || echo n)" y
+fresh
+chk "models with a key are not"             "$(has 'dropped, no api_key' "$(summarise 2>&1)" && echo y || echo n)" n
+fresh; set_raw model_preset qwen3.8-27b-fp8; set_string hf_token ''
+chk "HF_TOKEN env suppresses the warning"  "$(HF_TOKEN=hf_fromenv123456 summarise 2>&1 | grep -c 'pulls from Hugging Face and hf_token is empty')" "0"
+chk "and is shown as coming from the env"  "$(HF_TOKEN=hf_fromenv123456 summarise 2>&1 | grep -c 'from \$HF_TOKEN')" "1"
 
 # ---------------------------------------------------------------------------
 echo
