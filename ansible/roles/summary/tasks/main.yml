@@ -37,7 +37,7 @@
 - name: Collect the links
   ansible.builtin.set_fact:
     summary_link_lines: >-
-      {{ summary_link_lines + ['%-18s'|format(item.label) ~ 'https://' ~ matched_hosts[0]] }}
+      {{ summary_link_lines + ['%-22s'|format(item.label) ~ 'https://' ~ matched_hosts[0]] }}
   vars:
     # Not "hosts": that is a reserved name in Ansible - it is the play key
     # naming the inventory pattern - and shadowing it logged a warning on
@@ -57,7 +57,7 @@
   ansible.builtin.set_fact:
     summary_cred_lines: >-
       {{ summary_cred_lines
-         + ['%-18s'|format(item.item.label) ~ who ~ (data[item.item.pass] | b64decode)] }}
+         + ['%-22s'|format(item.item.label) ~ who ~ (data[item.item.pass] | b64decode)] }}
   vars:
     data: "{{ (item.resources | default([{}]))[0].data | default({}) }}"
     who: >-
@@ -75,7 +75,7 @@
 # The same data the report below prints, kept structured so the Ops
 # Dashboard can render it as a page instead of people copying it out of a
 # terminal. Built alongside the printed lines rather than parsed back out of
-# them, because '%-18s' padding is for human eyes, not for a UI.
+# them, because '%-22s' padding is for human eyes, not for a UI.
 - name: Collect the links and credentials for the dashboard
   ansible.builtin.set_fact:
     summary_links_data: >-

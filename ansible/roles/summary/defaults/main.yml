@@ -7,6 +7,9 @@
 # Links. Selected by namespace, then optionally narrowed by a regex on the
 # host, because some charts generate a random Route name (OpenRAG ships
 # openrag-<5 chars> and openrag-api-<5 chars>, so the name is useless).
+# label is padded to 22 in tasks/main.yml. "OpenSearch Dashboards" is 21 and
+# ran straight into its URL at the old width of 18; a label longer than the
+# pad loses the gap rather than wrapping, so keep new ones under 22.
 summary_links:
   - {label: "Ops Dashboard",     ns: dashboard,                      match: "^dashboard\\."}
   - {label: "LiteLLM",           ns: litellm,                        match: "^litellm"}
@@ -20,6 +23,7 @@ summary_links:
   - {label: "Quay registry",     ns: quay-enterprise,                match: "^registry-quay-quay"}
   - {label: "NooBaa console",    ns: openshift-storage,              match: "^noobaa-mgmt"}
   - {label: "Gatus",             ns: gatus,                          match: "^gatus\\."}
+  - {label: "Omnigent",          ns: "{{ omnigent_namespace | default('omnigent') }}", match: "^omnigent-"}
   - {label: "MCP server",        ns: mcp-servers,                    match: "^openshift-mcp-server"}
   - {label: "OpenSearch Dashboards", ns: "{{ openrag_opensearch_namespace | default('opensearch') }}", match: "^opensearch-dashboards"}
   - {label: "Attu (Milvus UI)",  ns: "{{ milvus_attu_namespace | default('milvus-attu') }}", match: "^attu"}

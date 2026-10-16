@@ -9,10 +9,35 @@
 # it can wire in two things the overlays do not: an oauth-proxy in front,
 # and the cluster's own LiteLLM as the model gateway.
 #
-# PINNED, and not to latest. v0.1.1 is the current release of software that
-# runs LLM-authored code with real credentials; "latest" on that is not a
-# version, it is a surprise.
-omnigent_version: v0.1.1
+# PINNED, and not to latest: this is software that runs LLM-authored code
+# with real credentials, and "latest" on that is not a version, it is a
+# surprise.
+#
+# This said v0.1.1 until 2026-10-17, and NO SUCH TAG EXISTS. The pod sat in
+# ImagePullBackOff on sandbox235 with
+#
+#   reading manifest v0.1.1 in ghcr.io/omnigent-ai/omnigent-server-kubernetes:
+#   manifest unknown
+#
+# so the Service had no endpoints and the Route answered 503. The real
+# releases are v0.0.1rc1, v0.0.1rc2, then v0.5.0 onward - the 0.1.x line
+# never existed.
+#
+# v0.18.0 is the newest stable at time of writing, is what :latest resolves
+# to (both sha256:eba3422ee55ef946bff7c895f458258fbaf4a5e4244ef38aa66caec8
+# fefe9198), and is a two-platform index (amd64, arm64). Verified running on
+# sandbox235.
+#
+# To move it, list the tags and take the newest matching vN.N.N - skip the
+# rc, .dev and sha- ones:
+#   TOK=$(curl -s 'https://ghcr.io/token?scope=repository:omnigent-ai/\
+#     omnigent-server-kubernetes:pull' | jq -r .token)
+#   curl -s -H "Authorization: Bearer $TOK" \
+#     'https://ghcr.io/v2/omnigent-ai/omnigent-server-kubernetes/tags/list?n=500'
+#
+# Expect the config schema to move with it; see the comment in
+# templates/sandbox-config.yaml.j2 about the resources block.
+omnigent_version: v0.18.0
 
 # The -kubernetes variant, not the plain server image. It is the same build
 # with the kubernetes client extra (OMNIGENT_EXTRAS=kubernetes) compiled in,

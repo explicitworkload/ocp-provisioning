@@ -35,8 +35,19 @@ sandbox:
 {% if omnigent_sandbox_host_image | length > 0 %}
     image: {{ omnigent_sandbox_host_image }}
 {% endif %}
+    {# The ordinary Kubernetes shape, requests/limits, not flat
+       cpu_request/memory_limit keys. The server validates this block
+       strictly and refuses to start on an unknown key:
+
+         ValueError: server config 'sandbox.kubernetes.resources' has an
+         unknown key 'cpu_request' (expected 'requests' or 'limits')
+
+       which leaves the pod Running but never Ready, so the Service has no
+       endpoints and the Route answers 503. -#}
     resources:
-      cpu_request: "{{ omnigent_sandbox_cpu_request }}"
-      cpu_limit: "{{ omnigent_sandbox_cpu_limit }}"
-      memory_request: "{{ omnigent_sandbox_memory_request }}"
-      memory_limit: "{{ omnigent_sandbox_memory_limit }}"
+      requests:
+        cpu: "{{ omnigent_sandbox_cpu_request }}"
+        memory: "{{ omnigent_sandbox_memory_request }}"
+      limits:
+        cpu: "{{ omnigent_sandbox_cpu_limit }}"
+        memory: "{{ omnigent_sandbox_memory_limit }}"
