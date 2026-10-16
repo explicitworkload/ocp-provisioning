@@ -128,9 +128,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install ansible kubernetes
 
-# Create your variables file. all.yml is untracked so it can hold a pull
-# secret, API key or endpoint credential; the repo ships the sample.
-cp group_vars/all.yml.sample group_vars/all.yml
+# Your variables file. ./run.sh creates group_vars/all.yml from the sample
+# on first use, at mode 600, so this is only needed if you want to edit it
+# before the first run. It is untracked, so a pull secret, API key or
+# endpoint credential can live in it.
+cp group_vars/all.yml.sample group_vars/all.yml   # optional
 
 # Point oc at the target cluster. The playbook follows whatever
 # `oc config current-context` returns, and opens by printing the context,

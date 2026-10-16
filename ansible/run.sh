@@ -29,22 +29,31 @@ MSG
 fi
 
 # group_vars/all.yml is untracked so it can hold credentials; the repo ships
-# group_vars/all.yml.sample instead. A missing one is not an obscure failure
-# worth debugging - every variable silently falls back to a role default and
-# the run targets the wrong things.
+# group_vars/all.yml.sample instead. Missing it used to be fatal, with a
+# message telling you to run one cp - which is a thing the script can simply
+# do. The reason it must not just proceed without the file stands, though:
+# every variable would silently fall back to a role default and the run
+# would target the wrong things.
 if [[ ! -f group_vars/all.yml ]]; then
-  cat >&2 <<'MSG'
-group_vars/all.yml not found.
-
-It is deliberately untracked, so that a pull secret, API key or endpoint
-credential can live in it without being committed. Start from the sample:
-
-    cp group_vars/all.yml.sample group_vars/all.yml
-
-then edit it. The sample carries every setting with its documentation, and
-no secrets.
-MSG
-  exit 1
+  if [[ ! -f group_vars/all.yml.sample ]]; then
+    echo "Neither group_vars/all.yml nor group_vars/all.yml.sample exists." >&2
+    echo "The sample is tracked, so this is not a clean checkout:" >&2
+    echo "    git checkout ansible/group_vars/all.yml.sample" >&2
+    exit 1
+  fi
+  # 600, not the sample's 644. This is the file documented as the one place
+  # a pull secret, HF token or AWS secret key may live, and the questions
+  # below are about to write some into it; starting it world-readable and
+  # tightening later leaves a window where it is not.
+  if ! (umask 077 && cp group_vars/all.yml.sample group_vars/all.yml); then
+    echo "Could not create group_vars/all.yml from the sample." >&2
+    exit 1
+  fi
+  chmod 600 group_vars/all.yml 2>/dev/null || true
+  echo
+  echo "Created group_vars/all.yml from the sample (mode 600)."
+  echo "It is untracked, so credentials can live in it. What each setting"
+  echo "does is in group_vars/all.README.md."
 fi
 
 # Interactive configuration, but only for a full run.

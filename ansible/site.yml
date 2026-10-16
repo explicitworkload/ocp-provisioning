@@ -27,8 +27,10 @@
         fail_msg: >-
           group_vars/all.yml is missing. It is deliberately untracked so that
           a pull secret, API key or endpoint credential can live in it
-          without being committed. Copy the sample and edit it:
-          cp group_vars/all.yml.sample group_vars/all.yml
+          without being committed.
+          Easiest fix: use ./run.sh, which creates it from the sample at mode
+          600 and then offers to set the things you would have edited.
+          By hand: cp group_vars/all.yml.sample group_vars/all.yml
         quiet: true
       tags: [always]
 

@@ -740,17 +740,23 @@ that needs them is enabled — so a run with `deploy_openrag=false` and
    pip install ansible kubernetes
    ```
 
-2. Create your variables file. `group_vars/all.yml` is untracked, so it can
-   hold a pull secret, an API key or an endpoint credential without a stray
-   `git add -A` publishing it. The repo ships the template:
+2. Your variables file, `group_vars/all.yml`. It is untracked, so it can hold
+   a pull secret, an API key or an endpoint credential without a stray
+   `git add -A` publishing it.
+
+   **`./run.sh` creates it for you** from `group_vars/all.yml.sample` on first
+   use, at mode 600 rather than the sample's 644, because the questions it
+   then asks are about to write credentials into it. You only need this by
+   hand if you want to edit the file before the first run, or if you are
+   calling `ansible-playbook` directly:
 
    ```bash
    cp group_vars/all.yml.sample group_vars/all.yml
    ```
 
-   `run.sh` refuses to start without it, and `site.yml` asserts it as its
-   first task, so a fresh clone fails with that instruction rather than
-   running every variable off its role default.
+   `site.yml` still asserts the file as its first task, so a direct
+   `ansible-playbook` call on a fresh clone fails with that instruction
+   rather than running every variable off its role default.
 
    When you add or change a setting, mirror it into the sample — with the
    value left empty or an example. Nothing enforces that, and the sample is
