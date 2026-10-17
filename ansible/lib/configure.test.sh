@@ -31,7 +31,7 @@ fresh() {
   cat > "$AY" <<'EOF'
 ---
 ocp_context: ""
-hf_token: ""
+hf_token: "seed-hf-token"
 gpu_machinesets:
 - instance_type: g4dn.4xlarge
   replicas: 0
@@ -40,8 +40,8 @@ gpu_machinesets:
 model_preset: qwen3-4b
 deploy_openrag: true
 deploy_milvus: true
-dashboard_aws_access_key_id: ""
-dashboard_aws_secret_access_key: ""
+dashboard_aws_access_key_id: "AKIAEXAMPLEEXAMPLE"
+dashboard_aws_secret_access_key: "seed-aws-secret"
 #demos_gen_model: granite-3-2-8b-instruct
 litellm_extra_models:
 - name: maas-rhdp
@@ -347,6 +347,119 @@ chk "models with a key are not"             "$(has 'dropped, no api_key' "$(summ
 fresh; set_raw model_preset qwen3.8-27b-fp8; set_string hf_token ''
 chk "HF_TOKEN env suppresses the warning"  "$(HF_TOKEN=hf_fromenv123456 summarise 2>&1 | grep -c 'pulls from Hugging Face and hf_token is empty')" "0"
 chk "and is shown as coming from the env"  "$(HF_TOKEN=hf_fromenv123456 summarise 2>&1 | grep -c 'from \$HF_TOKEN')" "1"
+
+echo "== trailing comments and stat portability =="
+
+# A trailing comment is not part of the value. An all.yml written from an
+# older sample carries "demos_rag_eval: true   # retrieval A/B ...", and the
+# whole string used to come back, so truthy never matched and the summary
+# reported "demos yes (2 of 8)" on a file with all eight on.
+cat > "$AY" <<'YEOF'
+---
+plain: true
+commented: true          # retrieval A/B across OpenSearch and Milvus
+sq_hash: 'abc#def'
+dq_hash: "abc#def"
+bare_hash: abc#def
+sq_hash_comment: 'abc#def'   # and a comment after it
+quoted_apos: 'it''s'         # with a comment too
+spaced: hello world          # trailing
+YEOF
+chk "plain value"                        "$(get_var plain)" "true"
+chk "trailing comment is stripped"       "$(get_var commented)" "true"
+chk "and it reads as true"               "$(truthy commented false && echo y || echo n)" "y"
+chk "# inside single quotes is kept"     "$(get_var sq_hash)" "abc#def"
+chk "# inside double quotes is kept"     "$(get_var dq_hash)" "abc#def"
+chk "# with no space before it is kept"  "$(get_var bare_hash)" "abc#def"
+chk "quoted value, then a comment"       "$(get_var sq_hash_comment)" "abc#def"
+chk "doubled apostrophe survives"        "$(get_var quoted_apos)" "it's"
+chk "internal spaces survive"            "$(get_var spaced)" "hello world"
+
+# all eight demos on, counted correctly
+cat > "$AY" <<'YEOF'
+---
+demos_rag_eval: true          # retrieval A/B
+demos_rag_judge: true         # judges
+demos_prompt_versions: true   # prompts
+demos_tabular: true           # sklearn
+demos_model_serving: true     # kserve
+demos_autorag: true           # autorag
+demos_workbenches: true
+demos_run_jobs: true
+YEOF
+n=0; for k in $DEMO_KEYS; do truthy "$k" true && n=$((n+1)); done
+chk "all eight demos counted"            "$n" "8"
+
+# GNU stat -f means --file-system and SUCCEEDS, so a `stat -f || stat -c`
+# fallback never fired on Linux: _mode returned a block of xfs statistics,
+# which reached the screen mid-sentence and was passed to chmod.
+STUB="$WORK/bin"; mkdir -p "$STUB"
+cat > "$STUB/stat" <<'SEOF'
+#!/bin/bash
+case "$1" in
+  -c) shift; shift; /usr/bin/stat -f %Lp "$1" 2>/dev/null || /bin/stat -c %a "$1" ;;
+  -f) shift; echo "  File: \"$1\""; echo "    ID: 103 Namelen: 255 Type: xfs"; exit 0 ;;
+  *)  /usr/bin/stat "$@" 2>/dev/null || /bin/stat "$@" ;;
+esac
+SEOF
+chmod +x "$STUB/stat"
+touch "$WORK/m.txt"; chmod 644 "$WORK/m.txt"
+got=$(PATH="$STUB:$PATH" bash -c "cd '$(pwd)'; source lib/configure.sh; _mode '$WORK/m.txt'")
+chk "GNU-style stat returns a mode"      "$got" "644"
+chk "and never a filesystem dump"        "$(has 'Namelen' "$got" && echo LEAK || echo clean)" "clean"
+chmod 600 "$WORK/m.txt"
+got=$(PATH="$STUB:$PATH" bash -c "cd '$(pwd)'; source lib/configure.sh; _mode '$WORK/m.txt'")
+chk "600 reported as 600"                "$got" "600"
+
+# the summary no longer carries a standing permissions nag
+fresh; chmod 644 "$AY"; set_string hf_token 'x'
+chk "no file-mode nag in the summary"    "$(has 'cleartext' "$(summarise 2>&1)" && echo present || echo gone)" "gone"
+
+echo "== credentials offered on the fast path =="
+
+# A freshly created all.yml has none of the three, and accepting the summary
+# would otherwise deploy with no token, no MaaS endpoint and no AWS key
+# having never mentioned them.
+nocreds() {
+  fresh
+  set_string hf_token ''
+  set_string dashboard_aws_access_key_id ''
+  set_block litellm_extra_models "$(render_maas_block '' alpha)"
+}
+
+nocreds
+out=$(printf '\n\n\n' | ask_missing_credentials 2>&1; echo "rc=$?")
+chk "asks about hf_token"                 "$(has 'hf_token' "$out" && echo y || echo n)" y
+chk "asks about the maas endpoint"        "$(has 'MaaS endpoint' "$out" && echo y || echo n)" y
+chk "asks about the AWS keys"             "$(has 'AWS keys' "$out" && echo y || echo n)" y
+chk "says what skipping AWS costs"        "$(has 'Stop/Start resiliency tests are disabled' "$out" && echo y || echo n)" y
+chk "skipping everything reports nothing changed" "$(has 'rc=1' "$out" && echo y || echo n)" y
+
+nocreds
+printf 'hf_TYPED_TOKEN_123\n\n\n' | ask_missing_credentials >/dev/null 2>&1
+chk "a typed hf_token is written"         "$(get_var hf_token)" "hf_TYPED_TOKEN_123"
+chk "and the file is tightened to 600"    "$(_mode "$AY")" "600"
+
+nocreds
+printf '\n\nAKIATYPED123\nsecret-typed\n' | ask_missing_credentials >/dev/null 2>&1
+chk "a typed AWS key id is written"       "$(get_var dashboard_aws_access_key_id)" "AKIATYPED123"
+chk "and its secret too"                  "$(get_var dashboard_aws_secret_access_key)" "secret-typed"
+
+# Nothing already set is asked about again, so a re-run stays one keystroke.
+fresh
+out=$(printf '\n\n\n' | ask_missing_credentials 2>&1; echo "rc=$?")
+chk "all three set: asks nothing"         "$(has 'Enter skips' "$out" && echo asked || echo silent)" "silent"
+chk "and reports nothing changed"         "$(has 'rc=1' "$out" && echo y || echo n)" y
+
+# Only the unset one is asked about.
+fresh; set_string hf_token ''
+out=$(printf '\n' | ask_missing_credentials 2>&1)
+chk "asks only about the unset hf_token"  "$(has 'hf_token' "$out" && echo y || echo n)" y
+chk "and not about the AWS keys"          "$(has 'AWS keys' "$out" && echo asked || echo skipped)" "skipped"
+
+# The "Enter skips" vs "Enter keeps" wording is deliberately not asserted
+# here: read -s prints its prompt only to a terminal, so a piped test sees
+# nothing. It is checked on a pty instead, outside this suite.
 
 # ---------------------------------------------------------------------------
 echo

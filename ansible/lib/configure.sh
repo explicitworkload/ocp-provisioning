@@ -37,11 +37,33 @@ has_var() {
 # get_var <key> - the current value with one layer of quoting removed, or
 # empty. Used to show what is already configured, so a re-run can say
 # "Enter keeps this".
+# A trailing comment is part of the line but not part of the value, and
+# missing that made this lie about the thing it exists to report. all.yml
+# files written from an older sample carry
+#
+#     demos_rag_eval: true          # retrieval A/B across OpenSearch
+#
+# and the whole string came back, so `truthy` never matched "true" and the
+# summary said "demos yes (2 of 8)" on a file where all eight were on. The
+# playbook read the YAML correctly throughout - only the report was wrong,
+# which is the worst kind of wrong for a screen whose job is to tell you
+# what is about to happen.
+#
+# A '#' only opens a comment when whitespace precedes it, and never inside
+# quotes, so a quoted value is taken up to its closing quote and an
+# unquoted one is cut at the first whitespace-hash.
 get_var() {
   _K="$1" awk '
     BEGIN { k = ENVIRON["_K"] }
     index($0, k ":") == 1 {
       sub(/^[^:]*:[ \t]*/, "")
+      q = substr($0, 1, 1)
+      if (q == "'"'"'" || q == "\"") {
+        for (i = length($0); i > 1; i--) if (substr($0, i, 1) == q) break
+        $0 = substr($0, 1, i)
+      } else {
+        sub(/[ \t]+#.*$/, "")
+      }
       sub(/[ \t]+$/, "")
       if (match($0, /^'"'"'.*'"'"'$/)) { $0 = substr($0, 2, length($0)-2); gsub(/'"'"''"'"'/, "'"'"'") }
       else if (match($0, /^".*"$/))    { $0 = substr($0, 2, length($0)-2) }
@@ -81,7 +103,29 @@ yaml_quote() {
   printf '%s%s%s' "$q" "${v//$q/$q$q}" "$q"
 }
 
-_mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1" 2>/dev/null; }
+# _mode <file> -> the permission bits as octal, or nothing.
+#
+# GNU and BSD stat disagree about -f, and not in a way a `||` fallback
+# survives. On BSD it is the format flag. On GNU it is --file-system, which
+# SUCCEEDS and prints a block of filesystem statistics, so
+#
+#     stat -f %Lp "$1" || stat -c %a "$1"
+#
+# never reaches the fallback on Linux and hands the caller an xfs dump where
+# it expected "644". That reached the screen in the middle of a summary line,
+# and - worse - _replace passed it to chmod, so the mode of a file holding
+# credentials was not preserved on the one platform this mostly runs on.
+#
+# So: try the GNU form first, and validate that whatever comes back is octal
+# digits. Neither variant can then return something that merely looks like a
+# mode, and a stat that is missing entirely returns nothing rather than junk.
+_mode() {
+  local m
+  m=$(stat -c %a "$1" 2>/dev/null)
+  case "$m" in ''|*[!0-7]*) m=$(stat -f %Lp "$1" 2>/dev/null) ;; esac
+  case "$m" in ''|*[!0-7]*) return 1 ;; esac
+  printf '%s' "$m"
+}
 
 # _replace <tmpfile> - move a rewritten temp file over all.yml, keeping the
 # original permissions. `awk > tmp && mv` resets the mode to the umask -
@@ -277,8 +321,10 @@ ask_text() {
 # its length and last four characters, which is enough to recognise "yes,
 # that is the key I set last time" without putting it on a shared terminal.
 ask_secret() {
-  local q="$1" cur="$2" ans
-  read -rs -p "  $q $(mask "$cur"), Enter keeps: " ans || ans=""
+  local q="$1" cur="$2" ans hint
+  # "Enter keeps" is wrong when there is nothing to keep.
+  if [ -n "$cur" ]; then hint="Enter keeps"; else hint="Enter skips"; fi
+  read -rs -p "  $q $(mask "$cur"), $hint: " ans || ans=""
   printf '\n' >&2
   if [ -z "$ans" ]; then printf '%s' "$cur"; else printf '%s' "$ans"; fi
 }
@@ -482,7 +528,7 @@ kube_contexts() { oc config get-contexts -o name 2>/dev/null || true; }
 # Printed before the single accept-or-change question, because the fast path
 # is only safe if what you are accepting is on the screen.
 summarise() {
-  local ctx model gpu hf hf_src hf_show maaskey nmodels aws_id ndemos warn ctxlist fit mode_path
+  local ctx model gpu hf hf_src hf_show maaskey nmodels aws_id ndemos warn ctxlist fit
   ctx=$(get_var ocp_context); model=$(get_var model_preset); gpu=$(gpu_selected)
   # Read the same two sources the role does. model_hf_token in
   # roles/model_serving/defaults is `hf_token if set else env HF_TOKEN`, so
@@ -566,15 +612,10 @@ summarise() {
     echo "      and getting a 401."
     warn=1
   fi
-  mode_path="${_REAL_AY:-$AY}"
-  case "$(_mode "$mode_path")" in
-    600|400) ;;
-    *) if [ -n "$hf$maaskey$aws_id" ]; then
-         echo "   -  group_vars/all.yml is mode $(_mode "$mode_path") and holds a"
-         echo "      credential in cleartext. chmod 600 it, or answer the"
-         echo "      questions and it is tightened when a secret is written."
-       fi ;;
-  esac
+  # No file-permission warning here on purpose. run.sh creates all.yml at
+  # 600, and apply_file_mode tightens it whenever a secret is written, so a
+  # standing nag on the one screen you read before every deploy was noise
+  # about a problem the script already fixes.
   if truthy deploy_demos true && ! truthy deploy_milvus false; then
     echo "   -  milvus is off: demos_rag_eval loses half its comparison and"
     echo "      demos_autorag loses its vector_io provider."
@@ -692,7 +733,9 @@ ask_maas() {
   # directory, so any other user on the host can pre-plant it as a symlink
   # to something of ours and have `2>` follow it. group_vars/all.yml is an
   # obvious target.
-  local errf; errf="$(mktemp -t maaserr)" || errf=""
+  # An explicit template, not `mktemp -t NAME`: -t is deprecated on GNU and
+  # means something different on BSD, and the two place the file differently.
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/maaserr.XXXXXX")" || errf=""
   if ! models=$(maas_models "$MAAS_BASE_URL" "$key" 2>"${errf:-/dev/null}"); then
     [ -n "$errf" ] && echo "    $(cat "$errf" 2>/dev/null)" >&2
     [ -n "$errf" ] && rm -f "$errf"
@@ -849,7 +892,9 @@ secure_file() { _NEEDS_600=1; }
 # apply_file_mode <path> - act on the intent recorded above.
 apply_file_mode() {
   [ "$_NEEDS_600" = 1 ] || return 0
-  case "$(_mode "$1")" in
+  # An unknown mode falls through to the chmod on purpose: if we cannot tell
+  # whether the file is already tight, tightening it is the safe answer.
+  case "$(_mode "$1" || true)" in
     600|400) return 0 ;;
   esac
   chmod 600 "$1" 2>/dev/null \
@@ -922,8 +967,75 @@ _stage_interrupt() {
 # staged copy: its permissions, and the summary line about them.
 _REAL_AY=""
 
+# ask_missing_credentials - offer the three credentials that are not set.
+#
+# Asked before the accept question rather than only inside the walkthrough,
+# because a freshly created all.yml has none of them and accepting the
+# summary would otherwise deploy with no Hugging Face token, no MaaS
+# endpoint and no AWS key, having never mentioned them. Each one is skipped
+# with Enter, and one already set is not asked about at all - so this costs
+# nothing on a re-run and the fast path stays one keystroke.
+ask_missing_credentials() {
+  local model hf asked=0 new_hf aws_id aws_sec
+  model=$(get_var model_preset)
+  hf=$(get_var hf_token)
+  [ -z "$hf" ] && hf="${HF_TOKEN:-}"
+
+  if [ -z "$hf" ]; then
+    echo
+    if preset_needs_hf "$model"; then
+      echo "  hf_token - $model pulls ~31 GB from Hugging Face, so it needs one."
+    else
+      echo "  hf_token - not needed by $model, which is a modelcar. Only the"
+      echo "  fp8 preset pulls from Hugging Face. Enter skips."
+    fi
+    new_hf=$(ask_secret "hf_token" "")
+    if [ -n "$new_hf" ]; then
+      guard_yaml hf_token -- set_string hf_token "$new_hf"
+      secure_file; asked=1
+    fi
+  fi
+
+  if [ -z "$(maas_current_key)" ]; then
+    if ask_maas ""; then
+      guard_yaml litellm_extra_models -- \
+        set_block litellm_extra_models "$(render_maas_block "$MAAS_KEY_OUT" $MAAS_MODELS_OUT)"
+      echo "    registered $(printf '%s' "$MAAS_MODELS_OUT" | wc -w | tr -d ' ') models from $MAAS_NAME"
+      secure_file; asked=1
+    fi
+  fi
+
+  if [ -z "$(get_var dashboard_aws_access_key_id)" ]; then
+    echo
+    echo "  AWS keys - without them the Operations Dashboard still deploys,"
+    echo "  but its node Stop/Start resiliency tests are disabled, so you get"
+    echo "  a read-only view of the nodes rather than the full one. Needs only"
+    echo "  ec2:DescribeInstances, StopInstances, StartInstances. Enter skips."
+    aws_id=$(ask_secret "access key id" "")
+    if [ -n "$aws_id" ]; then
+      aws_sec=$(ask_secret "secret access key" "")
+      guard_yaml dashboard_aws_access_key_id     -- set_string dashboard_aws_access_key_id "$aws_id"
+      guard_yaml dashboard_aws_secret_access_key -- set_string dashboard_aws_secret_access_key "$aws_sec"
+      secure_file; asked=1
+    fi
+  fi
+
+  # These write straight to the real file rather than to a staged copy, so
+  # the tightening has to happen here too: configure_interactive applies it
+  # after the walkthrough, and the fast path never enters one.
+  apply_file_mode "$AY"
+
+  # Only re-print when something actually changed above.
+  [ "$asked" = 1 ] && return 0
+  return 1
+}
+
 configure_interactive() {
   summarise
+  if ask_missing_credentials; then
+    echo
+    summarise
+  fi
   if ask_yn "Deploy with these?" y; then
     materialise_defaults
     echo
