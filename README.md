@@ -128,10 +128,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install ansible kubernetes
 
-# Your variables file. ./run.sh creates group_vars/all.yml from the sample
-# on first use, at mode 600, so this is only needed if you want to edit it
-# before the first run. It is untracked, so a pull secret, API key or
-# endpoint credential can live in it.
+# Nothing to do for the variables file: ./run.sh creates group_vars/all.yml
+# from the sample on first use, at mode 600, then asks what to deploy and
+# for any credential the sample ships empty. Follow the menus.
+# Only needed if you want to edit it before the first run:
 cp group_vars/all.yml.sample group_vars/all.yml   # optional
 
 # Point oc at the target cluster. The playbook follows whatever

@@ -745,10 +745,26 @@ that needs them is enabled — so a run with `deploy_openrag=false` and
    `git add -A` publishing it.
 
    **`./run.sh` creates it for you** from `group_vars/all.yml.sample` on first
-   use, at mode 600 rather than the sample's 644, because the questions it
-   then asks are about to write credentials into it. You only need this by
-   hand if you want to edit the file before the first run, or if you are
-   calling `ansible-playbook` directly:
+   use, silently and at mode 600 rather than the sample's 644 — the questions
+   it then asks are about to write credentials into it. There is nothing to
+   do first: run `./run.sh` and follow the menus.
+
+   On that first run it also offers the three credentials the sample ships
+   empty, because a brand new file has none of them and accepting the
+   summary would otherwise deploy without ever mentioning them:
+
+   | | what you lose by skipping it |
+   |---|---|
+   | `hf_token` | only the `qwen3.8-27b-fp8` preset needs it; the others are modelcars and never touch Hugging Face |
+   | MaaS API key | the `maas-rhdp` endpoint is left out entirely — an entry with an empty key is dropped by the `litellm` role |
+   | AWS keys | the Operations Dashboard still deploys, but its node Stop/Start resiliency tests are off, so you get a read-only view of the nodes rather than the full one |
+
+   Enter skips any of them, and one that is already set is not asked about
+   again — so this costs nothing on a re-run and the fast path stays a
+   single keystroke.
+
+   You only need the copy below by hand if you want to edit the file before
+   the first run, or if you are calling `ansible-playbook` directly:
 
    ```bash
    cp group_vars/all.yml.sample group_vars/all.yml

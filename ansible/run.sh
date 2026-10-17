@@ -50,10 +50,10 @@ if [[ ! -f group_vars/all.yml ]]; then
     exit 1
   fi
   chmod 600 group_vars/all.yml 2>/dev/null || true
-  echo
-  echo "Created group_vars/all.yml from the sample (mode 600)."
-  echo "It is untracked, so credentials can live in it. What each setting"
-  echo "does is in group_vars/all.README.md."
+  # Silent on purpose. The summary printed a moment later is the feedback -
+  # it shows every value the new file holds - and announcing the copy first
+  # just pushed that summary down the screen. What the file is, and that
+  # run.sh creates it, is in the READMEs.
 fi
 
 # Interactive configuration, but only for a full run.
