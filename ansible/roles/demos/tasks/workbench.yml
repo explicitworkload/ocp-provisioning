@@ -8,6 +8,59 @@
 # so demos_run_jobs does not apply. A Notebook starts as soon as it is
 # created; stopping one is a dashboard action, not a role one.
 
+# --- which GPU this cluster actually has ----------------------------------
+# Derived from gpu_machinesets rather than hardcoded, and the difference is
+# not cosmetic. These used to pin node.kubernetes.io/instance-type to
+# g6e.4xlarge, so of the ten GPU instances run.sh offers, NINE left the GPU
+# workbench Pending for ever - including every g7e, whose RTX PRO 6000
+# Blackwell is a strictly better card for this than the L40S the selector
+# insisted on. It went unnoticed because g6e.4xlarge is the sample default.
+#
+# The pin itself was right to exist: the stock gpu-profile selects only
+# nvidia.com/gpu.present, so the scheduler could drop a fine-tune on a 15
+# GiB Turing T4. The mistake was encoding "a card I am happy with" as one
+# model number instead of as the property that matters. This pins whatever
+# the run actually provisions, and says so when that card is a poor one
+# rather than refusing to schedule on it.
+#
+# gpu_instance_specs comes from roles/gpu_worker/defaults; role defaults are
+# visible to later roles in the same play - verified, not assumed. Defaulted
+# anyway so --tags demos on its own cannot fail here.
+- name: Work out which GPU instance this run provisions
+  ansible.builtin.set_fact:
+    demos_gpu_type: >-
+      {{ gpu_machinesets | default([]) | selectattr('replicas', '>', 0)
+         | map(attribute='instance_type') | first | default('') }}
+
+- name: Look up what that instance carries
+  ansible.builtin.set_fact:
+    demos_gpu_spec: "{{ (gpu_instance_specs | default({})).get(demos_gpu_type | trim, {}) }}"
+    demos_gpu_present: "{{ (demos_gpu_type | trim | length) > 0 }}"
+
+# Turing has no bf16 and no Flash Attention 2, and most fine-tuning recipes
+# assume both. Said rather than enforced: a T4 is still a GPU, and refusing
+# to schedule on one is the behaviour this change exists to undo.
+- name: Warn when the chosen card cannot do bf16
+  ansible.builtin.debug:
+    msg: >-
+      {{ demos_gpu_type | trim }} carries a
+      {{ demos_gpu_spec.gpu | default('?') }}, which is Turing: fp16 only,
+      no Flash Attention 2. The GPU workbench runs on it, but the LoRA
+      fine-tune notebook assumes bf16 and will need editing. The g5, g6,
+      g6e and g7e types all avoid this.
+  when:
+    - demos_gpu_present | bool
+    - (demos_gpu_spec.gpu | default('')) == 'T4'
+
+- name: Say why the GPU workbench is being skipped
+  ansible.builtin.debug:
+    msg: >-
+      No gpu_machinesets entry has replicas above 0, so this run provisions
+      no GPU node. The GPU hardware profile and the GPU workbench are
+      skipped - creating them would leave a Pod Pending for ever against a
+      node that does not exist. The CPU workbench is unaffected.
+  when: not (demos_gpu_present | bool)
+
 # --- hardware profiles ----------------------------------------------------
 # What the dashboard offers in the "Hardware profile" dropdown when
 # someone creates a workbench or a deployment in this namespace. Without
@@ -63,7 +116,12 @@
 # MachineSets with no taints at all. They are kept because they cost
 # nothing and matter on any cluster where the nodes ARE tainted, which is
 # the more usual arrangement.
-- name: Offer a T4 hardware profile pinned to the instance type
+# One GPU profile, named for the card the cluster actually has. Two fixed
+# profiles (nvidia-t4, nvidia-l40s) used to be offered here, which on a g7e
+# cluster meant two entries in the dropdown both pointing at nodes nobody
+# had provisioned. The resource name stays nvidia-gpu so the workbench
+# below can reference it without knowing which card it got.
+- name: Offer a GPU hardware profile pinned to the provisioned instance
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
@@ -72,61 +130,16 @@
       apiVersion: infrastructure.opendatahub.io/v1
       kind: HardwareProfile
       metadata:
-        name: nvidia-t4
+        name: nvidia-gpu
         namespace: "{{ demos_namespace }}"
         annotations:
-          opendatahub.io/display-name: "NVIDIA T4 (16 GiB)"
+          opendatahub.io/display-name: >-
+            NVIDIA {{ demos_gpu_spec.gpu | default('GPU') }}
+            ({{ demos_gpu_spec.gpu_memory_gb | default('?') }} GB)
           opendatahub.io/description: >-
-            1x Tesla T4 on g4dn.4xlarge. Turing: fp16 only, no bf16 and no
-            Flash Attention 2. Fine for inference, awkward for training.
-          opendatahub.io/disabled: "false"
-          opendatahub.io/dashboard-feature-visibility: "[]"
-      spec:
-        identifiers:
-          - identifier: cpu
-            displayName: CPU
-            resourceType: CPU
-            minCount: 1
-            maxCount: "16"
-            defaultCount: "2"
-          - identifier: memory
-            displayName: Memory
-            resourceType: Memory
-            minCount: "1Gi"
-            maxCount: "60Gi"
-            defaultCount: "8Gi"
-          - identifier: nvidia.com/gpu
-            displayName: GPU
-            resourceType: Accelerator
-            minCount: 1
-            maxCount: 1
-            defaultCount: 1
-        scheduling:
-          type: Node
-          node:
-            nodeSelector:
-              node.kubernetes.io/instance-type: g4dn.4xlarge
-            tolerations:
-              - key: nvidia.com/gpu
-                operator: Exists
-                effect: NoSchedule
-
-- name: Offer an L40S hardware profile pinned to the instance type
-  kubernetes.core.k8s:
-    context: "{{ ocp_context or omit }}"
-    state: present
-    apply: true
-    definition:
-      apiVersion: infrastructure.opendatahub.io/v1
-      kind: HardwareProfile
-      metadata:
-        name: nvidia-l40s
-        namespace: "{{ demos_namespace }}"
-        annotations:
-          opendatahub.io/display-name: "NVIDIA L40S (48 GiB)"
-          opendatahub.io/description: >-
-            1x L40S on g6e.4xlarge. Ada Lovelace: bf16 and Flash Attention
-            2 both work. The one to pick for fine-tuning.
+            {{ demos_gpu_spec.gpus | default(1) }}x
+            {{ demos_gpu_spec.gpu | default('GPU') }} on
+            {{ demos_gpu_type | trim }}.
           opendatahub.io/disabled: "false"
           opendatahub.io/dashboard-feature-visibility: "[]"
       spec:
@@ -147,17 +160,18 @@
             displayName: GPU
             resourceType: Accelerator
             minCount: 1
-            maxCount: 1
+            maxCount: "{{ demos_gpu_spec.gpus | default(1) }}"
             defaultCount: 1
         scheduling:
           type: Node
           node:
             nodeSelector:
-              node.kubernetes.io/instance-type: g6e.4xlarge
+              node.kubernetes.io/instance-type: "{{ demos_gpu_type | trim }}"
             tolerations:
               - key: nvidia.com/gpu
                 operator: Exists
                 effect: NoSchedule
+  when: demos_gpu_present | bool
 
 # --- the volumes the workbenches keep their work on -----------------------
 # One each, mounted at /opt/app-root/src. They survive Actions -> Stop,
@@ -331,11 +345,8 @@
                 persistentVolumeClaim:
                   claimName: rag-eval-cpu-workbench
 
-# The GPU one. Pinned to the L40S (g6e.4xlarge), not a T4: the L40S has
-# 45 GiB and Ada Lovelace, so bf16 and Flash Attention 2 both work. The
-# T4s are Turing with 15 GiB - fp16 only, no FA2 - and most fine-tuning
-# recipes assume otherwise. Leaving the free T4 alone is deliberate: it
-# stays available for training Jobs and for serving.
+# The GPU one, pinned to whichever instance type this run provisions.
+# Skipped entirely when none does, rather than created and left Pending.
 - name: Create the GPU workbench
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -363,15 +374,17 @@
           # unauthenticated. Kept because removing it is not worth a pod
           # restart; do not rely on it for protection.
           notebooks.opendatahub.io/inject-oauth: "true"
-          opendatahub.io/hardware-profile-name: nvidia-l40s
+          opendatahub.io/hardware-profile-name: nvidia-gpu
           opendatahub.io/hardware-profile-namespace: "{{ demos_namespace }}"
       spec:
         template:
           spec:
-            # Without this the scheduler is free to place the workbench on
-            # a T4, which fits and is a much worse card for fine-tuning.
+            # The instance this run provisions, not a fixed model number.
+            # With no selector the scheduler may pick the worst card on a
+            # mixed cluster; with a hardcoded one the Pod lands on nothing
+            # at all unless that exact type is what was built.
             nodeSelector:
-              node.kubernetes.io/instance-type: g6e.4xlarge
+              node.kubernetes.io/instance-type: "{{ demos_gpu_type | trim }}"
             # Kept for portability, but inert here for the same reason as
             # on the hardware profiles above: the GPU MachineSets carry no
             # taints, so there is nothing to tolerate.
@@ -446,6 +459,8 @@
 
 # Said out loud because it is the one thing this file leaves running that
 # costs something, and an idle workbench looks free from the dashboard.
+  when: demos_gpu_present | bool
+
 - name: Report that the GPU workbench now holds a card
   ansible.builtin.debug:
     msg: >-
@@ -454,3 +469,4 @@
       -> Actions -> Stop when the accelerator is needed elsewhere; the
       volume and its contents survive. Set demos_workbenches=false to
       leave both workbenches out of the run entirely.
+  when: demos_gpu_present | bool
