@@ -1172,3 +1172,90 @@
       tags: [opensearch-dashboards]
   when: openrag_deploy_dashboards | bool
   tags: [opensearch-dashboards]
+
+# --- republish the AI asset endpoint -------------------------------------
+# The litellm role runs BEFORE this one, and has to: openrag points its
+# providers at LiteLLM, so LiteLLM must exist first. But the embedding model
+# LiteLLM fronts - bge-small-en-v1.5 - is served by the text-embeddings
+# Deployment THIS role creates. So when litellm published the AI asset
+# endpoint, /v1/embeddings could not answer for that model, and
+# ai_endpoints.yml dropped it rather than publish a guessed dimension.
+#
+# That drop is correct and should stay: llama-stack assumes 128 where
+# embedding_dimension is absent, and the first write to a vector store then
+# fails with "dimension 384, expected 128" four steps into an AutoRAG run.
+# Unpublished beats published-and-wrong.
+#
+# What was missing is this: once the model IS answering, publish again. Seen
+# on sandbox544, where the run printed
+#
+#   Not published as vector store embedding models, because .../v1/embeddings
+#   did not answer for them: bge-small-en-v1.5
+#
+# and RHOAI's Vector stores tab then showed Milvus with "Missing model"
+# against bge-small-en-v1.5 and Add to playground greyed out. The warning
+# fired exactly as intended; nothing acted on it.
+#
+# Placed at the end of this role rather than straight after the readiness
+# wait so the TEI server has had the rest of openrag to warm up - a ready
+# Deployment is not the same as a model loaded - and before the milvus role,
+# which registers the vector store that references this model.
+#
+# Re-running ai_endpoints.yml is safe and idempotent: it re-reads what
+# LiteLLM serves, re-measures every embedding model, and re-applies the
+# ConfigMap. litellm_master_key is a fact set by the litellm role, so no
+# credential is regenerated here.
+# The key is read from the cluster rather than inherited as a fact. With
+# --tags openrag the litellm role's tasks are skipped, so its set_fact never
+# runs - but its DEFAULTS are still in scope, and litellm_master_key
+# defaults to lookup('password'), which is "defined" and freshly random.
+# Guarding on `is defined` would therefore have published with a key that
+# 401s, dropping every model and overwriting the ConfigMap with nothing.
+# ai_endpoints.yml bootstraps itself from the cluster when its facts are
+# absent, but only if all three objects are there. Checked here rather than
+# inside it, so that file has no half-complete path to handle.
+- name: Check LiteLLM is published before republishing against it
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: "{{ item.api }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ item.ns }}"
+    name: "{{ item.name }}"
+  register: openrag_republish_probe
+  no_log: true
+  loop:
+    - {api: route.openshift.io/v1, kind: Route,  ns: "{{ litellm_namespace }}", name: litellm}
+    - {api: v1, kind: Secret, ns: "{{ litellm_namespace }}", name: litellm-proxy-credentials}
+    - {api: v1, kind: Secret, ns: "{{ model_namespace }}", name: "{{ litellm_ai_asset_key_secret }}"}
+  loop_control:
+    label: "{{ item.kind }}/{{ item.name }}"
+  tags: [litellm, ai-endpoints]
+
+- name: Note whether the endpoint can be republished
+  ansible.builtin.set_fact:
+    openrag_can_republish: >-
+      {{ openrag_republish_probe.results | default([])
+         | map(attribute='resources') | map('length') | select('==', 0)
+         | list | length == 0 }}
+  tags: [litellm, ai-endpoints]
+
+- name: Say why the AI asset endpoint is not being republished
+  ansible.builtin.debug:
+    msg: >-
+      LiteLLM's Route, credentials or virtual-key Secret is missing, so the
+      AI asset endpoint cannot be republished here and bge-small-en-v1.5
+      stays absent from RHOAI's model list. Run ./run.sh --tags litellm once
+      this role has finished.
+  when: not (openrag_can_republish | bool)
+  tags: [litellm, ai-endpoints]
+
+- name: Republish the AI asset endpoint now the embedding model answers
+  ansible.builtin.include_role:
+    name: litellm
+    tasks_from: ai_endpoints.yml
+    apply:
+      tags: [litellm, ai-endpoints]
+  when:
+    - litellm_publish_ai_assets | default(true) | bool
+    - openrag_can_republish | bool
+  tags: [litellm, ai-endpoints]

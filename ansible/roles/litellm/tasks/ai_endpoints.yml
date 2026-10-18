@@ -19,6 +19,92 @@
 # config.yaml. There is no label selector, which is why the name is built
 # rather than free-form.
 
+# --- running on our own ---------------------------------------------------
+# This file used to be reachable only as the tail of main.yml, which is why
+# it had no tag: it needs litellm_url, litellm_master_key, litellm_all_extras,
+# existing_vkey_secret and litellm_vkey_stale, and every one of those is a
+# fact set above it.
+#
+# It now has to run a second time, from the end of the openrag role, because
+# openrag is what deploys the text-embeddings service behind
+# bge-small-en-v1.5 - so at the point main.yml published, that model could
+# not answer /v1/embeddings and was dropped rather than published with a
+# guessed dimension. Everything it needs exists on the cluster by then; it
+# just was not in this process's facts.
+#
+# So: when the facts are absent, read them. Keyed off litellm_vkey_stale,
+# which only main.yml sets. Nothing here runs in the normal in-role path.
+- name: Find LiteLLM, running standalone
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ litellm_namespace }}"
+    name: litellm
+  register: litellm_standalone_route
+  when: litellm_vkey_stale is not defined
+
+- name: Read LiteLLM's credentials, running standalone
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ litellm_namespace }}"
+    name: litellm-proxy-credentials
+  register: litellm_standalone_cred
+  no_log: true
+  when: litellm_vkey_stale is not defined
+
+# The virtual key the ConfigMap points RHOAI at. Never regenerated here -
+# a republish that rotated the key would break every endpoint already
+# using it - so this reads the Secret main.yml wrote and nothing else.
+- name: Read the published virtual key, running standalone
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: "{{ litellm_ai_asset_key_secret }}"
+  register: litellm_standalone_vkey
+  no_log: true
+  when: litellm_vkey_stale is not defined
+
+- name: Stand in for the facts main.yml would have set
+  ansible.builtin.set_fact:
+    litellm_url: >-
+      https://{{ (litellm_standalone_route.resources | first).spec.host }}
+    litellm_master_key: >-
+      {{ (litellm_standalone_cred.resources | first).data.LITELLM_MASTER_KEY | b64decode }}
+    existing_vkey_secret: "{{ litellm_standalone_vkey }}"
+    litellm_all_extras: >-
+      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+         | unique(attribute='name') | list }}
+    # Only used below to work out which endpoints opted OUT of publishing,
+    # and an endpoint opts out whether or not its key happens to be usable -
+    # so the full list is the right stand-in for main.yml's filtered one.
+    # Note the consequence of running this from a host whose all.yml does
+    # not carry the endpoints: the list is empty, nothing is treated as
+    # opted out, and an endpoint marked publish_as_ai_asset false would be
+    # published anyway. Supply the same vars file you deploy with.
+    litellm_usable_extras: >-
+      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+         | unique(attribute='name') | list }}
+    # false means "use the key already on the cluster", which is the only
+    # correct answer when this file is not the one that minted it.
+    litellm_vkey_stale: false
+  no_log: true
+  when:
+    - litellm_vkey_stale is not defined
+    - litellm_standalone_route.resources | default([]) | length > 0
+    - litellm_standalone_cred.resources | default([]) | length > 0
+    - litellm_standalone_vkey.resources | default([]) | length > 0
+
+# No fallback branch here on purpose. end_play would have aborted milvus,
+# demos, verify and summary along with the republish, and a guard variable
+# threaded through fifteen tasks is worse than the bug. The caller checks
+# that all three objects exist before including this file, so the bootstrap
+# above cannot half-complete.
+
 # Either the key this run generated or the one already on the cluster - the
 # virtual key aliased openshift-ai. Both branches are set up by the
 # virtual-key tasks in main.yml immediately above.
