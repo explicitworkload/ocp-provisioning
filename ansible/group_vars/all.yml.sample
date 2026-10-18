@@ -100,7 +100,15 @@ deploy_milvus: true
 # --- Omnigent --------------------------------------------------------------
 deploy_omnigent: true
 omnigent_sandboxes: true
-omnigent_version: v0.1.1
+omnigent_version: v0.18.0
+# kubernetes | openshell. openshell adds kernel-level confinement but is
+# untested here and needs deploy_openshell and OpenShift 4.19+.
+omnigent_sandbox_provider: kubernetes
+
+# --- OpenShell -------------------------------------------------------------
+# Only used when omnigent_sandbox_provider is openshell. Off because no part
+# of it has been run against a cluster yet.
+deploy_openshell: false
 
 # ===========================================================================
 # OPTIONAL - nothing below here is necessary.

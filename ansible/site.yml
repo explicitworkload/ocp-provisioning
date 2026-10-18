@@ -421,6 +421,17 @@
     # After litellm, whose master key it reads off the cluster to give its
     # agents a model gateway. Nothing else depends on omnigent, so it sits
     # here rather than earlier - a failure costs the roles after it nothing.
+    # Before omnigent, and only for the openshell sandbox provider: the
+    # gateway and the Sandbox CRD have to exist before the omnigent server
+    # starts, or its first sandbox launch finds no gateway to resolve.
+    # Gated on the provider as well as the flag, because deploying a
+    # gateway nothing then uses is just a StatefulSet nobody asked for.
+    - role: openshell
+      tags: [openshell, agents]
+      when:
+        - deploy_openshell | default(false) | bool
+        - (omnigent_sandbox_provider | default('kubernetes')) == 'openshell'
+
     - role: omnigent
       tags: [omnigent, agents]
       when: deploy_omnigent | default(false) | bool

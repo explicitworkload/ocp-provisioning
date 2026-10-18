@@ -39,12 +39,33 @@
 # templates/sandbox-config.yaml.j2 about the resources block.
 omnigent_version: v0.18.0
 
-# The -kubernetes variant, not the plain server image. It is the same build
-# with the kubernetes client extra (OMNIGENT_EXTRAS=kubernetes) compiled in,
-# and the managed-sandbox provider cannot import its client without it - a
-# launch fails at runtime rather than at deploy. Harmless when sandboxes are
-# off, so there is no second image to choose between.
-omnigent_image: "ghcr.io/omnigent-ai/omnigent-server-kubernetes:{{ omnigent_version }}"
+# Which sandbox runtime agent sessions get. Two supported values, and the
+# image below follows this rather than being set separately.
+#
+#   kubernetes  Each session is a Pod in omnigent_sandbox_namespace. The
+#               boundary is Kubernetes RBAC and the namespace. This is the
+#               tested path.
+#   openshell   Each session runs under NVIDIA OpenShell, which adds
+#               Landlock on the filesystem, seccomp on syscalls and a
+#               deny-by-default egress proxy that brokers credentials so
+#               the agent holds placeholders rather than keys. Needs the
+#               openshell role to have run, and OpenShift 4.19+ for the
+#               Landlock backport. NOT YET TESTED - see that role.
+#
+# This is a first-party upstream provider, not something bolted on here:
+# omnigent/onboarding/sandboxes/openshell.py is 635 lines with an 849-line
+# test file, and upstream ships a kustomize overlay for it.
+omnigent_sandbox_provider: kubernetes
+
+# The build variant has to match the provider. Both are the same server
+# with a different extra compiled in - OMNIGENT_EXTRAS=kubernetes or
+# =openshell - and the provider cannot import its client without the right
+# one, so a mismatch fails at launch rather than at deploy. Both variants
+# publish the same version tags; v0.18.0 was confirmed present on each.
+omnigent_image_repo: >-
+  ghcr.io/omnigent-ai/omnigent-server-{{
+  'openshell' if omnigent_sandbox_provider == 'openshell' else 'kubernetes' }}
+omnigent_image: "{{ omnigent_image_repo | trim }}:{{ omnigent_version }}"
 
 omnigent_namespace: omnigent
 omnigent_sandbox_namespace: omnigent-sandboxes
@@ -100,7 +121,26 @@ omnigent_litellm_url: "http://litellm.{{ litellm_namespace | default('litellm') 
 # code it runs there is written by a model. The Role deliberately excludes
 # pods/exec, and the runner ServiceAccount is powerless.
 omnigent_sandboxes: true
-omnigent_sandbox_host_image: ""   # empty = upstream's official host image
+# The image an agent session runs in. Upstream's default is
+# ghcr.io/omnigent-ai/omnigent-host:latest, and :latest is how this repo has
+# already been bitten twice - so it is pinned to the server's own version,
+# which is published in step with it.
+#
+# Under the openshell provider this image must carry a non-root "sandbox"
+# user, iproute2 and nftables, or the supervisor cannot build the network
+# namespace. Upstream's own check:
+#   podman run --rm --entrypoint sh <image> -lc 'id sandbox && command -v ip && command -v nft'
+# Empty under the kubernetes provider, which leaves upstream's own default -
+# deliberately NOT pinned here, because changing what the tested path runs
+# is not something an untested openshell draft should do on its way in.
+#
+# Pinned under openshell, where the image is not interchangeable: it must
+# carry a non-root "sandbox" user, iproute2 and nftables or the supervisor
+# cannot build the network namespace. Upstream's check:
+#   podman run --rm --entrypoint sh <image> -lc 'id sandbox && command -v ip && command -v nft'
+omnigent_sandbox_host_image: >-
+  {{ ('ghcr.io/omnigent-ai/omnigent-host:' ~ omnigent_version)
+     if omnigent_sandbox_provider == 'openshell' else '' }}
 omnigent_sandbox_cpu_request: "500m"
 omnigent_sandbox_cpu_limit: "2"
 omnigent_sandbox_memory_request: 1Gi
@@ -116,3 +156,30 @@ omnigent_memory_limit: 1Gi
 # Comma-separated release features, all off by default upstream. Changing
 # this needs a Deployment restart - each pod reads one snapshot at startup.
 omnigent_features: ""
+
+# --- openshell provider ----------------------------------------------------
+# Only read when omnigent_sandbox_provider is openshell.
+
+# Server environment variable NAMES whose values are copied into each
+# sandbox at provision time. This is the only route by which a credential
+# reaches the agent, and upstream is clear that "a listed name that is not
+# set fails the launch loudly" - so everything here must actually exist in
+# the server's environment.
+#
+# LITELLM_API_KEY rather than ANTHROPIC_API_KEY and friends, because on this
+# cluster every model is reached through the LiteLLM gateway and there is no
+# vendor key to pass.
+#
+# OMNIGENT_RUNNER_ENV_PASSTHROUGH is not a credential and is not optional:
+# OpenShell forces egress through a proxy, and without forwarding the proxy
+# variables into the runner the agent ignores the proxy and every request
+# fails closed.
+omnigent_openshell_env:
+  - LITELLM_API_KEY
+  - OMNIGENT_RUNNER_ENV_PASSTHROUGH
+
+omnigent_runner_env_passthrough: "https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,NO_PROXY,no_proxy"
+
+# Empty resolves from the openshell role's gateway Service. Set to pin a
+# named gateway the SDK's from_active_cluster() should pick.
+omnigent_openshell_gateway: ""

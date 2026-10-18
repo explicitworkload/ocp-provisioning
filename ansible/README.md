@@ -31,6 +31,7 @@ else is reference.
     [Omnigent](#omnigent--on-by-default)
     ([Sandboxes](#sandboxes),
     [upstream changes](#three-upstream-things-this-role-changes)) ·
+    [OpenShell](#openshell--off-by-default-untested) ·
     [Demos](#demos--on-by-default)
   - Operations:
     [Operations Dashboard](#operations-dashboard) ·
@@ -669,6 +670,46 @@ credentials; "latest" on that is not a version, it is a surprise.
 The image is `omnigent-server-kubernetes`, not the plain `omnigent-server` —
 same build with the kubernetes client extra compiled in, which the sandbox
 provider needs to import its client. Harmless when sandboxes are off.
+
+### OpenShell — off by default, untested
+
+[NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) is a runtime that
+sandboxes AI agents with kernel-level policy: Landlock on the filesystem,
+seccomp on syscalls, and a deny-by-default egress proxy that brokers
+credentials so the agent holds placeholders rather than keys.
+
+It exists here for Omnigent, which supports it as a first-party sandbox
+provider — `sandbox.provider: openshell`, with a 635-line launcher and an
+849-line test file upstream. Set `omnigent_sandbox_provider: openshell` and
+`deploy_openshell: true` together; `site.yml` gates the role on both.
+
+What the role does, in order: installs the kubernetes-sigs Agent Sandbox
+controller and CRDs (pinned to v1.0.7, since that project ships weekly),
+creates the `openshell` namespace, renders a gateway-wide egress policy,
+and installs the gateway from `oci://ghcr.io/nvidia/openshell/helm-chart`.
+The Omnigent server then switches to the matching `-openshell` image build
+and gets `OPENSHELL_GATEWAY` pointed at the gateway Service.
+
+Two things worth knowing before you turn it on:
+
+**OpenShift 4.19 or later.** The RHCOS kernels in 4.16–4.18 are built
+without Landlock, so every sandbox fails its startup probe. The role reads
+`ClusterVersion` and refuses rather than letting that surface later as a
+Landlock error. It needs no `privileged` SCC and no added capability — the
+driver reads the namespace's `openshift.io/sa.scc.uid-range` and runs
+non-root under the restricted posture.
+
+**None of this has been run against a cluster.** It was written from
+upstream documentation and registry metadata while no cluster was
+available. Every version was checked to exist; nothing was observed
+working. `roles/openshell/tasks/main.yml` marks four `FIRST RUN` spots.
+The one most likely to bite: the egress policy is rendered into a
+ConfigMap but not mounted into the gateway, because upstream documents four
+policy sources without naming the Helm value for the gateway-wide one — so
+until that is wired, sandboxes fall back to OpenShell's built-in default
+policy, which is restrictive enough to block the Omnigent callback and
+LiteLLM. That looks like a broken model, not a blocked egress rule.
+
 
 ### Demos — on by default
 

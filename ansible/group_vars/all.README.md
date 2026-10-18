@@ -312,6 +312,55 @@ False keeps agents in the server pod and grants nothing.
 Pinned, and not to `latest`: this is v0.1.x software that runs LLM-authored
 code with real credentials.
 
+### `omnigent_sandbox_provider`
+
+Which runtime an agent session actually runs in. `kubernetes` or `openshell`.
+
+`kubernetes` is the tested path: each session is a Pod in
+`omnigent-sandboxes`, and the boundary is Kubernetes RBAC plus the
+namespace. Nothing confines what the agent does *inside* that Pod.
+
+`openshell` hands sessions to [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell),
+which adds Landlock on the filesystem, seccomp on syscalls, and a
+deny-by-default egress proxy that brokers credentials so the agent holds
+placeholders rather than keys. It is a first-party Omnigent provider, not
+something assembled here — upstream ships a 635-line launcher, an 849-line
+test file and a kustomize overlay for it — and it needs `deploy_openshell`
+as well, plus OpenShift 4.19 or later.
+
+**Untested.** It was written from upstream documentation with no cluster
+available; see `deploy_openshell`.
+
+---
+
+## OpenShell
+
+### `deploy_openshell`
+
+Deploy the NVIDIA OpenShell gateway and the Agent Sandbox controller, so
+`omnigent_sandbox_provider: openshell` has something to talk to. Only read
+when that provider is selected — a gateway nothing uses is a StatefulSet
+nobody asked for, so `site.yml` gates on both.
+
+**Nothing in this role has been run against a cluster.** Every version in
+it was checked to exist in its registry, but that is a long way from the
+gateway coming up and Omnigent reaching it. Four things are marked
+`FIRST RUN` in `roles/openshell/tasks/main.yml` as the most likely to need
+work; the biggest is that the sandbox egress policy is rendered into a
+ConfigMap but not yet mounted into the gateway, because upstream documents
+four policy sources without naming the Helm value that supplies the first.
+Until that is wired, sandboxes get OpenShell's built-in default policy,
+which is restrictive enough to block the Omnigent callback and LiteLLM.
+
+Requires OpenShift 4.19+. The RHCOS kernels in 4.16 through 4.18 are built
+without Landlock, so every sandbox fails its startup probe; the role checks
+the cluster version and refuses rather than letting that happen later.
+
+The gateway needs no `privileged` SCC and no added Linux capability —
+its driver reads the namespace's `openshift.io/sa.scc.uid-range` and runs
+non-root under the restricted posture, which is unusual enough for a
+kernel-level sandbox to be worth saying.
+
 ---
 
 # Optional

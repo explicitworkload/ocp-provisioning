@@ -1,0 +1,217 @@
+---
+# NVIDIA OpenShell gateway, for the omnigent role to use as its sandbox
+# provider. See defaults/main.yml for what this is and why.
+#
+# UNTESTED. Written from upstream docs with no cluster available. The four
+# places most likely to need work on the first real run are marked
+# "FIRST RUN" below.
+
+# A backstop; site.yml's pre_tasks demand helm before the run touches the
+# cluster. Same pair as the openrag and milvus roles.
+- name: Look for the helm CLI
+  ansible.builtin.command:
+    cmd: helm version --short
+  register: openshell_helm
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require the helm CLI
+  ansible.builtin.assert:
+    that: openshell_helm.rc | default(1) == 0
+    fail_msg: >-
+      The openshell role needs the helm CLI on this host and it is not on
+      PATH. The gateway is published only as an OCI Helm chart. The openrag
+      and milvus roles need helm too.
+      On a RHEL control host: "sudo curl -fsSL -o /usr/local/bin/helm
+      https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/helm/latest/helm-linux-amd64
+      && sudo chmod +x /usr/local/bin/helm".
+      On macOS, "brew install helm".
+    quiet: true
+
+# Landlock is the whole point, and RHCOS only carries it from 4.19. Checked
+# here rather than discovered when sandboxes fail their probe one role
+# later, with an error that names Landlock and not the cluster version.
+- name: Read the cluster version
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: openshell_cv
+
+- name: Require OpenShift 4.19 or later
+  ansible.builtin.assert:
+    that:
+      - openshell_ocp_version is version('4.19', '>=')
+    fail_msg: >-
+      OpenShell needs OpenShift 4.19 or later and this cluster is
+      {{ openshell_ocp_version }}. The RHCOS kernels in 4.16 through 4.18
+      (RHEL 9.4, 5.14.0-427) are built without Landlock, so every sandbox
+      fails its Landlock probe at startup and nothing runs. There is no
+      degraded mode worth having here - the kernel feature is the product.
+      Set deploy_openshell=false and leave omnigent on its kubernetes
+      sandbox provider.
+    quiet: true
+  vars:
+    openshell_ocp_version: >-
+      {{ (openshell_cv.resources | first).status.desired.version
+         | default('0.0') | regex_search('^[0-9]+\.[0-9]+') }}
+
+# The Sandbox CRD and controller, before the gateway. OpenShell's Kubernetes
+# driver creates agents.x-k8s.io/v1beta1 Sandbox objects; without the
+# controller they are accepted and never reconciled, which looks like a
+# hung gateway rather than a missing dependency.
+- name: Install the Agent Sandbox controller and CRDs
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    src: "{{ openshell_sandbox_crd_url }}"
+  register: openshell_crd
+
+# FIRST RUN: the manifest is applied straight from a GitHub release URL.
+# kubernetes.core.k8s takes a URL for src, but on a disconnected bastion it
+# will not, and the air-gap direction this repo is heading means that is a
+# real case. If it fails here, download sandbox.yaml and apply it from a
+# path instead.
+- name: Wait for the Sandbox CRD to be established
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: sandboxes.agents.x-k8s.io
+  register: openshell_crd_ready
+  until: >-
+    (openshell_crd_ready.resources | default([]) | length > 0) and
+    ((openshell_crd_ready.resources | first).status.conditions | default([])
+     | selectattr('type', 'equalto', 'Established')
+     | selectattr('status', 'equalto', 'True') | list | length > 0)
+  retries: 20
+  delay: 6
+
+- name: Create the OpenShell namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ openshell_namespace }}"
+
+# Refuse to publish a gateway nobody has to authenticate to. OpenShell's own
+# docs: "allow_unauthenticated_users = true and --disable-tls are local
+# development conveniences. Don't expose such a gateway on a network."
+- name: Refuse to expose the gateway without an OIDC issuer
+  ansible.builtin.assert:
+    that: openshell_oidc_issuer | default('') | length > 0
+    fail_msg: >-
+      openshell_expose_route is true but openshell_oidc_issuer is empty.
+      The gateway signs sandbox credentials and holds provider keys; a
+      Route in front of it with no identity check publishes all of that.
+      Either set an OIDC issuer, or leave the Route off - omnigent reaches
+      the gateway over the Service and needs no Route at all.
+    quiet: true
+  when: openshell_expose_route | bool
+
+# FIRST RUN: the policy is written as a ConfigMap and is NOT yet wired into
+# the chart. Upstream documents four policy sources - a gateway-wide global
+# policy, a saved policy chosen at creation, one embedded in the sandbox
+# image, and OpenShell's own restrictive default - but not which Helm value
+# mounts the first of them, and guessing a value name would either be
+# silently ignored or fail the install.
+#
+# So: the policy is rendered and parked here, where it is reviewable and
+# where the next step is one --set away. Until it is wired, sandboxes get
+# OpenShell's built-in default policy, which is restrictive - and therefore
+# very likely to block the omnigent callback and LiteLLM, which is the
+# first thing to look at if agents start and immediately cannot reach a
+# model.
+#
+#   helm show values {{ openshell_chart_ref }} --version {{ openshell_chart_version }}
+#
+# and look for a policy/gatewayConfig key, then add the --set below.
+- name: Render the gateway-wide sandbox policy
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openshell-base-policy
+        namespace: "{{ openshell_namespace }}"
+        annotations:
+          openshell.local/status: >-
+            Rendered by the openshell role. Not yet mounted into the gateway -
+            see the FIRST RUN note in roles/openshell/tasks/main.yml.
+      data:
+        policy.yaml: "{{ lookup('template', 'policy.yaml.j2') }}"
+
+# FIRST RUN: the chart's values schema moved at v2 - "chart schema v2
+# replaces app-specific values with a single non-secret gatewayConfig map" -
+# so if --set keys below are rejected, check the chart README for the
+# version actually being installed:
+#   helm show values oci://ghcr.io/nvidia/openshell/helm-chart --version X
+#
+# The two securityContext nulls are from upstream's own OpenShift
+# instructions: the chart's defaults pin a uid and fsGroup, and OpenShift's
+# namespace allocator wants to assign them from the namespace's range.
+- name: Install the OpenShell gateway chart
+  ansible.builtin.command:
+    cmd: >-
+      helm upgrade --install openshell {{ openshell_chart_ref }}
+      --version {{ openshell_chart_version }}
+      --namespace {{ openshell_namespace }}
+      {{ ocp_context_arg }}
+      --set podSecurityContext.fsGroup=null
+      --set securityContext.runAsUser=null
+      {% if openshell_oidc_issuer | length > 0 %}
+      --set server.oidc.issuer={{ openshell_oidc_issuer | quote }}
+      --set server.oidc.audience={{ openshell_oidc_audience | quote }}
+      {% endif %}
+      --wait --timeout 10m
+  register: openshell_install
+  changed_when: "'STATUS: deployed' in (openshell_install.stdout | default(''))"
+
+- name: Wait for the gateway to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: StatefulSet
+    namespace: "{{ openshell_namespace }}"
+    name: openshell
+  register: openshell_sts
+  until: >-
+    ((openshell_sts.resources | default([]) | first | default({})).status
+     | default({})).readyReplicas | default(0) | int > 0
+  retries: 30
+  delay: 10
+
+# FIRST RUN: this is the awkward one, and it is awkward upstream rather than
+# here. Omnigent resolves its gateway through the OpenShell SDK's
+# from_active_cluster(), which reads $OPENSHELL_GATEWAY or
+# ~/.config/openshell/active_gateway - CLI state, in a pod. Upstream is
+# explicit that "there is no base-URL or token knob in Omnigent - gateway
+# setup and auth are an OpenShell concern", so there is nothing to template
+# on the omnigent side.
+#
+# What this writes is the Service address for the omnigent role to export as
+# OPENSHELL_GATEWAY. If the SDK turns out to want a registered gateway
+# rather than a bare endpoint, this is where that work goes: most likely an
+# initContainer running "openshell gateway add" against a mounted config
+# volume.
+- name: Record the gateway endpoint for the omnigent role
+  ansible.builtin.set_fact:
+    openshell_gateway_endpoint: "openshell.{{ openshell_namespace }}.svc.cluster.local:8080"
+
+- name: Say where the gateway is
+  ansible.builtin.debug:
+    msg:
+      - "OpenShell gateway ready in {{ openshell_namespace }}."
+      - "endpoint: {{ openshell_gateway_endpoint }}"
+      - "policy:   ConfigMap/openshell-base-policy, {{ (openshell_egress_allow + openshell_egress_extra) | length }} egress rules"
+      - "Set omnigent_sandbox_provider=openshell to have omnigent use it."

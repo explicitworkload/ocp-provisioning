@@ -24,6 +24,7 @@ summary_links:
   - {label: "NooBaa console",    ns: openshift-storage,              match: "^noobaa-mgmt"}
   - {label: "Gatus",             ns: gatus,                          match: "^gatus\\."}
   - {label: "Omnigent",          ns: "{{ omnigent_namespace | default('omnigent') }}", match: "^omnigent-"}
+  - {label: "OpenShell gateway", ns: "{{ openshell_namespace | default('openshell') }}", match: "^openshell"}
   - {label: "MCP server",        ns: mcp-servers,                    match: "^openshift-mcp-server"}
   - {label: "OpenSearch Dashboards", ns: "{{ openrag_opensearch_namespace | default('opensearch') }}", match: "^opensearch-dashboards"}
   - {label: "Attu (Milvus UI)",  ns: "{{ milvus_attu_namespace | default('milvus-attu') }}", match: "^attu"}

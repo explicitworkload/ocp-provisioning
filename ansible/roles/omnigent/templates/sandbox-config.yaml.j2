@@ -8,7 +8,7 @@
   OpenShift login the runner does not have.
 -#}
 sandbox:
-  provider: kubernetes
+  provider: {{ omnigent_sandbox_provider }}
   server_url: http://omnigent.{{ omnigent_namespace }}.svc.cluster.local
 {% if omnigent_use_litellm | bool %}
   # Verbatim ~/.omnigent/config.yaml for the agent inside the sandbox,
@@ -28,6 +28,30 @@ sandbox:
           api_key_ref: env:LITELLM_API_KEY
           wire_api: chat
 {% endif %}
+{% if omnigent_sandbox_provider == 'openshell' %}
+  {# The openshell provider takes none of the kubernetes block: OpenShell's
+     own driver owns sandbox creation, down to the namespace and the pod's
+     security context, which it derives from the namespace's
+     openshift.io/sa.scc.uid-range annotation. Setting namespace or
+     resources here would be setting them for a provider that is not
+     running.
+
+     env is SERVER variable NAMES, not values - the server reads its own
+     environment at provision time and copies them in. A name listed and
+     not set fails the launch loudly, which is the behaviour you want for
+     a credential. -#}
+  openshell:
+    env:
+{% for e in omnigent_openshell_env %}
+      - {{ e }}
+{% endfor %}
+{% if omnigent_openshell_gateway | length > 0 %}
+    cluster: {{ omnigent_openshell_gateway }}
+{% endif %}
+{% if omnigent_sandbox_host_image | length > 0 %}
+    image: {{ omnigent_sandbox_host_image }}
+{% endif %}
+{% else %}
   kubernetes:
     namespace: {{ omnigent_sandbox_namespace }}
     secret_name: omnigent-creds
@@ -51,3 +75,4 @@ sandbox:
       limits:
         cpu: "{{ omnigent_sandbox_cpu_limit }}"
         memory: "{{ omnigent_sandbox_memory_limit }}"
+{% endif %}

@@ -200,8 +200,26 @@
         - configMapRef: {name: omnigent-config}
         - secretRef: {name: omnigent-secrets}
         - secretRef: {name: omnigent-creds, optional: true}
-      env: "{{ [{'name': 'OMNIGENT_CONFIG', 'value': '/etc/omnigent/config.yaml'}]
-               if omnigent_sandboxes | bool else [] }}"
+      # OMNIGENT_CONFIG whenever sandboxes are on, plus two more under the
+      # openshell provider.
+      #
+      # OPENSHELL_GATEWAY is how the server finds its gateway at all: the
+      # SDK's from_active_cluster() reads it, or falls back to CLI state in
+      # ~/.config/openshell/active_gateway, and upstream is explicit that
+      # "there is no base-URL or token knob in Omnigent". The env var is the
+      # only one of the two a Deployment can set.
+      #
+      # OMNIGENT_RUNNER_ENV_PASSTHROUGH is listed in the sandbox config's
+      # env: list, and upstream fails the launch loudly for a listed name
+      # that is not set - so it has to exist here, not just be named there.
+      env: "{{ ([{'name': 'OMNIGENT_CONFIG', 'value': '/etc/omnigent/config.yaml'}]
+                if omnigent_sandboxes | bool else [])
+               + ([{'name': 'OPENSHELL_GATEWAY',
+                    'value': omnigent_openshell_gateway
+                             | default(openshell_gateway_endpoint | default('') , true) | trim},
+                   {'name': 'OMNIGENT_RUNNER_ENV_PASSTHROUGH',
+                    'value': omnigent_runner_env_passthrough}]
+                  if omnigent_sandbox_provider == 'openshell' else []) }}"
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

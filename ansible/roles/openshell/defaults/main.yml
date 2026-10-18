@@ -1,0 +1,99 @@
+---
+# NVIDIA OpenShell - a runtime that sandboxes AI agents with kernel-level
+# policy: Landlock for the filesystem, seccomp for syscalls, and a
+# deny-by-default egress proxy that brokers credentials so the agent holds
+# placeholders rather than keys.
+#
+# This role exists for the omnigent role, which supports OpenShell as a
+# first-party sandbox provider - sandbox.provider: openshell, a 635-line
+# launcher and an 849-line test file upstream. It is not a thing this repo
+# invented; see roles/omnigent/defaults/main.yml for the other half.
+#
+#   !! NOTHING IN THIS ROLE HAS BEEN RUN AGAINST A CLUSTER. !!
+#
+# It was written from upstream documentation and registry metadata while no
+# cluster was available. Every version below was checked to exist, but
+# "the image exists" is a long way from "the gateway comes up and omnigent
+# can reach it". Expect to debug this the first time. The things most
+# likely to be wrong are called out in tasks/main.yml.
+
+# --- versions --------------------------------------------------------------
+# The Helm chart, from the OCI registry rather than a chart repo:
+#   helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart
+# 0.0.42 is the newest real tag; the registry also carries a long tail of
+# 0.0.0-dev.<sha> builds, which are not releases.
+openshell_chart_ref: "oci://ghcr.io/nvidia/openshell/helm-chart"
+openshell_chart_version: "0.0.42"
+
+# The kubernetes-sigs Agent Sandbox controller, which OpenShell's Kubernetes
+# driver builds on. It owns the Sandbox CRD (sandboxes.agents.x-k8s.io,
+# v1beta1) and must be installed BEFORE the gateway, or the gateway comes up
+# with nothing to create sandboxes with.
+#
+# Pinned, not latest: v1.0.7 was released 2026-10-15 and the project is
+# shipping weekly, so an unpinned apply would move under you between runs.
+openshell_sandbox_crd_version: "v1.0.7"
+openshell_sandbox_crd_url: >-
+  https://github.com/kubernetes-sigs/agent-sandbox/releases/download/{{
+  openshell_sandbox_crd_version }}/sandbox.yaml
+
+# --- placement -------------------------------------------------------------
+openshell_namespace: openshell
+
+# --- exposure --------------------------------------------------------------
+# The gateway speaks gRPC, not HTTP, which is why this is a passthrough Route
+# and not the ordinary edge-terminated one the rest of this repo uses. An
+# edge Route would terminate TLS and re-encode, and gRPC does not survive it.
+#
+# false keeps the gateway cluster-internal, which is all omnigent needs -
+# the server talks to it over the Service. Turn it on only to drive sandboxes
+# from the openshell CLI on your laptop.
+openshell_expose_route: false
+openshell_route_host: ""   # empty derives <name>-<ns>.<apps-domain>
+
+# OpenShell's own docs are blunt that the quickstart posture is not for a
+# network: "allow_unauthenticated_users = true and --disable-tls are local
+# development conveniences. Don't expose such a gateway on a network."
+# So TLS stays on, and exposing the Route without an OIDC issuer below is
+# refused by tasks/main.yml rather than quietly published.
+openshell_oidc_issuer: ""
+openshell_oidc_audience: "openshell-cli"
+
+# --- the sandbox egress policy ---------------------------------------------
+# OpenShell is deny-by-default: every sandbox gets its own network namespace
+# and all egress is forced through the supervisor's policy proxy. Anything
+# not listed here is a 403 inside the sandbox, including the agent's own
+# callback to the omnigent server.
+#
+# These two entries are not optional extras, they are what makes the thing
+# work at all:
+#
+#   - the omnigent server, which the runner dials back to over a WebSocket.
+#     Listed by in-cluster Service DNS because that is what the omnigent
+#     role sets as server_url.
+#   - LiteLLM, which is where every model request goes. Without it the agent
+#     starts and then cannot reach a model, which reads like a model problem
+#     rather than a policy one.
+#
+# Add a host here rather than widening the policy: a sandbox that can reach
+# the whole cluster is the thing this role exists to prevent.
+openshell_egress_allow:
+  - name: omnigent-server
+    hostname: "omnigent.{{ omnigent_namespace | default('omnigent') }}.svc.cluster.local"
+    port: 80
+  - name: litellm
+    hostname: "litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local"
+    port: 4000
+
+# Extra destinations for the agents themselves - a git forge, a package
+# registry, a docs site. Same shape as the entries above.
+#
+# Deliberately empty. An agent that can reach github.com can also push to it,
+# and the code it is pushing was written by a model.
+openshell_egress_extra: []
+
+# Fail the sandbox rather than run it unconfined when the kernel cannot do
+# Landlock. This is the whole point of the role, so it defaults to strict -
+# a sandbox that silently ran without enforcement would be worse than no
+# sandbox, because the summary would still say "openshell".
+openshell_require_landlock: true
