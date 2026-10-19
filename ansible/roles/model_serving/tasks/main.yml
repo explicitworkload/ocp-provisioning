@@ -550,8 +550,24 @@
             - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
-          nodeSelector:
-            node-role.kubernetes.io/gpu: ""
+          # The gpu role label alone was ambiguous as soon as a run
+          # provisioned two GPU types: it let the model land on the node the
+          # workbench pins to, leaving the workbench Pending against a
+          # cluster with a free card. Adding the instance type makes the
+          # split deterministic. See gpu_serving_instance_type in
+          # roles/gpu_worker/defaults for how the type is chosen.
+          #
+          # Still just the role label when there is one GPU type (the two
+          # selectors would be the same statement) or when the type is
+          # unknown - a --tags model_serving run against a cluster whose
+          # GPU nodes this play did not create must not pin to a type that
+          # cluster does not have.
+          nodeSelector: >-
+            {{ {'node-role.kubernetes.io/gpu': ''}
+               | combine({'node.kubernetes.io/instance-type': model_gpu_instance_type | trim}
+                         if (model_gpu_instance_type | default('') | trim | length) > 0
+                         and (gpu_types_ranked | default([]) | length) > 1
+                         else {}) }}
 
 - name: Wait for InferenceService to be ready
   kubernetes.core.k8s_info:

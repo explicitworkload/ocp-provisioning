@@ -269,3 +269,14 @@ hf_token: ""
 model_hf_token: >-
   {{ hf_token if (hf_token | default('') | length > 0)
      else (lookup('env', 'HF_TOKEN') | default('', true)) }}
+
+# Which GPU node the served model pins to, when the run provisioned more
+# than one GPU instance type. Empty here means "take the biggest card the
+# run built", which is what gpu_serving_instance_type works out - see
+# roles/gpu_worker/defaults/main.yml for the ranking and for why the
+# workbench deliberately gets the other end of it.
+#
+# Set this to an instance type to override. With one GPU type the value is
+# ignored: there is nothing to disambiguate, and pinning would only add a
+# way for the selector to be wrong.
+model_gpu_instance_type: "{{ gpu_serving_instance_type | default('') }}"

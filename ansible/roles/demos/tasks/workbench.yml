@@ -26,11 +26,23 @@
 # gpu_instance_specs comes from roles/gpu_worker/defaults; role defaults are
 # visible to later roles in the same play - verified, not assumed. Defaulted
 # anyway so --tags demos on its own cannot fail here.
-- name: Work out which GPU instance this run provisions
+# Two corrections to the first version of this, both of which only show
+# up on a cluster with more than one GPU type:
+#
+#   gpu_machinesets is what was ASKED for. After a capacity fallback the
+#   cluster has a different type, and pinning to the requested one leaves
+#   the workbench Pending against a node that was never created.
+#   gpu_types_effective is what was built.
+#
+#   "first non-zero entry" is a position in a list, and position is not
+#   something the user meant to say. gpu_workbench_instance_type ranks by
+#   capacity and hands the workbench the SMALLEST card, leaving the
+#   biggest for the served model, which is the one that can need four of
+#   them. With a single GPU type the two are the same type and this is
+#   exactly the previous behaviour.
+- name: Work out which GPU instance the workbench runs on
   ansible.builtin.set_fact:
-    demos_gpu_type: >-
-      {{ gpu_machinesets | default([]) | selectattr('replicas', '>', 0)
-         | map(attribute='instance_type') | first | default('') }}
+    demos_gpu_type: "{{ gpu_workbench_instance_type | default('') }}"
 
 - name: Look up what that instance carries
   ansible.builtin.set_fact:

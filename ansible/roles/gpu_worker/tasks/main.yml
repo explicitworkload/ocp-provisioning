@@ -382,6 +382,32 @@
   # all, which is a supported setting rather than a mistake.
   when: gpu_provisioned | default(false) | bool
 
+# Without this the split is invisible until someone wonders why a pod is
+# Pending. It prints on every GPU run, including the one-type case, because
+# "they share, and first one scheduled wins" is the thing people are
+# surprised by later.
+- name: Report that the model and the workbench get separate GPU nodes
+  ansible.builtin.debug:
+    msg: >-
+      Two GPU types provisioned, so the two things that want a card are
+      pinned apart: the served model to {{ gpu_serving_instance_type | trim }},
+      the GPU workbench to {{ gpu_workbench_instance_type | trim }}.
+  when:
+    - gpu_provisioned | default(false) | bool
+    - (gpu_types_ranked | length) > 1
+
+- name: Report that the model and the workbench share one GPU node
+  ansible.builtin.debug:
+    msg: >-
+      One GPU type ({{ gpu_serving_instance_type | trim }}), so the served
+      model and the GPU workbench contend for it. On a single card whichever
+      is scheduled first gets it and the other stays Pending - that is the
+      long-standing behaviour, not a fault. Raise a second gpu_machinesets
+      entry to 1 replica to give the workbench a card of its own.
+  when:
+    - gpu_provisioned | default(false) | bool
+    - (gpu_types_ranked | length) <= 1
+
 - name: Report that no GPU was asked for
   ansible.builtin.debug:
     msg: >-

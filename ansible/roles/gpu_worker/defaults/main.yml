@@ -121,8 +121,13 @@ gpu_machinesets:
 # gpu_memory_gb is PER GPU, so a tensor-parallel model's budget is
 # gpu_count x gpu_memory_gb and the maths stays honest for multi-GPU.
 #
-# Only used for reporting - it never changes what is deployed. An instance
-# missing from this table is reported as unknown rather than assumed to fit.
+# This WAS reporting-only. It is not any more: gpu_serving_instance_type
+# and gpu_workbench_instance_type at the bottom of this file rank the
+# provisioned types by the gpus/gpu_memory_gb columns to decide which node
+# the served model pins to and which the GPU workbench pins to. An instance
+# missing from this table ranks as 1 GPU / 0 GB rather than failing, which
+# is the safe way to be wrong - it sorts to the workbench end, so an
+# unknown type never displaces a known one from the serving node.
 #
 # gpu_memory_gb is the VENDOR figure in GB, not the GiB number AWS prints.
 # site.yml converts (x 0.9313) and then takes vLLM's default 0.9 of the
@@ -165,3 +170,86 @@ gpu_instance_specs:
 # the slowest termination seen and costs nothing when it is quick.
 gpu_az_drain_retries: 20
 gpu_az_drain_delay: 15
+
+# --- who gets which GPU node ------------------------------------------------
+# Two things on this cluster want a GPU and neither can share one: the
+# served model (roles/model_serving) and the GPU workbench
+# (roles/demos/tasks/workbench.yml). A GPU is not divisible here - no MIG,
+# no time-slicing - so a node with one card satisfies exactly one of them.
+#
+# That was previously left to the scheduler, and the scheduler cannot win
+# it. The model asked for "any node labelled gpu" while the workbench
+# pinned to an instance TYPE, so with two single-GPU nodes the outcome
+# depended on which pod was scheduled first: land the model on the
+# workbench's type and the workbench sits Pending for ever against a
+# cluster that does, in fact, have a spare card. A coin flip that only
+# shows up once someone asks for two GPU types.
+#
+# So both ends are pinned, and to different types. Ranked by capacity
+# rather than by position in gpu_machinesets, because position is not
+# information the user meant to supply - someone listing
+# g6e.4xlarge before g6e.12xlarge is not asking for the 4-GPU preset to
+# run on the one-card node, and sorting by capacity means they cannot
+# accidentally say that.
+
+# What was actually built, which after a fallback is NOT what was asked
+# for. gpu_types_provisioned is set by try_az.yml only once a zone has
+# worked; the default keeps this correct under --tags demos or --tags
+# model_serving, where gpu_worker never ran and the requested list is the
+# best available answer.
+gpu_types_effective: >-
+  {{ gpu_types_provisioned
+     | default(gpu_machinesets | default([])
+               | selectattr('replicas', '>', 0) | list, true) }}
+
+_gpu_rank_names: >-
+  {{ gpu_types_effective | map(attribute='instance_type') | map('trim') | list }}
+
+# gpu_instance_specs with an entry forced in for every type this run
+# actually uses, so the lookups below cannot miss.
+#
+# The fill is not defensive padding, it is required: map('extract') raises
+# on a key the dict does not have rather than returning undefined, so a
+# type absent from the table - a new AWS family, a typo in all.yml - would
+# abort the whole play on an attribute error rather than degrade. Measured,
+# not assumed; the first version of this did fail that way.
+#
+# recursive=true so a real entry overrides the placeholder key by key: a
+# table entry that happened to omit gpu_memory_gb keeps its gpus count and
+# borrows only the missing field.
+#
+# 1 card / 0 GB is the deliberate placeholder. It is the smallest thing the
+# sort can rank, so an unknown type lands at the workbench end and can
+# never displace a known card from the serving node.
+_gpu_rank_specs: >-
+  {{ dict(_gpu_rank_names | zip([{'gpus': 1, 'gpu_memory_gb': 0}] * (_gpu_rank_names | length)))
+     | combine(gpu_instance_specs | default({}), recursive=true) }}
+
+_gpu_rank_sizes: >-
+  {{ _gpu_rank_names | map('extract', _gpu_rank_specs, 'gpus') | map('int', 1) | list }}
+_gpu_rank_mem: >-
+  {{ _gpu_rank_names | map('extract', _gpu_rank_specs, 'gpu_memory_gb') | map('int', 0) | list }}
+
+# [[gpus, gpu_memory_gb, name], ...] ascending. A list of lists sorts
+# element by element, so this is "by card count, then by card size, then
+# by name" - and the name tiebreak is only there to make the result
+# deterministic rather than because g7e beats g6e alphabetically.
+gpu_types_ranked: >-
+  {{ _gpu_rank_sizes | zip(_gpu_rank_mem, _gpu_rank_names) | map('list') | sort | list }}
+
+# The biggest card the run provisioned. The served model goes here: it is
+# the only one of the two that can need more than one GPU, and a 4-GPU
+# preset has exactly one node it can run on.
+gpu_serving_instance_type: >-
+  {{ (gpu_types_ranked | last | last) if (gpu_types_ranked | length) > 0 else '' }}
+
+# The smallest. The workbench goes here - interactive notebook work is
+# the thing that should yield the big card, not claim it.
+#
+# With a single entry in gpu_machinesets these two resolve to the SAME
+# type, which is the long-standing behaviour and still the default: one
+# GPU node, and whichever of the two is scheduled first takes the card.
+# Giving the workbench a card of its own means asking for a second type,
+# or a second replica of the one type.
+gpu_workbench_instance_type: >-
+  {{ (gpu_types_ranked | first | last) if (gpu_types_ranked | length) > 0 else '' }}

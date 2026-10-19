@@ -123,6 +123,40 @@ Capacity fallback — what happens when the requested type is unavailable in
 every zone — is configured in `roles/gpu_worker/defaults/main.yml`
 (`gpu_fallback_mode`, `gpu_instance_fallback`, `gpu_requested_rounds`).
 
+#### Asking for more than one type at once
+
+Two things on this cluster want a GPU and neither can share one: the served
+model and the GPU workbench. There is no MIG and no time-slicing here, so a
+node with one card satisfies exactly one of them. With the sample's single
+entry at `replicas: 1` that is the whole story — one card, and whichever of
+the two is scheduled first gets it.
+
+To give the workbench a card of its own, raise a **second** entry to
+`replicas: 1`. The run then pins the two deliberately:
+
+| | gets |
+|---|---|
+| served model | the type with the most GPUs, breaking ties on card memory |
+| GPU workbench | the type with the fewest |
+
+Ranked by capacity, not by position in the list, so the order you write the
+entries in does not change the outcome — listing `g6e.4xlarge` before
+`g6e.12xlarge` will not put a four-GPU preset on the one-card node. The
+ranking is `gpu_serving_instance_type` / `gpu_workbench_instance_type` in
+`roles/gpu_worker/defaults/main.yml`; override either end with
+`model_gpu_instance_type`.
+
+A second entry at `replicas: 2` of the *same* type works too, and separates
+on GPU count rather than on instance type.
+
+**This costs you capacity odds, and that is the real trade.** Every
+non-zero type is attempted *together in the same availability zone*, and a
+zone only counts as successful once **every** requested MachineSet has
+`readyReplicas`. Asking for two scarce types is therefore strictly worse
+odds than asking for one — one type short in a zone fails the whole zone and
+moves the run on to the next. If GPU capacity is already hard to come by on
+the account, take the single card and let the two contend for it.
+
 ---
 
 ## Model serving
