@@ -64,6 +64,19 @@ gpu_round_wait: 300
 # two roles later, with nothing pointing back here. Set this to [] to
 # disable fallback and fail on the requested type alone.
 gpu_instance_fallback:
+  # The 4-GPU alternatives come first, and they are the reason this list was
+  # revisited. Every entry used to be a 1-GPU type, so a 4-GPU preset like
+  # qwen3.8-27b had NOTHING that passed the fit check - the role swept three
+  # zones for g6e.12xlarge, found InsufficientInstanceCapacity in all of
+  # them, and failed outright rather than trying another 4-GPU type that was
+  # sitting in a different capacity pool. Seen on sandbox760.
+  #
+  # Weaker cards than the L40S - L4 and A10G are 24 GB against 48 - but four
+  # of either is 96 GB, which still holds qwen3.8-27b's 56 GB of weights.
+  # Both are 48 vCPU, the same as g6e.12xlarge, so neither changes the quota
+  # arithmetic.
+  - g6.12xlarge
+  - g5.12xlarge
   - g6.4xlarge
   - g5.4xlarge
   - g4dn.4xlarge

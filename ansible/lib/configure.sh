@@ -810,6 +810,8 @@ ask_gpu() {
   echo "     1) g4dn.4xlarge   1 x T4         16 GB    4 vCPU" >&2
   echo "     2) g6e.4xlarge    1 x L40S       48 GB   16 vCPU" >&2
   echo "     3) g6e.12xlarge   4 x L40S      192 GB   48 vCPU" >&2
+  echo "    11) g6.12xlarge    4 x L4         96 GB   48 vCPU" >&2
+  echo "    12) g5.12xlarge    4 x A10G       96 GB   48 vCPU" >&2
   echo "     4) g7e.2xlarge    1 x RTX6000    96 GB    8 vCPU" >&2
   echo "     5) g7e.4xlarge    1 x RTX6000    96 GB   16 vCPU" >&2
   echo "     6) g7e.8xlarge    1 x RTX6000    96 GB   32 vCPU" >&2
@@ -820,12 +822,15 @@ ask_gpu() {
   echo "  4-6 are one Blackwell card each and differ only in CPU and host" >&2
   echo "  RAM; 96 GB on a single GPU often replaces four L40S at option 3." >&2
   echo "  g7e only adds cards at 12xlarge and above." >&2
+  echo "  11-12 are the other 4-GPU options: weaker cards than option 3 but" >&2
+  echo "  different capacity pools, which is what matters when L40S is out." >&2
   read -r -p "  choice [Enter to keep current]: " c || c=""
   case "$c" in
     1) printf 'g4dn.4xlarge' ;;  2) printf 'g6e.4xlarge' ;;  3) printf 'g6e.12xlarge' ;;
     4) printf 'g7e.2xlarge' ;;   5) printf 'g7e.4xlarge' ;;  6) printf 'g7e.8xlarge' ;;
     7) printf 'g7e.12xlarge' ;;  8) printf 'g7e.24xlarge' ;; 9) printf 'p4d.24xlarge' ;;
     10) printf 'p4de.24xlarge' ;;
+    11) printf 'g6.12xlarge' ;;  12) printf 'g5.12xlarge' ;;
     "") printf '' ;;
     *) echo "  not one of the choices - keeping the configured instances" >&2; printf '' ;;
   esac

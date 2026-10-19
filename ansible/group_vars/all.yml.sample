@@ -29,6 +29,10 @@ gpu_machinesets:
   replicas: 1
 - instance_type: g6e.12xlarge
   replicas: 0
+- instance_type: g6.12xlarge
+  replicas: 0
+- instance_type: g5.12xlarge
+  replicas: 0
 - instance_type: g7e.2xlarge
   replicas: 0
 - instance_type: g7e.4xlarge
