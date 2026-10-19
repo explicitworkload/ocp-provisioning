@@ -216,6 +216,57 @@
         label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
       when: not (gpu_zone_ok | bool)
 
+    # wait: true on the MachineSet waits for the MachineSet OBJECT to go,
+    # not for its Machines, and certainly not for AWS to terminate the
+    # instances. A terminating EC2 instance keeps counting against the
+    # account's per-bucket vCPU quota - so the next zone is attempted while
+    # the last one is still billed for, and on a large type that is
+    # instantly fatal:
+    #
+    #   You have requested more vCPU capacity than your current vCPU limit
+    #   of 64 allows for the instance bucket that the specified instance
+    #   type belongs to
+    #
+    # Seen on sandbox760 hunting a g7e.12xlarge: 48 vCPU each against a
+    # limit of 64, so two overlapping attempts are 96 and every zone after
+    # the first fails on QUOTA rather than capacity. The sweep was racing
+    # itself, and the error reads like the account is too small when the
+    # bucket was in fact empty.
+    #
+    # Not fatal on timeout: a Machine stuck Deleting is a cluster problem,
+    # and failing here would report it as a GPU problem.
+    - name: "{{ gpu_az_effective }}: wait for the instances to release their quota"
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: machine.openshift.io/v1beta1
+        kind: Machine
+        namespace: openshift-machine-api
+        label_selectors:
+          - "machine.openshift.io/cluster-api-machineset={{ cluster_infra_id }}-{{ item.instance_type }}-{{ gpu_az_effective }}"
+      register: gpu_az_drain
+      until: (gpu_az_drain.resources | default([]) | length) == 0
+      retries: "{{ gpu_az_drain_retries }}"
+      delay: "{{ gpu_az_drain_delay }}"
+      failed_when: false
+      loop: "{{ gpu_try_types }}"
+      loop_control:
+        label: "{{ item.instance_type }} in {{ gpu_az_effective }}"
+      when: not (gpu_zone_ok | bool)
+
+    - name: "{{ gpu_az_effective }}: say that the instances are still going"
+      ansible.builtin.debug:
+        msg: >-
+          Machines from this attempt are still terminating after
+          {{ (gpu_az_drain_retries | int) * (gpu_az_drain_delay | int) }}s.
+          The next zone is tried anyway, but if it fails on a vCPU quota
+          rather than on capacity, that is why - a terminating instance
+          still counts against the limit.
+      when:
+        - not (gpu_zone_ok | bool)
+        - (gpu_az_drain.results | default([])
+           | map(attribute='resources') | map('default', [], true)
+           | map('length') | select('>', 0) | list | length) > 0
+
     - name: "{{ gpu_az_effective }}: remember why, for the final message"
       ansible.builtin.set_fact:
         gpu_az_failures: >-

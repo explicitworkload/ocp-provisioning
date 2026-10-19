@@ -143,3 +143,12 @@ gpu_instance_specs:
   g7e.24xlarge:  {gpus: 4, gpu_memory_gb: 96,  gpu: "RTX PRO 6000 Blackwell"}
   p4d.24xlarge:  {gpus: 8, gpu_memory_gb: 40,  gpu: "A100 40GB"}
   p4de.24xlarge: {gpus: 8, gpu_memory_gb: 80,  gpu: "A100 80GB"}
+
+# How long to wait for a failed zone's instances to actually terminate
+# before trying the next zone. Not politeness: a terminating EC2 instance
+# still counts against the account's per-bucket vCPU quota, so on a large
+# type two overlapping attempts exceed it and every zone after the first
+# fails on quota instead of capacity. 20 x 15s = 5 minutes, which is past
+# the slowest termination seen and costs nothing when it is quick.
+gpu_az_drain_retries: 20
+gpu_az_drain_delay: 15
