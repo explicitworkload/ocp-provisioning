@@ -1,0 +1,373 @@
+---
+# Correct the Gen AI playground's llama-stack config. See defaults/main.yml
+# for the five faults this exists to fix and where each one was observed.
+
+# The OGXServer is created on demand, the first time somebody opens Gen AI
+# studio in the dashboard - not by this playbook and not by RHOAI's install.
+# So on a freshly built cluster there is usually nothing here yet, and that
+# is not an error: it is the normal state until the studio is visited.
+- name: Look for the Gen AI playground server
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: "{{ genai_playground_api_version }}"
+    kind: OGXServer
+    namespace: "{{ genai_playground_namespace }}"
+    name: "{{ genai_playground_ogxserver }}"
+  register: genai_ogx
+  failed_when: false
+
+- name: Note whether there is a playground to correct
+  ansible.builtin.set_fact:
+    genai_playground_present: "{{ (genai_ogx.resources | default([]) | length) > 0 }}"
+
+- name: Explain that the playground has not been created yet
+  ansible.builtin.debug:
+    msg: >-
+      No OGXServer/{{ genai_playground_ogxserver }} in
+      {{ genai_playground_namespace }}. RHOAI creates it the first time
+      someone opens Gen AI studio, so there is nothing to correct yet.
+      Open the studio and re-run with --tags genai-playground, or just
+      re-run this playbook afterwards. Until then the playground will use
+      whatever the Gen AI BFF generates, which on a cluster with a LiteLLM
+      endpoint means no API key and no Milvus - see this role's defaults.
+  when: not (genai_playground_present | bool)
+
+- name: Correct the playground configuration
+  when: genai_playground_present | bool
+  block:
+    # Under the control host's TMPDIR, mode 0700 - the params file carries
+    # no secret but the config does reference one, and a world-readable
+    # scratch copy of a cluster's model wiring is not worth the convenience.
+    - name: Make a working directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: genai-playground
+      register: genai_tmp
+      changed_when: false
+
+    - name: Note where it is
+      ansible.builtin.set_fact:
+        genai_playground_workdir: "{{ genai_tmp.path }}"
+
+    - name: Read the configuration the playground is using
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_bff_configmap }}"
+      register: genai_live_cm
+
+    # This role corrects the ConfigMap IN PLACE, because the operator mounts
+    # that name and ignores overrideConfig pointing anywhere else. The
+    # consequence is that its own output becomes its next input - so it can
+    # drop a provider but can never put one back, and changing
+    # genai_playground_drop_providers appears to do nothing at all. Found
+    # the hard way, by removing the sentence-transformers provider and then
+    # being unable to restore it.
+    #
+    # So: the first time we see a config we did not write, keep a pristine
+    # copy. Every later run corrects from that copy, not from our own
+    # output, which makes the corrections a pure function of the BFF's
+    # config and this role's settings.
+    - name: Note whether the live config is ours or the BFF's
+      ansible.builtin.set_fact:
+        genai_live_is_ours: >-
+          {{ ((genai_live_cm.resources | first).metadata.annotations
+              | default({}))['genai-playground/corrected'] is defined }}
+
+    - name: Keep a pristine copy of what the BFF generated
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ genai_playground_base_configmap }}"
+            namespace: "{{ genai_playground_namespace }}"
+            annotations:
+              openshift.io/description: >-
+                Untouched copy of what RHOAI's Gen AI BFF generated, kept by
+                the genai_playground role so its corrections are always
+                derived from the BFF's config rather than from its own
+                previous output. Delete this to re-seed from whatever
+                {{ genai_playground_bff_configmap }} currently holds.
+          data:
+            config.yaml: "{{ (genai_live_cm.resources | first).data['config.yaml'] }}"
+      when: not (genai_live_is_ours | bool)
+
+    - name: Read the pristine copy back
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_base_configmap }}"
+      register: genai_bff_cm
+
+    - name: Require a base configuration to correct
+      ansible.builtin.assert:
+        that: (genai_bff_cm.resources | default([]) | length) > 0
+        fail_msg: >-
+          OGXServer/{{ genai_playground_ogxserver }} exists but no base
+          configuration could be read, so there is nothing to correct. This role deliberately does not generate one
+          from nothing - the BFF's version carries storage backends and tool
+          runtimes belonging to the RHOAI version in use, and a copy here
+          would go stale. Open Gen AI studio once to have it written.
+        quiet: true
+
+    # What LiteLLM serves, minus anything excluded. This is what the
+    # provider will be allowed to advertise; without it the provider offers
+    # everything, which is how Docling - a document converter reporting
+    # mode 'chat' - reached AutoRAG as a foundation model.
+    # litellm_url is a fact the litellm role sets from its Route. Under
+    # --tags genai-playground that role's tasks never run, so the fact does
+    # not exist and every reference to it fails - the same trap that caught
+    # ai_endpoints.yml. Read the Route instead; by the time this role runs,
+    # it exists.
+    - name: Find LiteLLM
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ litellm_namespace | default('litellm') }}"
+        name: litellm
+      register: genai_litellm_route
+      when: litellm_url is not defined
+
+    - name: Note where LiteLLM is
+      ansible.builtin.set_fact:
+        litellm_url: "https://{{ (genai_litellm_route.resources | first).spec.host }}"
+      when:
+        - litellm_url is not defined
+        - (genai_litellm_route.resources | default([]) | length) > 0
+
+    - name: Read the LiteLLM virtual key
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_key_secret }}"
+      register: genai_vkey
+      no_log: true
+
+    - name: Ask LiteLLM what it serves
+      ansible.builtin.uri:
+        url: "{{ litellm_url }}/v1/models"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ (genai_vkey.resources | first).data.api_key | b64decode }}"
+        validate_certs: false
+        status_code: [200]
+      register: genai_models
+      failed_when: false
+      no_log: true
+      when:
+        - litellm_url is defined
+        - (genai_vkey.resources | default([]) | length) > 0
+
+    - name: Work out which models the provider may advertise
+      ansible.builtin.set_fact:
+        # Empty when LiteLLM could not be asked. The corrector treats an
+        # empty list as "do not set allowed_models", which leaves whatever
+        # was there rather than narrowing the provider to nothing.
+        genai_allowed_models: >-
+          {{ ((genai_models.json | default({})).data | default([]) | map(attribute='id') | list)
+             | reject('in', genai_playground_exclude_models) | list }}
+
+    - name: Write the parameters for the corrector
+      ansible.builtin.copy:
+        dest: "{{ genai_playground_workdir }}/params.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'provider_id': genai_playground_provider_id,
+            'key_env': genai_playground_key_env,
+            'drop_providers': genai_playground_drop_providers,
+            'allowed_models': genai_allowed_models,
+            'exclude_models': genai_playground_exclude_models,
+            'register_milvus': (genai_playground_register_milvus | bool)
+                               and (deploy_milvus | default(false) | bool),
+            'milvus_uri': genai_playground_milvus_uri | trim,
+            'embedding_model': genai_playground_embedding_model,
+            'embedding_dimension': genai_playground_embedding_dimension | int
+          } | to_nice_json }}
+      changed_when: false
+
+    - name: Write the configuration the BFF generated
+      ansible.builtin.copy:
+        dest: "{{ genai_playground_workdir }}/bff.yaml"
+        mode: "0600"
+        content: "{{ (genai_bff_cm.resources | first).data['config.yaml'] }}"
+      changed_when: false
+
+    # A script, not a template: the corrections are structural - collapse
+    # duplicate providers, drop dead ones, splice in Milvus - and expressing
+    # that in Jinja would be unreadable and untestable. This one runs
+    # against a file with no cluster access, so it can be and is tested
+    # on its own.
+    - name: Correct the configuration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ role_path }}/files/fix-playground-config.py"
+          - --in
+          - "{{ genai_playground_workdir }}/bff.yaml"
+          - --out
+          - "{{ genai_playground_workdir }}/fixed.yaml"
+          - --params
+          - "{{ genai_playground_workdir }}/params.json"
+      register: genai_fix
+      # NOT the corrector's own verdict. It always has corrections to make
+      # relative to the BFF's base, so using it meant changed=true and a
+      # playground restart on every single run. What matters is whether the
+      # result differs from what is already published, compared below.
+      changed_when: false
+
+    - name: Say what was corrected
+      ansible.builtin.debug:
+        msg: "{{ (genai_fix.stdout | from_json).changes | default([]) }}"
+
+    - name: Read the corrected configuration back
+      ansible.builtin.slurp:
+        src: "{{ genai_playground_workdir }}/fixed.yaml"
+      register: genai_fixed
+
+    # Against the LIVE config, not the base. Comparing with the base - which
+    # is what genai_bff_cm now holds - compares the correction against its
+    # own input, so it always differs and the playground restarts on every
+    # run. The question being asked is "does what is deployed already match
+    # what we would deploy", and only the live object can answer it.
+    - name: Work out whether anything actually differs
+      ansible.builtin.set_fact:
+        genai_config_differs: >-
+          {{ (genai_fixed.content | b64decode | from_yaml)
+             != ((genai_live_cm.resources | first).data['config.yaml'] | from_yaml) }}
+
+    - name: Publish the configuration this role owns
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ genai_playground_configmap }}"
+            namespace: "{{ genai_playground_namespace }}"
+            annotations:
+              # Read on the next run: its presence is what stops this
+              # output being mistaken for the BFF's and used as a base.
+              genai-playground/corrected: "true"
+              openshift.io/description: >-
+                Written by the genai_playground role, derived from
+                {{ genai_playground_base_configmap }}. Edit that one, or
+                delete it to re-seed, rather than editing this.
+          data:
+            config.yaml: "{{ genai_fixed.content | b64decode }}"
+      register: genai_cm_applied
+
+    # Two patches to the OGXServer: point it at our ConfigMap instead of the
+    # BFF's, and give the container the key the config now references.
+    - name: Point the playground at the corrected configuration
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: patched
+        api_version: "{{ genai_playground_api_version }}"
+        kind: OGXServer
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_ogxserver }}"
+        definition:
+          spec:
+            overrideConfig:
+              name: "{{ genai_playground_configmap }}"
+              key: config.yaml
+      register: genai_override_patched
+
+    - name: Give the playground the LiteLLM key its config references
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: patched
+        api_version: "{{ genai_playground_api_version }}"
+        kind: OGXServer
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_ogxserver }}"
+        definition:
+          spec:
+            workload:
+              overrides:
+                env: "{{ genai_env_merged }}"
+      vars:
+        genai_existing_env: >-
+          {{ ((genai_ogx.resources | first).spec.workload.overrides.env | default([]))
+             | rejectattr('name', 'equalto', genai_playground_key_env) | list }}
+        genai_env_merged: >-
+          {{ genai_existing_env + [{
+               'name': genai_playground_key_env,
+               'valueFrom': {'secretKeyRef': {
+                 'name': genai_playground_key_secret, 'key': 'api_key'}}}] }}
+      register: genai_env_patched
+
+    # Only when something actually changed. A restart costs the playground a
+    # minute, and this role runs on every full deploy.
+    - name: Restart the playground to pick up the corrections
+      kubernetes.core.k8s:
+        context: "{{ ocp_context or omit }}"
+        state: patched
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_ogxserver }}"
+        definition:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  kubectl.kubernetes.io/restartedAt: "{{ ansible_date_time.iso8601 | default(lookup('pipe','date -u +%FT%TZ')) }}"
+      when: >-
+        (genai_config_differs | bool)
+        or genai_env_patched.changed | default(false)
+
+    # The failure mode this guards against is specific: ogx validates every
+    # provider at startup and a bad one makes it exit 0, so the pod sits in
+    # CrashLoopBackOff with a clean exit code and nothing in the Deployment
+    # status says why. Catch it here, where the config that caused it is
+    # one task above.
+    - name: Wait for the playground to come back
+      kubernetes.core.k8s_info:
+        context: "{{ ocp_context or omit }}"
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ genai_playground_namespace }}"
+        name: "{{ genai_playground_ogxserver }}"
+      register: genai_deploy
+      until: >-
+        ((genai_deploy.resources | default([]) | first | default({})).status
+         | default({})).readyReplicas | default(0) | int > 0
+      retries: "{{ (genai_playground_rollout_timeout | int) // 10 }}"
+      delay: 10
+      failed_when: false
+
+    - name: Report a playground that did not come back
+      ansible.builtin.debug:
+        msg: >-
+          The Gen AI playground did not become ready within
+          {{ genai_playground_rollout_timeout }}s. ogx exits 0 on a bad
+          provider config, so check for CrashLoopBackOff with a clean exit
+          code: "oc logs -n {{ genai_playground_namespace }}
+          deploy/{{ genai_playground_ogxserver }} | tail -30". The usual
+          causes are a required field missing from a provider config, or a
+          model referenced by its bare name where the provider-namespaced
+          identifier is needed.
+      when: >-
+        ((genai_deploy.resources | default([]) | first | default({})).status
+         | default({})).readyReplicas | default(0) | int == 0
+
+    - name: Remove the working directory
+      ansible.builtin.file:
+        path: "{{ genai_playground_workdir }}"
+        state: absent
+      changed_when: false

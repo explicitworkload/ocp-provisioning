@@ -105,6 +105,12 @@ omnigent_version: v0.18.0
 # untested here and needs deploy_openshell and OpenShift 4.19+.
 omnigent_sandbox_provider: kubernetes
 
+# --- Gen AI playground -----------------------------------------------------
+# Correct the playground's llama-stack config. On by default: without it the
+# AI asset endpoints are ignored, no model carries a credential, and AutoRAG
+# fails on model enumeration.
+deploy_genai_playground: true
+
 # --- OpenShell -------------------------------------------------------------
 # Only used when omnigent_sandbox_provider is openshell. Off because no part
 # of it has been run against a cluster yet.

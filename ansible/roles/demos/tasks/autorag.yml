@@ -26,6 +26,53 @@
 # The DSPA below needs this bucket's name, and generateBucketName means the
 # name does not exist until the claim binds. Binding takes seconds; the
 # budget is for a NooBaa that is still reconciling other claims.
+# A bound ObjectBucketClaim does not mean the bucket can be written to.
+# NooBaa binds the claim as soon as it has a name; the pv-pool backing store
+# underneath takes much longer - 150 minutes on sandbox544, where its pod
+# first could not schedule ("pod has unbound immediate PersistentVolumeClaims")
+# and then spent a long time filling. Until that store reports OPTIMAL every
+# PutObject answers
+#
+#   api error InvalidBucketState: The request is not valid with the current
+#   state of the bucket  (HTTP 409)
+#
+# and a pipeline step fails on uploading its own logs, naming the bucket but
+# not the reason. That cost a 2-minute AutoRAG run that was otherwise correct,
+# by about 70 seconds.
+#
+# Not fatal: a cluster whose object storage never settles has a bigger
+# problem than this role, and failing here would hide it behind a demo.
+- name: Wait for the NooBaa backing store to accept writes
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    namespace: "{{ demos_noobaa_namespace }}"
+  register: demos_noobaa_bs
+  until: >-
+    (demos_noobaa_bs.resources | default([]) | length > 0) and
+    (demos_noobaa_bs.resources
+     | rejectattr('status.mode.modeCode', 'equalto', 'OPTIMAL')
+     | list | length == 0)
+  retries: "{{ demos_noobaa_wait_retries }}"
+  delay: "{{ demos_noobaa_wait_delay }}"
+  failed_when: false
+
+- name: Report that object storage is not ready
+  ansible.builtin.debug:
+    msg: >-
+      No NooBaa BackingStore reached OPTIMAL after
+      {{ (demos_noobaa_wait_retries | int) * (demos_noobaa_wait_delay | int) }}s.
+      The buckets below will still be claimed and will still bind, but writes
+      answer 409 InvalidBucketState until the store settles, so the first
+      pipeline step that uploads an artifact will fail. Check
+      "oc get backingstore -n {{ demos_noobaa_namespace }}".
+  when: >-
+    (demos_noobaa_bs.resources | default([])
+     | rejectattr('status.mode.modeCode', 'equalto', 'OPTIMAL')
+     | list | length > 0) or
+    (demos_noobaa_bs.resources | default([]) | length == 0)
+
 - name: Wait for the artifact bucket to bind
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"

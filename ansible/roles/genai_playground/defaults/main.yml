@@ -1,0 +1,126 @@
+---
+# The Gen AI playground's llama-stack configuration.
+#
+# RHOAI's Gen AI BFF generates a config for the playground and the OGXServer
+# reads it. On sandbox544 that generated config was wrong in five separate
+# ways at once, and every one of them surfaced as an AutoRAG run failing
+# minutes in with a message that named neither the config nor this file:
+#
+#   1. NO api_key on the endpoint-1 provider. Every call to LiteLLM went out
+#      unauthenticated, LiteLLM answered 401, and AutoRAG reported seven
+#      models as "registered in OGX but do not respond".
+#   2. endpoint-1 declared TWELVE times, sentence-transformers three,
+#      pgvector twice - the BFF appends a provider block each time a model
+#      is added to the playground and never collapses them.
+#   3. No Milvus at all. gen-ai-aa-vector-stores registers it, but an
+#      overrideConfig makes the playground ignore every gen-ai-aa ConfigMap,
+#      so the Vector I/O dropdown offered only pgvector.
+#   4. A vllm provider whose api_token was the literal string "fake".
+#   5. Docling offered as a chat model. It is a document converter that
+#      reports mode 'chat', so no mode filter catches it, and AutoRAG picks
+#      it as a foundation model and fails.
+#
+# This role corrects all five. It does NOT generate the config from nothing:
+# the BFF's version carries boilerplate (storage backends, tool runtimes,
+# ${env.X} substitutions) that belongs to the RHOAI version in use, and
+# reproducing it here would go stale. The BFF's output is read as a base,
+# corrected, and written to a ConfigMap this role owns - then
+# OGXServer.spec.overrideConfig is pointed at ours, so the BFF can keep
+# regenerating its own copy without undoing any of this.
+
+genai_playground_namespace: "{{ model_namespace | default('qwen3-4b') }}"
+
+# ogx.io/v1beta1 on RHOAI 3.5. A variable rather than a literal because
+# guessing it as v1 made every lookup return nothing, the role skip itself,
+# and report "the playground has not been created yet" about a playground
+# that was plainly running.
+genai_playground_api_version: ogx.io/v1beta1
+
+# The OGXServer the RHOAI dashboard creates. Note "creates": it is made on
+# demand the first time someone opens Gen AI studio, so on a cluster nobody
+# has visited there is nothing to correct and this role skips.
+genai_playground_ogxserver: lsd-genai-playground
+
+# What the BFF writes, and what the operator mounts - the same object, which
+# is why this role corrects it in place.
+genai_playground_bff_configmap: llama-stack-config
+
+# Where the BFF's untouched output is kept, so corrections are always
+# derived from it rather than from this role's own previous output. Delete
+# it to re-seed from whatever the BFF currently has.
+genai_playground_base_configmap: llama-stack-config-base
+
+# What this role writes. The SAME name the BFF uses, which is not the
+# obvious choice and was arrived at the hard way.
+#
+# A separate name would be safer - the BFF could not overwrite it - and
+# OGXServer.spec.overrideConfig appears to be exactly the knob for that.
+# It is not, on this operator version: patching overrideConfig to
+# llama-stack-config-managed left the Deployment still mounting
+# llama-stack-config (volume user-config), with generation == observed, so
+# the operator had reconciled and simply ignored the new name. The pod went
+# on reading the BFF's copy while every check against the ConfigMap we
+# wrote looked perfect. Verified on sandbox544.
+#
+# So: correct in place. If the BFF regenerates it - which it does when
+# someone adds a model to the playground - re-run this role.
+genai_playground_configmap: "{{ genai_playground_bff_configmap }}"
+
+# --- the five corrections -------------------------------------------------
+
+# Wire the LiteLLM virtual key into the openai-compatible provider. The
+# Secret is the one the litellm role publishes the AI asset endpoint with.
+genai_playground_key_secret: "{{ litellm_ai_asset_key_secret | default('endpoint-api-key-1') }}"
+genai_playground_key_env: ENDPOINT_1_API_KEY
+genai_playground_provider_id: "{{ litellm_ai_asset_name | default('endpoint-1') }}"
+
+# Models the provider may advertise. Empty means "everything LiteLLM
+# serves", which is what let Docling through. Built from LiteLLM at run time
+# and filtered by the list below.
+genai_playground_exclude_models: "{{ litellm_ai_asset_exclude | default(['Docling']) }}"
+
+# Register Milvus as a vector_io provider. Three fields are required and the
+# published gen-ai-aa ConfigMap only carries two: omitting token OR
+# persistence makes ogx fail pydantic validation at startup and exit 0, so
+# the pod sits in CrashLoopBackOff with a clean exit code and nothing points
+# at the cause. Verified against MilvusVectorIOConfig in the running image.
+genai_playground_register_milvus: true
+genai_playground_milvus_uri: >-
+  http://{{ milvus_name | default('milvus') }}-milvus.{{
+  milvus_namespace | default('milvus') }}.svc.cluster.local:19530
+
+# The embedding model the Milvus store is registered against. MUST be the
+# provider-namespaced identifier - "bge-small-en-v1.5" alone raises
+# ModelNotFoundError at startup, which is the same silent exit-0 crash.
+genai_playground_embedding_model: "{{ litellm_embedding_model_name | default('bge-small-en-v1.5') }}"
+genai_playground_embedding_dimension: 384
+
+# Providers to drop entirely. vllm-inference-2 points straight at the
+# KServe InferenceService with api_token "fake"; the same model is reachable
+# through LiteLLM as <provider>/<model>, which is how everything else on
+# this cluster is reached.
+genai_playground_drop_providers:
+  - vllm-inference-2
+
+# The inline sentence-transformers provider is NOT dropped, and the reason
+# is worth stating because it was got wrong twice while working this out.
+#
+# It advertises models it cannot serve. The config registers only
+# granite-embedding-125m-english from it; the playground also lists
+# nomic-embed-text-v1.5 (not cached under HF_HUB_OFFLINE=1) and
+# Qwen3-Reranker-0.6B (wrong type for an embeddings call). Both are
+# auto-discovered by the provider, and SentenceTransformersInferenceConfig
+# has one field - trust_remote_code - so neither can be removed from it.
+#
+# Three AutoRAG runs died on nomic, which looked like "the provider must
+# go". It does not: AutoRAG's DEFAULTS select 3 embedding models including
+# the two broken ones, but the set is editable per run. demos/autorag's
+# README records the configuration that produced a complete 8-pattern run
+# on sandbox3508 - "keep endpoint-1/bge-small-en-v1.5 and drop the two
+# sentence-transformers entries", under Model configuration -> Edit.
+#
+# So the provider stays, granite-embedding-125m-english stays available at
+# 768 dimensions - the only non-384 width here - and the two unusable
+# models are a run-time selection problem rather than a cluster one.
+
+genai_playground_rollout_timeout: 300

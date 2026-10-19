@@ -432,6 +432,13 @@
         - deploy_openshell | default(false) | bool
         - (omnigent_sandbox_provider | default('kubernetes')) == 'openshell'
 
+    # After litellm, openrag and milvus, because it needs all three: the
+    # virtual key, the model list and the Milvus endpoint. Before demos,
+    # because AutoRAG runs against the playground this corrects.
+    - role: genai_playground
+      tags: [genai-playground, rhoai]
+      when: deploy_genai_playground | default(true) | bool
+
     - role: omnigent
       tags: [omnigent, agents]
       when: deploy_omnigent | default(false) | bool

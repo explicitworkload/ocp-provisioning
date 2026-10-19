@@ -333,6 +333,37 @@ available; see `deploy_openshell`.
 
 ---
 
+## Gen AI playground
+
+### `deploy_genai_playground`
+
+Correct the configuration RHOAI's Gen AI BFF generates for the playground.
+On by default, because without it the playground is wrong in ways that only
+surface minutes into an AutoRAG run.
+
+RHOAI generates `llama-stack-config` from the `gen-ai-aa-*` ConfigMaps by
+unmarshalling them into typed Go structs, silently discarding any key it has
+no field for. On sandbox544 the result had no API key on the LiteLLM
+provider at all — so every model answered 401 and AutoRAG reported seven of
+them as "registered in OGX but do not respond" — plus twelve duplicate
+copies of that provider, no Milvus, and a vLLM provider whose token was the
+literal string `fake`.
+
+The role reads what the BFF generated, keeps an untouched copy, and writes a
+corrected version back: the key wired from `endpoint-api-key-1`, providers
+deduplicated, dead ones dropped, Milvus registered with all three fields its
+config requires, and `allowed_models` narrowed so a document converter is
+not offered as something to chat with.
+
+Note what `OGXServer.spec.overrideConfig` costs, because it is already set
+on this cluster and this role keeps it that way: while it points anywhere,
+the `gen-ai-aa-*` ConfigMaps are **not read at all**. Everything the
+playground uses comes from that one file. See
+[demos/autorag/README.md](../../demos/autorag/README.md), "Where that
+setting actually lives on this cluster".
+
+---
+
 ## OpenShell
 
 ### `deploy_openshell`

@@ -104,3 +104,11 @@ demos_autorag_artifact_port: >-
 demos_autorag_s3_endpoint: >-
   {{ demos_autorag_artifact_scheme | trim }}://{{ demos_autorag_artifact_host | trim
   }}:{{ demos_autorag_artifact_port | trim }}
+
+# Where ODF's NooBaa lives, and how long to wait for its backing store to
+# reach OPTIMAL before the AutoRAG buckets are used. 40 x 15s = 10 minutes;
+# on sandbox544 the store took far longer than that from a cold ODF install,
+# which is why missing the deadline warns rather than fails.
+demos_noobaa_namespace: openshift-storage
+demos_noobaa_wait_retries: 40
+demos_noobaa_wait_delay: 15

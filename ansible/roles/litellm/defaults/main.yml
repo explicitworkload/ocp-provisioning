@@ -156,7 +156,21 @@ litellm_ai_asset_reject_modes:
 # Model names to keep out of the endpoint whatever LiteLLM says. Models with
 # an InferenceService on this cluster are excluded already, by lookup - RHOAI
 # lists those itself - so this is for the rest.
-litellm_ai_asset_exclude: []
+#
+# Docling is here because it lies about what it is. It is a document
+# converter, and it reports mode 'chat' to LiteLLM - so
+# litellm_ai_asset_reject_modes above cannot catch it, because that filter
+# believes the mode. Published as an llm, it is then offered as a foundation
+# model, and AutoRAG's search-space preparation fails the whole run on
+#
+#   Provided models of type 'llm' are registered in OGX but do not respond:
+#   ['endpoint-1/Docling']
+#
+# after several minutes of work. Seen on sandbox544. It stays served by
+# LiteLLM - openrag uses it for document conversion - just not advertised to
+# RHOAI as something you can chat with.
+litellm_ai_asset_exclude:
+  - Docling
 
 # Where the endpoint is published. RHOAI finds AI assets by the gen-ai-aa-*
 # ConfigMap name, so this only has to be a namespace the dashboard can read.
