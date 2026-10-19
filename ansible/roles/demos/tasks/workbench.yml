@@ -374,9 +374,11 @@
           opendatahub.io/dashboard: "true"
           opendatahub.io/odh-managed: "true"
         annotations:
-          openshift.io/display-name: "RAG Eval GPU Workbench (L40S)"
+          openshift.io/display-name: >-
+            RAG Eval GPU Workbench ({{ demos_gpu_spec.gpu | default('GPU') }})
           openshift.io/description: >-
-            PyTorch + CUDA workbench on the L40S, for the LoRA fine-tune
+            PyTorch + CUDA workbench on the
+            {{ demos_gpu_spec.gpu | default('GPU') }}, for the LoRA fine-tune
           opendatahub.io/image-display-name: "Jupyter | PyTorch | CUDA | Python 3.12"
           notebooks.opendatahub.io/last-image-selection: "pytorch:3.5"
           # Legacy, and a no-op on this cluster: no oauth-proxy sidecar is
@@ -476,9 +478,34 @@
 - name: Report that the GPU workbench now holds a card
   ansible.builtin.debug:
     msg: >-
-      rag-eval-workbench holds the L40S for as long as it runs, idle or
-      not. Stop it from Projects -> {{ demos_namespace }} -> Workbenches
-      -> Actions -> Stop when the accelerator is needed elsewhere; the
-      volume and its contents survive. Set demos_workbenches=false to
-      leave both workbenches out of the run entirely.
+      rag-eval-workbench holds the {{ demos_gpu_spec.gpu | default('GPU') }}
+      for as long as it runs, idle or not. Stop it from Projects ->
+      {{ demos_namespace }} -> Workbenches -> Actions -> Stop when the
+      accelerator is needed elsewhere; the volume and its contents survive.
+      Set demos_workbenches=false to leave both workbenches out of the run
+      entirely.
   when: demos_gpu_present | bool
+
+# --- retiring what this role used to create -------------------------------
+# 7bd8d97 replaced the fixed nvidia-t4 / nvidia-l40s pair with the single
+# nvidia-gpu profile above, but only for clusters built after it. A cluster
+# carried through that change keeps the old pair, so the dashboard offers
+# THREE GPU profiles where this role means to offer one - and on sandbox544
+# the stale nvidia-t4 pointed at a g4dn.4xlarge that cluster does not have,
+# which is the unschedulable dropdown entry the rename existed to remove.
+#
+# Deleted rather than left, because these are this role's own objects and a
+# fresh cluster never has them. It is ordered last deliberately: the
+# workbench above is moved onto nvidia-gpu first, so nothing still
+# references a profile by the time it goes. A profile someone created by
+# hand under a different name is untouched - only the two names this role
+# itself used to write.
+- name: Retire the fixed GPU hardware profiles this role used to create
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: infrastructure.opendatahub.io/v1
+    kind: HardwareProfile
+    namespace: "{{ demos_namespace }}"
+    name: "{{ item }}"
+  loop: "{{ demos_retired_gpu_profiles }}"

@@ -112,3 +112,11 @@ demos_autorag_s3_endpoint: >-
 demos_noobaa_namespace: openshift-storage
 demos_noobaa_wait_retries: 40
 demos_noobaa_wait_delay: 15
+
+# Hardware profiles this role created under earlier names and now removes.
+# See the retire task at the end of tasks/workbench.yml for why. Set to []
+# to keep them - worth doing only if something outside this role has been
+# pointed at one of these names by hand.
+demos_retired_gpu_profiles:
+  - nvidia-t4
+  - nvidia-l40s
