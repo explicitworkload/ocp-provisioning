@@ -46,6 +46,13 @@ summary_credentials:
   - {label: "OpenSearch",      ns: opensearch,              name: opensearch-admin,          pass: password, user: username}
   - {label: "Langflow",        ns: openrag,                 name: openrag-langflow,          pass: superuser-password, user: superuser}
   - {label: "MLflow DB",       ns: redhat-ods-applications, name: mlflow-db-credentials,     pass: POSTGRES_PASSWORD, user: POSTGRES_USER}
+  # Only in accounts mode. Under the oauth-proxy Omnigent has no account of
+  # its own - you log in with your OpenShift identity - so there would be no
+  # password to show, and an empty one reads as broken rather than absent.
+  # The Secret is minted by the omnigent role on first run; see
+  # omnigent_admin_user there.
+  - {label: "Omnigent",        ns: "{{ omnigent_namespace | default('omnigent') }}", name: omnigent-admin, pass: password, user: username,
+     gate: "{{ not (omnigent_auth | default(true) | bool) }}"}
   - {label: "NooBaa console",  ns: openshift-storage,       name: noobaa-admin,              pass: password, user: email}
 
 # Whether the links and credentials are also published to the Ops Dashboard,
