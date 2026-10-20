@@ -10,6 +10,28 @@
 # new control-host dependency and leave the result harder to read than the
 # objects themselves.
 
+# Caught before anything is created, because the failure it prevents is
+# slow and misleading: the deploy succeeds, the session opens, the sandbox
+# provisions, the host reports online - and only then does the harness die
+# with "Native OpenCode terminal failed to start", from a 401 on the
+# runner's first REST callback. See omnigent_auth in defaults/main.yml.
+- name: Refuse header auth together with managed sandboxes
+  ansible.builtin.assert:
+    that:
+      - not (omnigent_auth | bool and omnigent_sandboxes | bool)
+    fail_msg: >-
+      omnigent_auth is true (oauth-proxy, header mode) and
+      omnigent_sandboxes is true, and those two cannot work together.
+      Header mode cannot mint the bearer a managed-sandbox runner needs for
+      its HTTP callbacks - server/auth.py mint_runner_token returns None
+      for header/proxy identity - so every sandbox session reaches
+      host_online and then fails its first REST call with HTTP 401.
+      Pick one: set omnigent_auth=false to use Omnigent's built-in accounts
+      (the admin credential is minted on the artifacts volume at
+      OMNIGENT_ADMIN_CREDENTIALS_PATH), or set omnigent_sandboxes=false to
+      keep OpenShift-identity login and run agents in the server pod.
+    quiet: true
+
 - name: Create the Omnigent namespace
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -162,6 +184,37 @@
     (omnigent_db_ready.resources[0].status.readyReplicas | default(0)) >= 1
   retries: 30
   delay: 10
+
+# The container's initdb creates POSTGRESQL_DATABASE only on a first boot
+# against an empty data directory. This PVC already has one, so switching
+# omnigent_db_name - which is what changing the sandbox provider does -
+# gives the server a DATABASE_URL pointing at a database that was never
+# created, and it fails with "database does not exist" after the deploy
+# looks successful.
+#
+# CREATE DATABASE is not transactional and has no IF NOT EXISTS, hence the
+# SELECT-then-create through \gexec rather than a bare statement. Idempotent
+# and safe to re-run; it never touches an existing database's contents.
+#
+# As postgres, not as omnigent_db_user: the image creates the application
+# role without CREATEDB, so the obvious spelling fails with "permission
+# denied to create database". The superuser is reachable over the local
+# socket inside the container without a password, which is why this is an
+# exec rather than anything that needs a credential. OWNER hands the new
+# database straight to the application role.
+- name: Make sure this provider's database exists
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} exec -i -n {{ omnigent_namespace }}
+      deployment/omnigent-db --
+      psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA
+    stdin: |
+      SELECT 'CREATE DATABASE {{ omnigent_db_name | trim }} OWNER {{ omnigent_db_user }}'
+      WHERE NOT EXISTS (
+        SELECT FROM pg_database WHERE datname = '{{ omnigent_db_name | trim }}'
+      )\gexec
+  register: omnigent_db_create
+  changed_when: "'CREATE DATABASE' in (omnigent_db_create.stderr | default(''))"
 
 # Sandboxes first, and the order matters: the credentials below are written
 # into BOTH namespaces, and the runner one does not exist until this runs.

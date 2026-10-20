@@ -40,7 +40,30 @@ sandbox:
      environment at provision time and copies them in. A name listed and
      not set fails the launch loudly, which is the behaviour you want for
      a credential. -#}
+  {# The reaper is the POC's, and it earns its place on a demo cluster:
+     sandboxes are Pods with a PVC each, and a session nobody closes keeps
+     both. terminate_after_offline_days counts from the last time the
+     runner checked in, not from creation, so an idle-but-attached session
+     is left alone. -#}
+  reaper:
+    enabled: {{ omnigent_openshell_reaper | bool | lower }}
+    terminate_after_offline_days: {{ omnigent_openshell_reap_after_days }}
+    sweep_interval_s: {{ omnigent_openshell_reap_interval }}
   openshell:
+{% if omnigent_openshell_providers | length > 0 %}
+    {# Gateway-side credentials attached to every sandbox this server
+       creates. Without at least one the sandbox is denied egress to the
+       model gateway entirely - OpenShell is deny-by-default and the
+       image's baked policy says nothing about this cluster's LiteLLM.
+
+       This key only exists in the aicatalyst fork of the server; upstream
+       ignores nothing and instead rejects the config outright. See
+       omnigent_image in defaults/main.yml. -#}
+    providers:
+{% for p in omnigent_openshell_providers %}
+      - {{ p }}
+{% endfor %}
+{% endif %}
     env:
 {% for e in omnigent_openshell_env %}
       - {{ e }}

@@ -189,6 +189,8 @@
             containers: "{{ [app_container] + ([oauth_container] if omnigent_auth | bool else []) }}"
             volumes: "{{ [artifact_volume]
                          + ([sandbox_volume] if omnigent_sandboxes | bool else [])
+                         + ([openshell_gateway_volume]
+                            if omnigent_sandbox_provider == 'openshell' else [])
                          + (oauth_volumes if omnigent_auth | bool else []) }}"
   vars:
     app_container:
@@ -200,25 +202,27 @@
         - configMapRef: {name: omnigent-config}
         - secretRef: {name: omnigent-secrets}
         - secretRef: {name: omnigent-creds, optional: true}
-      # OMNIGENT_CONFIG whenever sandboxes are on, plus two more under the
+      # OMNIGENT_CONFIG whenever sandboxes are on, plus one more under the
       # openshell provider.
       #
-      # OPENSHELL_GATEWAY is how the server finds its gateway at all: the
-      # SDK's from_active_cluster() reads it, or falls back to CLI state in
-      # ~/.config/openshell/active_gateway, and upstream is explicit that
-      # "there is no base-URL or token knob in Omnigent". The env var is the
-      # only one of the two a Deployment can set.
+      # There is deliberately no OPENSHELL_GATEWAY here. The server finds
+      # its gateway through the SDK's from_active_cluster(), which reads CLI
+      # state - ~/.config/openshell/active_gateway and the matching
+      # gateways/<name>/metadata.json - and upstream is explicit that
+      # "there is no base-URL or token knob in Omnigent". This role used to
+      # guess at an OPENSHELL_GATEWAY variable as the one half a Deployment
+      # can set; the POC's answer is better and is what the
+      # openshell-gateway-config volume below supplies. Setting a bare
+      # endpoint in the environment as well would only risk overriding a
+      # registered gateway with one that has no auth_mode attached.
       #
       # OMNIGENT_RUNNER_ENV_PASSTHROUGH is listed in the sandbox config's
       # env: list, and upstream fails the launch loudly for a listed name
       # that is not set - so it has to exist here, not just be named there.
       env: "{{ ([{'name': 'OMNIGENT_CONFIG', 'value': '/etc/omnigent/config.yaml'}]
                 if omnigent_sandboxes | bool else [])
-               + ([{'name': 'OPENSHELL_GATEWAY',
-                    'value': omnigent_openshell_gateway
-                             | default(openshell_gateway_endpoint | default('') , true) | trim},
-                   {'name': 'OMNIGENT_RUNNER_ENV_PASSTHROUGH',
-                    'value': omnigent_runner_env_passthrough}]
+               + ([{'name': 'OMNIGENT_RUNNER_ENV_PASSTHROUGH',
+                    'value': omnigent_runner_env_passthrough | trim}]
                   if omnigent_sandbox_provider == 'openshell' else []) }}"
       securityContext:
         allowPrivilegeEscalation: false
@@ -228,7 +232,9 @@
           type: RuntimeDefault
       volumeMounts: "{{ [{'name': 'artifacts', 'mountPath': '/data/artifacts'}]
                         + ([{'name': 'sandbox-config', 'mountPath': '/etc/omnigent', 'readOnly': true}]
-                           if omnigent_sandboxes | bool else []) }}"
+                           if omnigent_sandboxes | bool else [])
+                        + ([{'name': 'openshell-gateway', 'mountPath': '/.config/openshell', 'readOnly': true}]
+                           if omnigent_sandbox_provider == 'openshell' else []) }}"
       # Upstream's probes, plus a startupProbe they do not have. Their
       # liveness starts at 20s with a 30s period, and their own notes say
       # first-boot migrations take about a minute over the network - so on
@@ -292,17 +298,70 @@
     sandbox_volume:
       name: sandbox-config
       configMap: {name: omnigent-sandbox-config}
+    # OpenShell CLI state, shaped exactly as the SDK's from_active_cluster()
+    # expects to find it on disk: a file naming the active gateway, and a
+    # metadata.json for that gateway under gateways/<name>/. The openshell
+    # role writes the Secret; this projects it to those two paths.
+    #
+    # optional: true on purpose. The Secret lives in this namespace but is
+    # created by the openshell role, so a run with --tags omnigent that
+    # skips openshell would otherwise leave the pod unschedulable on a
+    # missing Secret rather than merely unable to reach a gateway.
+    openshell_gateway_volume:
+      name: openshell-gateway
+      secret:
+        secretName: openshell-gateway-config
+        optional: true
+        items:
+          - key: active_gateway
+            path: active_gateway
+          - key: metadata.json
+            path: "gateways/{{ openshell_gateway_name | default('openshellpoc') }}/metadata.json"
     oauth_volumes:
       - name: omnigent-tls
         secret: {secretName: omnigent-tls}
       - name: omnigent-oauth-session
         secret: {secretName: omnigent-oauth-session}
 
-# Only the proxy's port is published when auth is on, and that is the whole
-# basis of trusting X-Forwarded-Email: with no route to :8000, nothing can
-# reach Omnigent without going through the proxy and setting that header
-# itself. The serving-cert annotation has service-ca mint the certificate
-# the proxy presents, which is also what lets the Route reencrypt.
+# Two ports when sandboxes are on: 443 for people, 80 for runners.
+#
+# 443 is the oauth-proxy. The serving-cert annotation has service-ca mint
+# the certificate it presents, which is also what lets the Route reencrypt.
+#
+# 80 -> 8000 is the sandbox dial-back, and it is not optional. A runner
+# connects back to sandbox.server_url, which is in-cluster Service DNS on
+# plain port 80 - routing it out through the Route and back would depend on
+# the proxy for traffic that never leaves the cluster, and the proxy would
+# demand an OpenShift login the runner does not have.
+#
+# This port used to be published ONLY when auth was off, on the reasoning
+# that "with no route to :8000, nothing can reach Omnigent without going
+# through the proxy and setting X-Forwarded-Email itself". Two problems
+# with that, and they point opposite ways.
+#
+# It broke the feature. With the proxy on - the default, and what runs here
+# - the Service had no port 80 at all, so every managed sandbox sat at
+# launch stage "starting" forever while the supervisor retried the
+# dial-back every thirteen seconds:
+#
+#   Policy DNS mapped omnigent.omnigent.svc.cluster.local
+#   resolved=172.30.190.204 synthetic=198.18.0.2 ports=80
+#
+# The policy allowed it; there was simply nothing listening. That is true
+# for the kubernetes sandbox provider too, which is why it was never a
+# visible bug - those sandboxes had not been exercised on this cluster.
+#
+# And it did not buy the security it claimed. A Service port is not a
+# boundary: any pod can reach the omnigent pod's IP on :8000 directly,
+# Service or no Service, and set X-Forwarded-Email to whatever it likes.
+# Verified here by doing exactly that from a scratch pod. So publishing
+# the port concedes nothing that was not already conceded.
+#
+# What WOULD close it is a NetworkPolicy on this pod admitting :8000 only
+# from the sandbox namespaces and :8443 only from the router. Deliberately
+# not added here: it is a pre-existing exposure rather than one this change
+# creates, and a wrong ingress rule on a pod the kubelet also probes is a
+# good way to take Omnigent down. Worth doing as its own change.
 - name: Expose Omnigent
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -319,9 +378,11 @@
                          if omnigent_auth | bool else {} }}"
       spec:
         selector: {app: omnigent}
-        ports: "{{ [{'name': 'https', 'port': 443, 'targetPort': 8443}]
-                   if omnigent_auth | bool
-                   else [{'name': 'http', 'port': 80, 'targetPort': 8000}] }}"
+        ports: "{{ ([{'name': 'https', 'port': 443, 'targetPort': 8443}]
+                    if omnigent_auth | bool else [])
+                   + ([{'name': 'http', 'port': 80, 'targetPort': 8000}]
+                      if (omnigent_sandboxes | bool) or not (omnigent_auth | bool)
+                      else []) }}"
 
 - name: Create the Omnigent route
   kubernetes.core.k8s:
@@ -375,3 +436,103 @@
       reading closely before restarting - a half-applied migration does not
       fix itself by trying again.
   when: omnigent_ready is failed
+
+# --- the first admin account -----------------------------------------------
+# Accounts mode starts with no users at all: the server logs "No admin yet.
+# Open <url> to create the first admin account" and waits for a human. That
+# is fine once, and wrong for a role that is supposed to hand back a working
+# cluster - the summary role cannot print a credential nobody recorded, and
+# the Ops Dashboard cannot show one either.
+#
+# So the password is minted here, kept in a Secret, and the account created
+# through the server's own /auth/setup. Three properties worth having:
+#
+#   - generated, never written into the repo. This repo does not carry
+#     credentials, so it is read back off the cluster the same way the
+#     LiteLLM key is.
+#   - stable across re-runs. The Secret is read first and only generated
+#     when absent, so a re-run does not silently change the password
+#     under someone who has already logged in.
+#   - idempotent against an account that already exists. /auth/setup only
+#     works while there is no admin; afterwards it refuses, which is
+#     reported rather than treated as a failure.
+#
+# Only in accounts mode. Under the oauth-proxy there are no Omnigent
+# accounts to create - identity comes from OpenShift.
+- name: Look for an existing Omnigent admin credential
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-admin
+  register: omnigent_admin_existing
+  no_log: true
+  when: not (omnigent_auth | bool)
+
+- name: Settle on the Omnigent admin password
+  ansible.builtin.set_fact:
+    omnigent_admin_password: >-
+      {{ (omnigent_admin_existing.resources[0].data.password | b64decode)
+         if (omnigent_admin_existing.resources | default([]) | length > 0)
+         else lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}
+  no_log: true
+  when: not (omnigent_auth | bool)
+
+# Through the pod rather than the Route: no dependency on the router, on
+# the ingress certificate, or on this host being able to resolve the public
+# hostname. The image has no curl, so python does the POST.
+#
+# A non-200 here is almost always "an admin already exists", which is the
+# expected answer on every run after the first.
+- name: Create the first Omnigent admin account
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} exec -i -n {{ omnigent_namespace }}
+      deployment/omnigent -c omnigent -- python -
+    stdin: "{{ lookup('template', 'bootstrap_admin.py.j2') }}"
+  register: omnigent_admin_setup
+  changed_when: "'CREATED' in (omnigent_admin_setup.stdout | default(''))"
+  failed_when: false
+  no_log: true
+  when:
+    - not (omnigent_auth | bool)
+    - omnigent_ready is not failed
+
+- name: Say what the admin bootstrap did
+  ansible.builtin.debug:
+    msg: "{{ omnigent_admin_setup.stdout | default('(skipped)') | trim }}"
+  when:
+    - not (omnigent_auth | bool)
+    - omnigent_ready is not failed
+
+# Written only when the account is ours - either we just created it, or the
+# Secret already held the password that works. Storing a password that does
+# NOT open the account would be worse than storing none: the dashboard would
+# show it and people would trust it.
+- name: Record the Omnigent admin credential
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-admin
+        namespace: "{{ omnigent_namespace }}"
+        annotations:
+          omnigent.local/purpose: >-
+            First admin account for Omnigent accounts-mode login. Generated
+            on first run and read back by the summary role for the Ops
+            Dashboard. Rotate with POST /auth/users/me/password, then update
+            this Secret or delete it and re-run.
+      type: Opaque
+      stringData:
+        username: "{{ omnigent_admin_user }}"
+        password: "{{ omnigent_admin_password }}"
+  no_log: true
+  when:
+    - not (omnigent_auth | bool)
+    - omnigent_ready is not failed
+    - "'VERIFIED' in (omnigent_admin_setup.stdout | default(''))"

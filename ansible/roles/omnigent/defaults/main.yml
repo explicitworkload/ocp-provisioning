@@ -60,12 +60,45 @@ omnigent_sandbox_provider: kubernetes
 # The build variant has to match the provider. Both are the same server
 # with a different extra compiled in - OMNIGENT_EXTRAS=kubernetes or
 # =openshell - and the provider cannot import its client without the right
-# one, so a mismatch fails at launch rather than at deploy. Both variants
-# publish the same version tags; v0.18.0 was confirmed present on each.
-omnigent_image_repo: >-
-  ghcr.io/omnigent-ai/omnigent-server-{{
-  'openshell' if omnigent_sandbox_provider == 'openshell' else 'kubernetes' }}
-omnigent_image: "{{ omnigent_image_repo | trim }}:{{ omnigent_version }}"
+# one, so a mismatch fails at launch rather than at deploy.
+#
+# Under openshell this is the aicatalyst-team POC's fork, not upstream:
+# quay.io/aicatalyst/omnigent-server-openshell:v0.0.14, from the
+# scOpenshellProviders branch. It adds three sandbox-config keys upstream
+# does not have - a providers list, a node_selector and a runtime_class.
+#
+# The providers list is not a nicety, it is what makes the sandbox usable,
+# and that was established the hard way. Upstream v0.18.0 was deployed here
+# first and its OpenShellSandboxLauncher takes only image, env, cluster and
+# workspace - there is no way to attach a provider or a policy to a sandbox
+# it creates. OpenShell is deny-by-default, providers do NOT auto-attach to
+# a workspace's sandboxes, and the POC's sandbox image bakes a policy that
+# allows Anthropic, npm, PyPI and the omnigent dial-back but says nothing
+# about this cluster's model gateway. Measured on sandbox544:
+#
+#   sandbox with no providers      -> curl to the gateway returns nothing
+#   sandbox with providers=[...]   -> returns the full /v1/models list
+#
+# So on upstream the agent starts, is correctly confined, and cannot reach
+# a model. The fork is the fix.
+#
+# --- the database ------------------------------------------------------
+# v0.0.14 is the fork's own counter on an older upstream base, so its
+# alembic head is behind upstream's. Pointed at a database upstream v0.18.0
+# has already migrated, it refuses to start, and is right to:
+#
+#   RuntimeError: Omnigent database schema is newer than this version of
+#   Omnigent (found revision 'mm1a2b3c4d5e', latest supported revision
+#   'll1a2b3c4d5e'). Upgrade Omnigent before using this database.
+#
+# A down-migration would silently drop columns, so the answer is a separate
+# database rather than a destroyed one - see omnigent_db_name below.
+omnigent_openshell_image: "quay.io/aicatalyst/omnigent-server-openshell:v0.0.14"
+omnigent_image_repo: "ghcr.io/omnigent-ai/omnigent-server-kubernetes"
+omnigent_image: >-
+  {{ omnigent_openshell_image
+     if omnigent_sandbox_provider == 'openshell'
+     else (omnigent_image_repo ~ ':' ~ omnigent_version) }}
 
 omnigent_namespace: omnigent
 omnigent_sandbox_namespace: omnigent-sandboxes
@@ -76,7 +109,23 @@ omnigent_sandbox_namespace: omnigent-sandboxes
 omnigent_artifacts_size: 10Gi
 omnigent_db_storage: 10Gi
 omnigent_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
-omnigent_db_name: omnigent
+# One Postgres, one database per server build, because the two builds
+# disagree about the schema and neither can read the other's.
+#
+# The openshell path gets its own rather than taking over the existing one.
+# Upstream v0.18.0 migrated "omnigent" to revision mm1a2b3c4d5e and the
+# fork's head is ll1a2b3c4d5e; the fork would have to be given an empty
+# database either way. Giving it a new one instead of truncating the old
+# one costs a few megabytes and means switching
+# omnigent_sandbox_provider back to kubernetes finds its data intact,
+# rather than finding whatever the fork left behind.
+#
+# tasks/main.yml creates the extra database. The container's own initdb
+# only runs POSTGRESQL_DATABASE on a first boot against an empty data
+# directory, which this PVC stopped being 21 hours ago.
+omnigent_db_name: >-
+  {{ 'omnigent_openshell' if omnigent_sandbox_provider == 'openshell'
+     else 'omnigent' }}
 omnigent_db_user: omnigent
 
 # --- auth --------------------------------------------------------------
@@ -84,16 +133,57 @@ omnigent_db_user: omnigent
 # and passes the identity upstream as X-Forwarded-Email; Omnigent runs in
 # "header" mode and trusts that header.
 #
-# header mode rather than Omnigent's built-in accounts, for two reasons.
-# Cluster users get in with their OpenShift identity and there is no second
-# password to hand out or revoke. And accounts mode REFUSES the per-session
-# runner dial-back with a 403, so it cannot be combined with the kubernetes
-# sandbox provider at all - upstream's own sandbox-runners README says so.
+# true  -> header mode: an oauth-proxy sidecar authenticates against the
+#          cluster and passes identity upstream as X-Forwarded-Email.
+# false -> accounts mode: Omnigent's own built-in accounts, no sidecar.
 #
-# The trust is only safe because the Service publishes the proxy's port and
-# nothing else: anything that could reach :8000 directly could set that
-# header and be anyone. Do not add an 8000 port to the Service.
+# MUST be false when sandboxes are on. This is not a preference, it is a
+# hard incompatibility, and it cost a demo's worth of debugging to find.
+#
+# A managed sandbox has no logged-in user, so the server has to mint a
+# bearer for the runner's HTTP callbacks. From server/auth.py:
+#
+#   mint_runner_token - Mint a short-lived bearer a managed-sandbox runner
+#   presents as user_id. [...] Header/proxy mode returns None - identity
+#   there is asserted by the upstream proxy and can't be minted
+#   server-side.
+#
+# Accounts and OIDC sign one; header mode cannot. So under header mode the
+# runner's tunnel connects fine - the host token carries that, and the
+# session really does reach host_online: true - and then every REST call it
+# makes is refused:
+#
+#   GET /v1/sessions/<id>/agent/contents -> HTTP 401
+#   RuntimeError: spec_resolver: ... failed with HTTP 401
+#   -> "Native OpenCode terminal failed to start"
+#
+# which reads like a broken harness and is actually an auth mode that
+# cannot serve a sandbox.
+#
+# This block used to claim the opposite - that "accounts mode REFUSES the
+# per-session runner dial-back with a 403, so it cannot be combined with
+# the kubernetes sandbox provider at all". That is backwards: accounts and
+# OIDC are the only two modes that CAN serve a managed sandbox. It is also
+# why the aicatalyst POC runs Keycloak OIDC; that was load-bearing, not
+# incidental plumbing for their cluster.
+#
+# The cost of false: cluster users no longer get in with their OpenShift
+# identity, and there is an Omnigent password to hand out and revoke. The
+# admin credential is minted on first boot at
+# OMNIGENT_ADMIN_CREDENTIALS_PATH on the artifacts volume.
+#
+# Choose oidc instead of accounts if this ever becomes multi-user and an
+# IdP exists to point at; the role does not template that yet.
+#
+# Left at true so that turning sandboxes on never silently downgrades
+# anyone's authentication. tasks/main.yml refuses the broken combination
+# instead, which makes it a decision rather than a surprise.
 omnigent_auth: true
+
+# The first account created in accounts mode. Its password is generated on
+# first run, stored in the omnigent-admin Secret, and read back by the
+# summary role for the Ops Dashboard - never written into this repo.
+omnigent_admin_user: admin
 omnigent_auth_header: X-Forwarded-Email
 
 # Who may log in. The default admits anyone who can get a token for this
@@ -112,7 +202,28 @@ omnigent_oauth_image: ""
 # needs its own Anthropic or OpenAI credential. The key is read off the
 # cluster at run time, never written to this repo.
 omnigent_use_litellm: true
-omnigent_litellm_url: "http://litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local:4000/v1"
+
+# Under openshell this has to be the LiteMaaS alias, not LiteLLM's own
+# Service name, even though they are the same server.
+#
+# The sandbox's egress is enforced by hostname. What the policy permits is
+# whatever the attached provider's profile names, and the litemaas profile
+# names litemaas-litellm.litemaas.svc.cluster.local - so a host_config
+# pointing at litellm.litellm.svc.cluster.local is denied, silently, and
+# the harness reports it as a model error rather than a policy one. The
+# alias Service makes both names reach the same place; only one of them is
+# allowed to.
+#
+# Unchanged for the kubernetes provider, which has no egress policy at all
+# and should keep talking to LiteLLM directly rather than through an alias
+# that only exists for OpenShell's benefit.
+omnigent_litellm_url: >-
+  {{ 'http://' ~ (openshell_litemaas_service | default('litemaas-litellm'))
+     ~ '.' ~ (openshell_litemaas_namespace | default('litemaas'))
+     ~ '.svc.cluster.local:4000/v1'
+     if omnigent_sandbox_provider == 'openshell'
+     else 'http://litellm.' ~ (litellm_namespace | default('litellm'))
+          ~ '.svc.cluster.local:4000/v1' }}
 
 # --- sandboxes ---------------------------------------------------------
 # Agent sessions run as their own short-lived Pods in a separate namespace
@@ -138,8 +249,15 @@ omnigent_sandboxes: true
 # carry a non-root "sandbox" user, iproute2 and nftables or the supervisor
 # cannot build the network namespace. Upstream's check:
 #   podman run --rm --entrypoint sh <image> -lc 'id sandbox && command -v ip && command -v nft'
+#
+# This used to name upstream's omnigent-host, which does NOT meet that
+# contract - it runs as root for the Modal/Daytona providers. The POC built
+# a UBI 10 image specifically to meet it, and that is what this uses; see
+# openshell_sandbox_image in roles/openshell/defaults/main.yml for what is
+# in it. Kept as one value shared with that role so the gateway default and
+# the per-sandbox override cannot drift apart.
 omnigent_sandbox_host_image: >-
-  {{ ('ghcr.io/omnigent-ai/omnigent-host:' ~ omnigent_version)
+  {{ openshell_sandbox_image | default('quay.io/aicatalyst/omnigent-host-openshell:v0.1.19')
      if omnigent_sandbox_provider == 'openshell' else '' }}
 omnigent_sandbox_cpu_request: "500m"
 omnigent_sandbox_cpu_limit: "2"
@@ -174,12 +292,99 @@ omnigent_features: ""
 # OpenShell forces egress through a proxy, and without forwarding the proxy
 # variables into the runner the agent ignores the proxy and every request
 # fails closed.
+# LITEMAAS_API_KEY is the name the POC's sandbox image expects: its baked
+# opencode.json reads "{env:LITEMAAS_API_KEY}". The value is this cluster's
+# LiteLLM key - the openshell role aliases the LiteMaaS hostname onto
+# LiteLLM, and this aliases the variable name the same way, so the image
+# needs no rebuild. LITELLM_API_KEY stays for the omnigent harness's own
+# host_config, which reads that name.
 omnigent_openshell_env:
   - LITELLM_API_KEY
+  - LITEMAAS_API_KEY
+  - ANTHROPIC_BASE_URL
+  - ANTHROPIC_AUTH_TOKEN
+  - ANTHROPIC_MODEL
+  - CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT
   - OMNIGENT_RUNNER_ENV_PASSTHROUGH
 
-omnigent_runner_env_passthrough: "https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,NO_PROXY,no_proxy"
+# Widened to the POC's list. The proxy variables are the load-bearing ones -
+# OpenShell forces egress through its policy proxy, and a runner that does
+# not inherit them ignores the proxy and fails closed on every request.
+#
+# LITEMAAS_API_KEY has to be here as well as in the list above: the first
+# gets it into the sandbox, this gets it from the sandbox's shell into the
+# runner subprocess that actually runs the agent CLI.
+#
+# GH_TOKEN is listed by the POC and deliberately not set here - no GitHub
+# credential is issued on this cluster. A name listed here but unset is
+# simply not forwarded; only the sandbox config's env: list fails loudly on
+# a missing name.
+omnigent_runner_env_passthrough: >-
+  https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,all_proxy,NO_PROXY,no_proxy,LITEMAAS_API_KEY,ANTHROPIC_BASE_URL,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_MODEL,CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,SSL_CERT_FILE,NODE_EXTRA_CA_CERTS
 
-# Empty resolves from the openshell role's gateway Service. Set to pin a
-# named gateway the SDK's from_active_cluster() should pick.
+# Claude Code against this cluster's models instead of Anthropic's API.
+#
+# LiteLLM serves an Anthropic-compatible /v1/messages, so ANTHROPIC_BASE_URL
+# is all Claude Code needs to talk to it - no Anthropic account, no vendor
+# key, and the same models every other workload here uses. Verified against
+# this cluster: an anthropic-version request to /v1/messages answers 200.
+#
+# Points at the LiteMaaS alias rather than litellm's own Service name for
+# the same reason omnigent_litellm_url does: the sandbox's egress policy is
+# enforced by hostname, and the alias is the name the litemaas provider
+# profile permits.
+#
+# No /v1 suffix - Claude Code appends its own path.
+omnigent_anthropic_base_url: >-
+  {{ 'http://' ~ (openshell_litemaas_service | default('litemaas-litellm'))
+     ~ '.' ~ (openshell_litemaas_namespace | default('litemaas'))
+     ~ '.svc.cluster.local:4000' }}
+
+# Which of this cluster's models Claude Code drives. Chosen by testing all
+# of them through the Anthropic-compatible endpoint from inside a sandbox,
+# because most of them do not survive the translation:
+#
+#   qwen36-35b-a3b             answers. This one.
+#   qwen38-27b                 400 "System message must be at the
+#                              beginning" - the chat template rejects the
+#                              message order LiteLLM produces
+#   granite-3-2-8b-instruct    400, model not accessible by that name
+#   Mistral-Small-4-119B-2603  400, Claude Code asks for 32000 completion
+#                              tokens and the model caps at 16384
+#   gpt-oss-120b               responds but noisily
+#
+# So this is not a preference, it is the model that works. Re-test before
+# changing it.
+omnigent_anthropic_model: qwen36-35b-a3b
+
+# Claude Code refuses to size a context window for a model it has never
+# heard of, and none of this cluster's models are in its catalogue. Without
+# this it prints a paragraph of advice about modelPicker rows on every
+# single turn. It only disables the warning, not the model.
+omnigent_claude_disable_model_window_check: "1"
+
+# Empty means "use the active gateway", which is the registered one the
+# openshell role writes into the openshell-gateway-config Secret. Set this
+# only to pin a different registered gateway by name.
 omnigent_openshell_gateway: ""
+
+# Sweep up sandboxes whose runner stopped checking in. Each one is a Pod
+# plus a workspace PVC, so an abandoned demo session costs storage until
+# something collects it. The clock starts at the last check-in, not at
+# creation, so a live session is never reaped out from under anyone.
+# Which gateway-side providers get attached to every sandbox. Derived from
+# what the openshell role actually created, so the two cannot drift: naming
+# a provider here that does not exist on the gateway fails the launch.
+#
+# Not optional in practice. A sandbox with no provider is denied egress to
+# the model gateway, so the agent starts correctly confined and then cannot
+# reach a model.
+omnigent_openshell_providers: >-
+  {{ openshell_providers | default([])
+     | map(attribute='profile')
+     | map('regex_replace', '^', (openshell_provider_prefix | default('sandbox')) ~ '-')
+     | list }}
+
+omnigent_openshell_reaper: true
+omnigent_openshell_reap_after_days: 1
+omnigent_openshell_reap_interval: 3600

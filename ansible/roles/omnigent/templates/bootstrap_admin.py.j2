@@ -1,0 +1,63 @@
+{#
+  Create Omnigent's first admin account, and verify the credential works.
+
+  Runs inside the Omnigent pod via "oc exec ... -- python -", so it talks to
+  127.0.0.1:8000 directly. That deliberately avoids the Route: no dependency
+  on the router, the ingress certificate, or this control host being able to
+  resolve the public hostname.
+
+  Prints one of three verdicts, which the calling task reads:
+
+    CREATED   + VERIFIED   the account did not exist and now does
+    EXISTS    + VERIFIED   it already existed and our password opens it
+    EXISTS    (no VERIFIED) it already existed and our password does NOT
+                            open it - someone set or rotated it by hand
+
+  The Secret is only written on VERIFIED, so a password that does not work
+  never reaches the dashboard.
+-#}
+import json
+import urllib.error
+import urllib.request
+
+BASE = "http://127.0.0.1:8000"
+USER = {{ omnigent_admin_user | to_json }}
+PW = {{ omnigent_admin_password | to_json }}
+
+
+def post(path, payload):
+    req = urllib.request.Request(
+        BASE + path,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+    except Exception as exc:  # noqa: BLE001 - bootstrap diagnostic
+        return 0, str(exc)
+
+
+status, body = post("/auth/setup", {"username": USER, "password": PW})
+if status == 200:
+    print("CREATED admin account %r" % USER)
+else:
+    # Any non-200 here means setup is closed, i.e. an admin already exists.
+    print("EXISTS  admin account already present (setup returned %s)" % status)
+
+# Verify regardless of which branch we took: the only thing worth recording
+# is a credential that actually logs in.
+status, body = post("/auth/login", {"username": USER, "password": PW})
+if status == 200:
+    print("VERIFIED login works for %r" % USER)
+else:
+    print(
+        "NOT VERIFIED: login for %r returned %s. The account exists but this "
+        "password does not open it - it was set or rotated outside this role. "
+        "Leaving the stored credential alone; reset it with "
+        "POST /auth/users/{id}/reset, or delete the omnigent-admin Secret and "
+        "the account, then re-run." % (USER, status)
+    )

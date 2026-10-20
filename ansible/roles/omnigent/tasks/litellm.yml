@@ -41,6 +41,13 @@
 # Projected into every runner Pod by envFrom, and read by the server for its
 # own harness calls. ANTHROPIC/OPENAI keys would go here too for anyone
 # wanting the vendor CLIs rather than the gateway.
+#
+# The same key under two names. LITELLM_API_KEY is what the omnigent
+# harness's own host_config reads. LITEMAAS_API_KEY is what the OpenShell
+# sandbox image's baked opencode.json reads - "{env:LITEMAAS_API_KEY}" -
+# because the POC that image comes from points at a LiteMaaS instance.
+# Aliasing the variable is the other half of aliasing the hostname (see the
+# openshell role), and between them the image runs here unmodified.
 - name: Give Omnigent its harness credentials
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -55,6 +62,11 @@
       type: Opaque
       stringData:
         LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+        LITEMAAS_API_KEY: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_BASE_URL: "{{ omnigent_anthropic_base_url | trim }}"
+        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
+        CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
   no_log: true
 
 # The same Secret has to exist in the RUNNER namespace, because that is
@@ -74,5 +86,10 @@
       type: Opaque
       stringData:
         LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+        LITEMAAS_API_KEY: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_BASE_URL: "{{ omnigent_anthropic_base_url | trim }}"
+        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
+        CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
   no_log: true
   when: omnigent_sandboxes | bool
