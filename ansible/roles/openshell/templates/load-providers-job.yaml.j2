@@ -1,0 +1,185 @@
+{#
+  Imports the provider profiles and creates the providers, in-cluster.
+
+  Why a Job and not the control host: creating a provider is a CLI
+  operation. The "openshell" PyPI package is the SDK, and its ProviderClient
+  is read-only - get_credentials, for a sandbox fetching its own brokered
+  secret. The CLI is a separate release binary. Running it here means it
+  reaches the gateway over the Service, and the control host needs neither
+  the binary nor a port-forward.
+
+  Everything it does is idempotent at the gateway: "profile import" and
+  "provider create" both tolerate an entry that already exists, which is
+  why the Job can be torn down and recreated on every run.
+-#}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openshell-load-providers
+  namespace: {{ openshell_namespace }}
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: load
+          image: {{ openshell_cli_job_image }}
+          env:
+            # Two variables, because they are two different things and
+            # conflating them cost a run. OPENSHELL_GATEWAY is a gateway
+            # NAME to select among registered ones, not an endpoint; set to
+            # a URL it registers fine and then every later command fails
+            # with "Unknown gateway 'http://openshell...:8080'". The URL
+            # belongs only in "gateway add".
+            - name: OPENSHELL_ENDPOINT
+              value: "http://openshell.{{ openshell_namespace }}.svc.cluster.local:8080"
+            - name: OPENSHELL_GATEWAY
+              value: inCluster
+            # The CLI keeps gateway state under $HOME/.config/openshell and
+            # creates it on "gateway add". OpenShift runs this pod as an
+            # arbitrary uid whose HOME resolves to /, which is not writable:
+            #
+            #   failed to create /.config/openshell/gateways/inCluster
+            #   Permission denied (os error 13)
+            #
+            # and because OPENSHELL_GATEWAY alone is not enough - the CLI
+            # requires a registered gateway - every later command then fails
+            # with "Unknown gateway". Pointing HOME at the writable emptyDir
+            # below fixes both.
+            - name: HOME
+              value: /work
+          envFrom:
+            - secretRef:
+                name: openshell-provider-credentials
+          volumeMounts:
+            - name: profiles
+              mountPath: /profiles
+              readOnly: true
+            - name: work
+              mountPath: /work
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              cd /work
+
+              echo "== fetching the openshell CLI =="
+              curl -fsSL -o openshell.tar.gz \
+                "{{ openshell_cli_url }}"
+              tar -xzf openshell.tar.gz
+              CLI="$(find /work -maxdepth 2 -type f -name openshell | head -1)"
+              chmod +x "$CLI"
+              "$CLI" --version
+
+              # The gateway is plaintext and unauthenticated, so "gateway
+              # add" is only writing local CLI state for this pod.
+              #
+              # Deliberately NOT "|| true". It was, and that hid a HOME
+              # permission failure behind a later and much less obvious
+              # "Unknown gateway" from the first profile command.
+              echo "== registering the gateway =="
+              "$CLI" gateway add "$OPENSHELL_ENDPOINT" --name "$OPENSHELL_GATEWAY"
+
+              # Gateway-wide, before any provider work, because it governs
+              # every sandbox rather than any one credential. See
+              # openshell_agent_policy_proposals in defaults/main.yml for
+              # what this stops and what it was measured to cost.
+              echo "== agent policy proposals: {{ 'enabled' if openshell_agent_policy_proposals | bool else 'DISABLED' }} =="
+              "$CLI" settings set --global --yes \
+                --key agent_policy_proposals_enabled \
+                --value {{ openshell_agent_policy_proposals | bool | lower }}
+              "$CLI" settings get --global
+
+{% for p in openshell_providers %}
+              echo "== {{ p.profile }}: reconcile =="
+              # Delete then recreate, every run, rather than skipping when
+              # present. There is no "profile import --force": an existing
+              # profile makes both lint and import fail with
+              #
+              #   custom provider profile '{{ p.profile }}' already exists
+              #
+              # so a skip-if-present Job is idempotent in the weak sense -
+              # it stops erroring - while silently never applying an EDIT
+              # to the profile. That bit once already: adding the claude
+              # binaries to litemaas.yaml changed nothing on the gateway,
+              # and the sandbox kept being denied.
+              #
+              # A profile cannot be deleted while a provider of its type
+              # exists, hence provider-then-profile, the same order the
+              # POC's load-openshell-profiles.sh --clean uses. Both
+              # deletes are best-effort: on a first run neither exists.
+              # Errors are shown rather than swallowed: a delete that
+              # silently failed once turned into a confusing lint failure
+              # two lines later.
+              #
+              # One failure is expected and must not be fatal. A provider
+              # cannot be deleted while a live sandbox holds it -
+              #
+              #   provider 'x' is attached to sandbox(es): relative-camel
+              #
+              # - so on a cluster with sessions open, the profile simply
+              # cannot be rewritten. That is the gateway protecting running
+              # work, not an error. Keep what is there and say plainly that
+              # edits did not apply, rather than failing the run or
+              # pretending they did.
+              reconcile=yes
+              if "$CLI" provider delete {{ openshell_provider_prefix }}-{{ p.profile }} 2>/tmp/del.err; then
+                echo "removed previous provider"
+              else
+                cat /tmp/del.err
+                if grep -qi "attached to sandbox" /tmp/del.err; then
+                  echo "!! PROFILE NOT UPDATED: {{ p.profile }} is in use by live sandbox(es)."
+                  echo "!! The existing provider is left in place and still works."
+                  echo "!! To apply an edit to this profile, delete those sandboxes and re-run."
+                  reconcile=no
+                else
+                  echo "no previous provider to remove (expected on a first run)"
+                fi
+              fi
+
+              if [ "$reconcile" = yes ]; then
+                "$CLI" profile delete {{ p.profile }} \
+                  && echo "removed previous profile" \
+                  || echo "no previous profile to remove (expected on a first run)"
+                "$CLI" profile lint -f /profiles/{{ p.profile }}.yaml
+                "$CLI" profile import -f /profiles/{{ p.profile }}.yaml
+              fi
+
+              # A listed credential that is unset would create a provider
+              # that brokers an empty key, which fails later and far from
+              # here. Refuse now instead.
+              if [ "$reconcile" = no ]; then
+                echo "provider {{ openshell_provider_prefix }}-{{ p.profile }} kept as-is"
+              else
+                if [ -z "${{ '{' }}{{ p.credential_env }}:-}" ]; then
+                  echo "FATAL: {{ p.credential_env }} is empty - cannot create provider {{ openshell_provider_prefix }}-{{ p.profile }}" >&2
+                  exit 1
+                fi
+                "$CLI" provider create \
+                  --name {{ openshell_provider_prefix }}-{{ p.profile }} \
+                  --type {{ p.profile }} \
+                  --credential {{ p.credential_env }} \
+                  || echo "provider {{ openshell_provider_prefix }}-{{ p.profile }} already exists"
+              fi
+{% endfor %}
+
+              echo "== profiles =="
+              "$CLI" profile list
+              echo "== providers =="
+              "$CLI" provider list
+      volumes:
+        - name: profiles
+          configMap:
+            name: openshell-profiles
+        # Scratch for the CLI download and its $HOME. emptyDir because
+        # nothing here outlives the Job - the providers it creates live in
+        # the gateway's own store.
+        - name: work
+          emptyDir: {}

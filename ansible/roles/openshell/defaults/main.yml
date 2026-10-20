@@ -5,95 +5,418 @@
 # placeholders rather than keys.
 #
 # This role exists for the omnigent role, which supports OpenShell as a
-# first-party sandbox provider - sandbox.provider: openshell, a 635-line
-# launcher and an 849-line test file upstream. It is not a thing this repo
-# invented; see roles/omnigent/defaults/main.yml for the other half.
+# first-party sandbox provider - sandbox.provider: openshell. See
+# roles/omnigent/defaults/main.yml for the other half.
 #
-#   !! NOTHING IN THIS ROLE HAS BEEN RUN AGAINST A CLUSTER. !!
+# REWRITTEN 2026-10-19 against a working deployment. The previous version of
+# this role was written from upstream documentation with no cluster
+# available and carried a banner saying nothing in it had ever been run. It
+# had guessed wrong in three places that mattered - the chart version, how
+# the server finds the gateway, and how the sandbox policy is delivered.
 #
-# It was written from upstream documentation and registry metadata while no
-# cluster was available. Every version below was checked to exist, but
-# "the image exists" is a long way from "the gateway comes up and omnigent
-# can reach it". Expect to debug this the first time. The things most
-# likely to be wrong are called out in tasks/main.yml.
+# The reference is the aicatalyst-team POC, which does run:
+#   https://github.com/aicatalyst-team/omnigent-poc
+#   https://github.com/aicatalyst-team/omnigent/tree/scShiftShell
+# Where this role and that POC disagreed, the POC won. The three places
+# this role still differs from it are marked "DIVERGES" below, and each is
+# because the POC encodes something specific to their cluster rather than
+# something about OpenShell.
 
 # --- versions --------------------------------------------------------------
-# The Helm chart, from the OCI registry rather than a chart repo:
-#   helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart
-# 0.0.42 is the newest real tag; the registry also carries a long tail of
-# 0.0.0-dev.<sha> builds, which are not releases.
+# The Helm chart, from the OCI registry rather than a chart repo.
+#
+# 0.1.4, and the version here is load-bearing - below it, nothing works.
+#
+# OpenShell's sandbox used to reset loopback TCP. The connect succeeded and
+# the first write came back "Connection reset by peer", because all TCP was
+# redirected to the supervisor's proxy and 127.0.0.1 matched no policy. No
+# policy could fix it either: a rule naming the exact ports was accepted and
+# loaded, and the supervisor still logged neither an allow nor a deny, so
+# loopback never reached the policy engine at all.
+#
+# That broke every Omnigent harness, because each one stands up a helper
+# HTTP server on loopback inside the sandbox:
+#
+#   opencode_native / codex_native   app server, ephemeral port
+#     -> "opencode serve did not become ready: ReadError('')"
+#   claude_native                    policy relay, port pool 28700-28715
+#     -> "UserPromptSubmit operation blocked by hook: Omnigent policy
+#         evaluation unavailable [...] Server disconnected without
+#         sending a response."
+#
+# Fixed upstream in NVIDIA/OpenShell PR #4150, "fix(sandbox): accept local
+# connections natively on loopback-confined sockets" (2026-10-03), first
+# released in 0.1.4. Measured here: broken on 0.1.3-pre.3 AND on 0.1.2,
+# working on 0.1.4.
+#
+# 0.0.x is not a fallback. Those charts watch agents.x-k8s.io/v1alpha1 and
+# the agent-sandbox release this role installs serves only v1beta1, so the
+# gateway starts and then 404s on every create.
 openshell_chart_ref: "oci://ghcr.io/nvidia/openshell/helm-chart"
-openshell_chart_version: "0.0.42"
+openshell_chart_version: "0.1.4"
 
 # The kubernetes-sigs Agent Sandbox controller, which OpenShell's Kubernetes
-# driver builds on. It owns the Sandbox CRD (sandboxes.agents.x-k8s.io,
-# v1beta1) and must be installed BEFORE the gateway, or the gateway comes up
-# with nothing to create sandboxes with.
+# driver builds on. It owns the Sandbox CRD (sandboxes.agents.x-k8s.io) and
+# must be installed BEFORE the gateway, or the gateway comes up with nothing
+# to create sandboxes with.
 #
-# Pinned, not latest: v1.0.7 was released 2026-10-15 and the project is
-# shipping weekly, so an unpinned apply would move under you between runs.
+# Pinned rather than tracking the "latest" URL the POC uses. Not a
+# disagreement: latest resolved to exactly this on 2026-10-19, so the two
+# are the same deployment today. The project ships weekly and an unpinned
+# apply would move under you between runs, which is the one way a cluster
+# that worked yesterday breaks with no commit to blame.
 openshell_sandbox_crd_version: "v1.0.7"
 openshell_sandbox_crd_url: >-
   https://github.com/kubernetes-sigs/agent-sandbox/releases/download/{{
   openshell_sandbox_crd_version }}/sandbox.yaml
 
+# --- CLI plumbing ----------------------------------------------------------
+# The repo-wide ocp_context_arg renders "--context X", which is oc's
+# spelling. helm calls the same thing --kube-context and exits 1 with
+# "unknown flag: --context". This role is the only one that drives helm as
+# a binary rather than through kubernetes.core.helm, so it is the only one
+# that needs the other spelling.
+openshell_helm_context: >-
+  {{ ('--kube-context ' ~ (ocp_context | quote)) if ocp_context | default('') | length > 0 else '' }}
+
 # --- placement -------------------------------------------------------------
-openshell_namespace: openshell
+# openshell-poc, not openshell. The name is load-bearing rather than
+# cosmetic: it is baked into the gateway metadata the omnigent server reads
+# (see openshell_gateway_name) and into the endpoint the POC's own
+# NetworkPolicy and server-config refer to. Renaming it means editing both
+# halves, so it keeps the POC's name.
+openshell_namespace: openshell-poc
 
-# --- exposure --------------------------------------------------------------
-# The gateway speaks gRPC, not HTTP, which is why this is a passthrough Route
-# and not the ordinary edge-terminated one the rest of this repo uses. An
-# edge Route would terminate TLS and re-encode, and gRPC does not survive it.
-#
-# false keeps the gateway cluster-internal, which is all omnigent needs -
-# the server talks to it over the Service. Turn it on only to drive sandboxes
-# from the openshell CLI on your laptop.
-openshell_expose_route: false
-openshell_route_host: ""   # empty derives <name>-<ns>.<apps-domain>
+# The gateway identity the OpenShell SDK resolves inside the omnigent pod.
+# See the gateway-config Secret in tasks/main.yml for why this exists.
+openshell_gateway_name: openshellpoc
 
-# OpenShell's own docs are blunt that the quickstart posture is not for a
-# network: "allow_unauthenticated_users = true and --disable-tls are local
-# development conveniences. Don't expose such a gateway on a network."
-# So TLS stays on, and exposing the Route without an OIDC issuer below is
-# refused by tasks/main.yml rather than quietly published.
-openshell_oidc_issuer: ""
-openshell_oidc_audience: "openshell-cli"
-
-# --- the sandbox egress policy ---------------------------------------------
-# OpenShell is deny-by-default: every sandbox gets its own network namespace
-# and all egress is forced through the supervisor's policy proxy. Anything
-# not listed here is a 403 inside the sandbox, including the agent's own
-# callback to the omnigent server.
+# --- the kernel ------------------------------------------------------------
+# Landlock is the whole point of OpenShell, and it is a kernel feature, so
+# the kernel is the one prerequisite worth checking before anything is
+# installed.
 #
-# These two entries are not optional extras, they are what makes the thing
-# work at all:
+# The POC's docs say OpenShell needs kernel >= 5.19, that RHCOS 9 is pinned
+# to 5.14 and cannot provide it, and that the way out is to enable Tech
+# Preview on 4.21/4.22 and use MultiOS to move every node to RHCOS 10 -
+# flagged there, correctly, as NOT REVERSIBLE and as forfeiting minor
+# version upgrades for the whole cluster.
 #
-#   - the omnigent server, which the runner dials back to over a WebSocket.
-#     Listed by in-cluster Service DNS because that is what the omnigent
-#     role sets as server_url.
-#   - LiteLLM, which is where every model request goes. Without it the agent
-#     starts and then cannot reach a model, which reads like a model problem
-#     rather than a policy one.
+# DIVERGES, and this is the important one. That conclusion reads the
+# upstream version number and not the kernel. Red Hat backported Landlock
+# into RHEL 9, so the mainline-version mapping does not hold. Measured on
+# sandbox544 (OCP 4.22.18, RHCOS 9.8, kernel 5.14.0-687.55.1.el9_8):
 #
-# Add a host here rather than widening the policy: a sandbox that can reach
-# the whole cluster is the thing this role exists to prevent.
-openshell_egress_allow:
-  - name: omnigent-server
-    hostname: "omnigent.{{ omnigent_namespace | default('omnigent') }}.svc.cluster.local"
-    port: 80
-  - name: litellm
-    hostname: "litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local"
-    port: 4000
-
-# Extra destinations for the agents themselves - a git forge, a package
-# registry, a docs site. Same shape as the entries above.
+#   $ cat /sys/kernel/security/lsm
+#   lockdown,capability,landlock,yama,selinux,bpf
+#   $ landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)
+#   6
 #
-# Deliberately empty. An agent that can reach github.com can also push to it,
-# and the code it is pushing was written by a model.
-openshell_egress_extra: []
+# ABI 6 is the mainline 6.12 feature level - the exact thing the RHCOS 10
+# migration was for. So the migration is not needed on RHCOS 9.8, and this
+# role checks the ABI directly instead of inferring it from a version
+# string. tasks/main.yml does that check and refuses rather than installing
+# a sandbox that cannot enforce anything.
+#
+# 2 is the floor: ABI 1 (mainline 5.13) has no LANDLOCK_ACCESS_FS_REFER and
+# OpenShell's filesystem policy relies on it.
+openshell_min_landlock_abi: 2
 
 # Fail the sandbox rather than run it unconfined when the kernel cannot do
 # Landlock. This is the whole point of the role, so it defaults to strict -
 # a sandbox that silently ran without enforcement would be worse than no
 # sandbox, because the summary would still say "openshell".
+#
+# Note this is the ROLE's posture, not the sandbox image's. The POC's baked
+# policy sets "landlock: compatibility: best_effort", which degrades rather
+# than refuses. The preflight ABI check above is what makes that safe here:
+# best_effort on a kernel already known to be at ABI 6 degrades to nothing.
 openshell_require_landlock: true
+
+# --- gateway posture -------------------------------------------------------
+# Plaintext, unauthenticated, cluster-internal. This is the POC's posture
+# and it is a deliberate trade, not an oversight - so it is worth being
+# explicit about what is being traded.
+#
+# Upstream's docs are blunt that this combination is a local-development
+# convenience: "allow_unauthenticated_users = true and --disable-tls are
+# local development conveniences. Don't expose such a gateway on a network."
+#
+# What makes it defensible here is that the gateway is never on a network.
+# There is no Route (see below), the Service is ClusterIP, and the only
+# client is the omnigent server in the next namespace over. The thing being
+# protected - the agent - is on the far side of the gateway, inside the
+# sandbox, and the Landlock/seccomp/egress boundary around it does not
+# depend on the gateway's own TLS.
+#
+# What it costs: anything that can reach the Service can create a sandbox
+# and read the provider credentials the gateway brokers. On a shared
+# cluster that is a real exposure and this should become OIDC + TLS.
+openshell_disable_tls: true
+openshell_allow_unauthenticated: true
+
+# The gateway runs as root, with no capabilities dropped.
+#
+# Upstream's chart defaults are runAsNonRoot: true / runAsUser: 1000 /
+# drop: [ALL], and the previous version of this role instead set the uid
+# and fsGroup to null so OpenShift's namespace allocator could assign them
+# from the namespace range. That is the better OpenShift posture and it is
+# NOT what the POC runs, so it is not what this installs - the POC's
+# combination is the one with a working gateway behind it.
+#
+# The cost is explicit: tasks/main.yml grants the anyuid SCC to the
+# gateway's ServiceAccount, because restricted-v2 will not admit a pod that
+# asks for uid 0. That grant is scoped to the one ServiceAccount in this one
+# namespace.
+openshell_run_as_root: true
+
+# pkiInitJob generates the gateway's mTLS material in a hook Job.
+#
+# ON, and this is the one place the POC's values are not merely stale but
+# would not come up at all on this chart version. Their values set it false,
+# which reads reasonable - disableTls is on, so why issue certificates.
+#
+# What that misses is that the same hook also mints the sandbox JWT signing
+# keys, and in 0.1.3-pre.3 the whole certgen template is behind
+#
+#   {{- if or .Values.pkiInitJob.enabled .Values.certManager.enabled }}
+#
+# while the gateway StatefulSet mounts that Secret unconditionally. With
+# both false nothing creates it, and the install deadlocks:
+#
+#   MountVolume.SetUp failed for volume "sandbox-jwt":
+#   secret "openshell-jwt-keys" not found
+#
+# which helm reports ten minutes later as the uninformative "StatefulSet
+# openshell not ready. status: InProgress, Ready: 0/1". Observed here on
+# the first run before this was flipped.
+#
+# Leaving it on with certManager off also issues server and client TLS
+# secrets that disableTls means nothing reads. That is the cost: two unused
+# Secrets, against a gateway that starts.
+openshell_pki_init_job: true
+
+# The chart's NetworkPolicy restricts SSH ingress on sandbox pods to the
+# gateway. Off, matching the POC.
+#
+# Worth knowing what this does and does not give up. It is not the sandbox
+# egress boundary - that is the supervisor's policy proxy and it is
+# unaffected. This only stops something else in the cluster opening an SSH
+# session INTO a sandbox pod. On a single-tenant demo cluster that is a
+# small surface; on a shared one, turn it back on.
+openshell_network_policy: false
+
+# Let the caller pass driver JSON on CreateSandbox. Required: this is how
+# the omnigent server asks for a specific sandbox image per session rather
+# than taking the gateway-wide default.
+openshell_allow_driver_config: true
+
+# Empty means "no runtimeClassName", so sandboxes use the cluster default.
+# This cluster has nvidia / nvidia-cdi / nvidia-legacy registered by the GPU
+# stack; naming one of those here would send every sandbox to a GPU node.
+openshell_default_runtime_class: ""
+
+# --- exposure --------------------------------------------------------------
+# No Route. The omnigent server reaches the gateway over the Service, which
+# is all it needs, and the posture above has no business being published.
+# Turn this on only to drive sandboxes from the openshell CLI on a laptop,
+# and only after giving the gateway TLS and an OIDC issuer.
+openshell_expose_route: false
+
+# --- the sandbox image -----------------------------------------------------
+# The image each agent session runs in, and the gateway-wide default. The
+# omnigent server overrides it per sandbox (roles/omnigent handles that), so
+# this is the fallback for a sandbox created any other way.
+#
+# A purpose-built UBI 10 image from the POC, not upstream's omnigent-host.
+# It is not interchangeable - OpenShell has a sandbox contract the image has
+# to meet, and this one is built to it:
+#
+#   - a non-root "sandbox" user, with an nss_wrapper shim
+#     (omnigent-user-identity.sh) so the account still resolves when
+#     OpenShift assigns an arbitrary uid from the namespace range
+#   - iproute2 and nftables, or the supervisor cannot build the sandbox's
+#     network namespace
+#   - a writable venv at /sandbox/.venv
+#   - the policy baked in at /etc/openshell/policy.yaml
+#   - the agent CLIs: Claude Code, Codex, OpenCode, Antigravity, gh
+#
+# Upstream's own check that an image qualifies:
+#   podman run --rm --entrypoint sh <image> -lc 'id sandbox && command -v ip && command -v nft'
+#
+# v0.1.19 is what the POC's chart values carry; their server-config still
+# names v0.1.18. Taking the newer of the two.
+openshell_sandbox_image: "quay.io/aicatalyst/omnigent-host-openshell:v0.1.19"
+
+# --- the sandbox policy ----------------------------------------------------
+# There is deliberately no policy template in this role any more.
+#
+# The previous version rendered one into a ConfigMap and then admitted, in a
+# FIRST RUN comment, that it had no idea which Helm value mounts it - so the
+# ConfigMap sat in the namespace doing nothing while sandboxes silently ran
+# on OpenShell's built-in default. That is the worst of both: it reads like
+# the policy is applied and it is not.
+#
+# The POC answers the question by not asking it. The policy ships inside the
+# sandbox image at /etc/openshell/policy.yaml, which is one of the four
+# sources upstream documents, and the one that needs no gateway plumbing.
+# So the egress allow-list lives with the image, and changing it means
+# building an image rather than editing this file.
+#
+# For reference, what the POC's baked policy permits per agent - this is the
+# deny-by-default list, everything else is a 403 inside the sandbox:
+#   claude_code   api.anthropic.com, statsig, sentry, platform.claude.com
+#   opencode      registry.npmjs.org (read-only), opencode.ai, models.opencode.ai
+#   codex         raw.githubusercontent.com
+#   omnigent_server  omnigent.omnigent.svc.cluster.local:80  <- the dial-back
+#   pypi          pypi.org, files.pythonhosted.org, downloads.python.org
+# plus the litemaas profile's endpoint, which is added as a provider rather
+# than baked - see openshell_litemaas_alias below.
+
+# --- the LiteMaaS alias ----------------------------------------------------
+# DIVERGES, and only because the POC's cluster has a service this one does
+# not.
+#
+# The POC points its agents at LiteMaaS on
+# litemaas-litellm.litemaas.svc.cluster.local:4000. That name is hardcoded
+# in two places that are expensive to change: the litemaas provider profile,
+# and the opencode.json baked into the sandbox image. This cluster serves
+# the same OpenAI-compatible API from litellm.litellm.svc.cluster.local:4000
+# under a different name.
+#
+# Rather than fork the image and the profile to rename one host, this
+# creates a Service in a litemaas namespace that is an ExternalName alias
+# onto the real LiteLLM. The POC's image and profile then resolve the name
+# they already expect, unmodified, and there is exactly one object here that
+# encodes the difference between the two clusters.
+openshell_litemaas_alias: true
+openshell_litemaas_namespace: litemaas
+openshell_litemaas_service: litemaas-litellm
+openshell_litemaas_target: >-
+  litellm.{{ litellm_namespace | default('litellm') }}.svc.cluster.local
+
+# The alias fixes the hostname. It does not fix the model names, which are
+# the second thing the image hardcodes - opencode.json declares gemma-4
+# (the default), gpt-oss-20b, granite-31-8b-lab-v1 and granite-40-h-small,
+# and this cluster's LiteLLM serves none of those four. Left alone, the
+# agent reaches the gateway, authenticates, and then 404s on the model,
+# which reads like a broken sandbox rather than a naming mismatch.
+#
+# So these map each name the image asks for onto a model this cluster
+# actually serves, as LiteLLM model_group_alias entries. Mapped by rough
+# capability, nearest first. Set to {} to skip and accept the 404s.
+#
+# This is a translation layer, not a claim about what is running: a request
+# for "gemma-4" here is answered by qwen38-27b and the LiteLLM logs will say
+# so. If that is confusing in front of an audience, the honest fix is to
+# rebuild the image's opencode.json with this cluster's real model names.
+# EMPTY, deliberately. These were four aliases - gemma-4 -> qwen38-27b and
+# friends - that existed so the POC image's baked opencode.json would find
+# the model names it hardcodes. They are gone because the reason for them
+# is gone, and good riddance: a UI reading "gemma-4" while qwen answered
+# was going to be an awkward question in front of an audience, and this
+# cluster has never had a Gemma on it.
+#
+# What changed: the opencode harness cannot run under OpenShell at all.
+# Both opencode_native and codex_native stand up a loopback HTTP server on
+# an ephemeral port, and the supervisor resets loopback HTTP unless the
+# policy names the exact port - which cannot be done for a random one.
+# Claude Code is the harness that works here, it is pointed at LiteLLM
+# through ANTHROPIC_BASE_URL, and it asks for this cluster's real model
+# names. Nothing needs a translation layer any more.
+#
+# Putting entries back would re-create the aliases; it would not make
+# opencode work.
+openshell_model_aliases: {}
+
+# --- agent policy proposals ------------------------------------------------
+# OFF, and this is a security decision rather than a tuning one.
+#
+# By default the gateway lets a sandbox WIDEN ITS OWN POLICY. A binary
+# attempts a connection, the supervisor drafts a matching rule, and the
+# gateway approves it automatically. Observed here: a sandbox whose image
+# bakes five network rules was running with eleven, the extra six named
+# allow_chatgpt_com_443, allow_downloads_claude_ai_443, allow_github_com_22,
+# allow_github_com_443, allow_raw_githubusercontent_com_443 and
+# allow_registry_npmjs_org_443. "openshell policy list" showed the policy
+# moving v1 -> v2 -> v3 during a single session.
+#
+# The one that makes the point: allow_github_com_443 appeared BECAUSE a
+# repository clone had just been denied. The system answered a denial by
+# granting the access.
+#
+# That is defensible as developer ergonomics and indefensible as the
+# "deny by default, the agent reaches only what policy permits" claim this
+# role exists to support - you cannot show an audience an egress boundary
+# that rewrites itself on request.
+#
+# Measured cost of turning it off, on this cluster: none. Claude Code still
+# answers through LiteLLM, the policy stays at version 1 for the life of the
+# sandbox, and github.com is properly refused ("Failed to connect to
+# github.com port 443"). Granting an agent github access is then a
+# deliberate act - see openshell_providers - instead of something it can
+# award itself.
+#
+# Set true to restore upstream behaviour.
+openshell_agent_policy_proposals: false
+
+# --- providers -------------------------------------------------------------
+# OpenShell brokers credentials: the sandbox holds a placeholder, the
+# gateway holds the key and injects it on the way out. A "provider" is one
+# such brokered credential, created from a "profile" that declares which
+# hosts it may be sent to and which binaries may trigger it.
+#
+# The POC ships five profiles (openai, claude-code, github, antigravity,
+# litemaas) and creates providers named "<$USER>-<profile>" - sean-codex,
+# sean-github and so on, which is why those names appear in their
+# server-config.
+#
+# DIVERGES: only litemaas is created here, because it is the only one whose
+# credential this cluster can supply on its own - LiteLLM's master key,
+# read off the cluster at run time. The other four need vendor API keys,
+# and this repo does not carry credentials.
+#
+# To add one later: put the key in a Secret, add an entry here, and list the
+# provider name in omnigent_openshell_providers.
+openshell_provider_prefix: "sandbox544"
+
+# The GitHub token, if one has been supplied. Read off the cluster rather
+# than set here, so no token is ever written into this repo:
+#
+#   oc create secret generic openshell-github-token \
+#     -n openshell-poc --from-literal=token=ghp_xxx
+#
+# Absent, the github provider is simply not created and the rest still
+# works - it is the repository checkout that needs it, nothing else.
+openshell_github_token_secret: openshell-github-token
+
+# Providers created on the gateway. The github entry is gated: listing a
+# provider whose credential is empty creates one that brokers nothing,
+# which fails later and a long way from here.
+#
+# Why github is worth having beyond "clone works": its profile is the best
+# demonstration in the set. It permits GET/HEAD/OPTIONS plus POST to
+# **/git-upload-pack - so an agent can clone and fetch - while
+# git-receive-pack stays denied, which means the agent CANNOT push. That is
+# a policy doing something a credential alone cannot.
+openshell_providers: >-
+  {{ [{'profile': 'litemaas', 'credential_env': 'LITEMAAS_API_KEY'}]
+     + ([{'profile': 'github', 'credential_env': 'GH_TOKEN'}]
+        if openshell_github_token | default('') | length > 0 else []) }}
+
+# The provider-loading Job needs the openshell CLI, which ships as a release
+# binary rather than in any image - the PyPI "openshell" package is the SDK
+# and cannot create providers. Pinned to the same minor as the gateway
+# chart; 0.1.4 is the release that carries gateway 0.1.3-pre.3's protocol.
+#
+# AIR GAP: fetched from GitHub at Job runtime. Mirror this tarball and
+# repoint openshell_cli_url when the bastion goes disconnected, the same
+# way openshell_sandbox_crd_url will have to be handled.
+openshell_cli_version: "v0.1.4"
+openshell_cli_url: >-
+  https://github.com/NVIDIA/OpenShell/releases/download/{{
+  openshell_cli_version }}/openshell-x86_64-unknown-linux-musl.tar.gz
+
+# ubi9 rather than ubi9-minimal: the Job needs curl and tar, and minimal
+# ships microdnf without either.
+openshell_cli_job_image: "registry.access.redhat.com/ubi9/ubi:latest"

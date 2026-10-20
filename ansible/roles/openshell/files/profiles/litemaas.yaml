@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Example provider profile. OpenShell does not load it; import it explicitly:
+#   openshell provider profile lint   -f providers/openai.yaml
+#   openshell provider profile import -f providers/openai.yaml --global
+#
+# Copy and edit this file rather than importing it unchanged. `binaries` is the
+# least-privilege control that decides which processes may reach the endpoints
+# below, so it has to name the paths in *your* image.
+#
+# Client binaries:   curl.
+# Reference layout:  curl at /usr/bin/curl or /usr/local/bin/curl. Add the SDK
+#                    interpreter if the workload calls the API through a library.
+# Credential scope:  OPENAI_API_KEY, sent as a bearer authorization header to
+#                    api.openai.com and nowhere else. For an OpenAI-compatible
+#                    service on another host, import a separate profile naming
+#                    that host — do not repoint this one.
+# Endpoint access:   api.openai.com, read-write, L7 enforced.
+# Smoke test:        openshell sandbox create --provider <name> -- \
+#                      curl -sS https://api.openai.com/v1/models
+
+id: litemaas
+display_name: LiteMaaS
+description: LiteMaaS inference API
+category: inference
+inference_capable: true
+
+credentials:
+  - name: litemaas_key
+    description: LiteMaaS API key
+    env_vars: [LITEMAAS_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [litemaas_key]
+endpoints:
+  - { host: litemaas-litellm.litemaas.svc.cluster.local, port: 4000, protocol: rest, access: full }
+binaries:
+  - { path: /usr/local/lib/node_modules/opencode-ai/bin/.opencode }
+  - { path: /usr/local/lib/node_modules/opencode-ai/bin/opencode.exe }
+  - { path: /usr/local/bin/node }
+  - { path: /usr/local/bin/opencode }
+  - { path: /usr/bin/curl }
+  # Added here, and the only edit to the POC's copy of this file.
+  #
+  # Claude Code is pointed at LiteLLM rather than Anthropic -
+  # ANTHROPIC_BASE_URL plus LiteLLM's Anthropic-compatible /v1/messages
+  # endpoint, which this cluster's LiteLLM serves (verified: HTTP 200 for
+  # an anthropic-version request). So the claude binary has to be allowed
+  # to reach the LiteMaaS endpoint above; the image's baked policy only
+  # lets it reach api.anthropic.com, which no credential here can use.
+  #
+  # Why Claude Code and not OpenCode: the opencode and codex harnesses
+  # both stand up a loopback HTTP server on an EPHEMERAL port, and
+  # OpenShell's supervisor resets loopback HTTP unless the policy names
+  # the exact port - which cannot be done for a port chosen at random.
+  # claude_native runs the CLI in a terminal with no loopback server, so
+  # it is the one harness in this image that works under the sandbox.
+  - { path: /usr/local/bin/claude }
+  - { path: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe }

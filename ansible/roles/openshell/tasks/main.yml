@@ -1,10 +1,16 @@
 ---
 # NVIDIA OpenShell gateway, for the omnigent role to use as its sandbox
-# provider. See defaults/main.yml for what this is and why.
+# provider. See defaults/main.yml for what this is, and for why each value
+# differs from the chart's own default.
 #
-# UNTESTED. Written from upstream docs with no cluster available. The four
-# places most likely to need work on the first real run are marked
-# "FIRST RUN" below.
+# Rewritten against the aicatalyst-team POC, which has this running. The
+# previous version was written from documentation with no cluster and said
+# so; the four "FIRST RUN" admissions it carried are all resolved here:
+#
+#   policy delivery   -> baked into the sandbox image, not a ConfigMap
+#   chart values      -> 0.1.3-pre.3 keys, verified against the chart
+#   gateway discovery -> a Secret of CLI state, mounted into the server
+#   CRD from a URL    -> unchanged, still a URL; see the air-gap note below
 
 # A backstop; site.yml's pre_tasks demand helm before the run touches the
 # cluster. Same pair as the openrag and milvus roles.
@@ -29,52 +35,132 @@
       On macOS, "brew install helm".
     quiet: true
 
-# Landlock is the whole point, and RHCOS only carries it from 4.19. Checked
-# here rather than discovered when sandboxes fail their probe one role
-# later, with an error that names Landlock and not the cluster version.
-- name: Read the cluster version
+# --- kernel preflight ------------------------------------------------------
+# Landlock is the product. Check the kernel can actually do it before
+# installing a gateway whose whole job is to rely on it.
+#
+# This asks the kernel rather than reading a version string, which is the
+# mistake worth avoiding here. The POC's docs conclude from "RHCOS 9 is on
+# 5.14" that OpenShift needs an irreversible migration to RHCOS 10, because
+# Landlock ABI 2 landed in mainline 5.19. Red Hat backported it, so the
+# mainline mapping does not hold and the version number says nothing useful.
+# The syscall is the only honest source.
+#
+# landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) returns
+# the ABI version. Syscall 444 on x86_64. Not namespaced, so an ordinary
+# unprivileged pod gets the host kernel's real answer - no node debug, no
+# privileged pod, no hostPID.
+- name: Probe the kernel's Landlock ABI version
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: openshell-landlock-probe
+        namespace: default
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: probe
+            image: registry.access.redhat.com/ubi9/python-311:latest
+            command:
+              - python3
+              - -c
+              - |
+                import ctypes
+                libc = ctypes.CDLL('libc.so.6', use_errno=True)
+                libc.syscall.restype = ctypes.c_long
+                abi = libc.syscall(ctypes.c_long(444), None,
+                                   ctypes.c_size_t(0), ctypes.c_uint32(1))
+                print(abi if abi > 0 else 0)
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities: {drop: [ALL]}
+              seccompProfile: {type: RuntimeDefault}
+  when: openshell_require_landlock | bool
+
+- name: Wait for the Landlock probe to finish
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
-    api_version: config.openshift.io/v1
-    kind: ClusterVersion
-    name: version
-  register: openshell_cv
+    api_version: v1
+    kind: Pod
+    namespace: default
+    name: openshell-landlock-probe
+  register: openshell_probe
+  until: >-
+    ((openshell_probe.resources | default([]) | first | default({})).status
+     | default({})).phase | default('') in ['Succeeded', 'Failed']
+  retries: 30
+  delay: 5
+  when: openshell_require_landlock | bool
 
-- name: Require OpenShift 4.19 or later
+- name: Read the Landlock ABI the probe reported
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} logs -n default openshell-landlock-probe
+  register: openshell_abi
+  changed_when: false
+  when: openshell_require_landlock | bool
+
+- name: Remove the Landlock probe
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: default
+    name: openshell-landlock-probe
+  when: openshell_require_landlock | bool
+
+- name: Require a usable Landlock ABI
   ansible.builtin.assert:
     that:
-      - openshell_ocp_version is version('4.19', '>=')
+      - openshell_abi.stdout | trim | int >= openshell_min_landlock_abi | int
     fail_msg: >-
-      OpenShell needs OpenShift 4.19 or later and this cluster is
-      {{ openshell_ocp_version }}. The RHCOS kernels in 4.16 through 4.18
-      (RHEL 9.4, 5.14.0-427) are built without Landlock, so every sandbox
-      fails its Landlock probe at startup and nothing runs. There is no
-      degraded mode worth having here - the kernel feature is the product.
-      Set deploy_openshell=false and leave omnigent on its kubernetes
-      sandbox provider.
+      This cluster's kernel reports Landlock ABI
+      "{{ openshell_abi.stdout | default('') | trim }}", and OpenShell needs
+      at least {{ openshell_min_landlock_abi }}. A 0 means the kernel has no
+      Landlock at all. Sandboxes would start and enforce nothing, while the
+      summary still said "openshell" - which is worse than not deploying it.
+      Either move to a node image with Landlock, or set
+      deploy_openshell=false and leave omnigent on its kubernetes sandbox
+      provider.
+      Measured for reference: OCP 4.22.18 / RHCOS 9.8 / kernel 5.14.0-687
+      reports ABI 6, the mainline 6.12 feature level.
     quiet: true
-  vars:
-    openshell_ocp_version: >-
-      {{ (openshell_cv.resources | first).status.desired.version
-         | default('0.0') | regex_search('^[0-9]+\.[0-9]+') }}
+  when: openshell_require_landlock | bool
 
-# The Sandbox CRD and controller, before the gateway. OpenShell's Kubernetes
-# driver creates agents.x-k8s.io/v1beta1 Sandbox objects; without the
-# controller they are accepted and never reconciled, which looks like a
-# hung gateway rather than a missing dependency.
+- name: Say what the kernel can do
+  ansible.builtin.debug:
+    msg: >-
+      Landlock ABI {{ openshell_abi.stdout | trim }} - enforcement available.
+      No RHCOS 10 migration needed on this cluster.
+  when: openshell_require_landlock | bool
+
+# --- Agent Sandbox ---------------------------------------------------------
+# The Sandbox CRD and controller, before the gateway. This is not advisory:
+# the chart has a preflight template that refuses to render at all if
+# neither agents.x-k8s.io/v1beta1 nor v1alpha1 is served -
+#
+#   Error: Agent Sandbox is required but neither agents.x-k8s.io/v1beta1 nor
+#   agents.x-k8s.io/v1alpha1 is served by this cluster.
+#
+# so a wrong order here fails the helm install rather than producing a
+# gateway that quietly cannot create anything.
 - name: Install the Agent Sandbox controller and CRDs
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     src: "{{ openshell_sandbox_crd_url }}"
-  register: openshell_crd
 
-# FIRST RUN: the manifest is applied straight from a GitHub release URL.
-# kubernetes.core.k8s takes a URL for src, but on a disconnected bastion it
-# will not, and the air-gap direction this repo is heading means that is a
-# real case. If it fails here, download sandbox.yaml and apply it from a
-# path instead.
+# AIR GAP: applied straight from a GitHub release URL. kubernetes.core.k8s
+# accepts a URL for src, but a disconnected bastion will not reach it, and
+# the air-gap direction this repo is heading makes that a real case. The fix
+# when it comes to that is to mirror sandbox.yaml alongside the images and
+# point openshell_sandbox_crd_url at a local path.
 - name: Wait for the Sandbox CRD to be established
   kubernetes.core.k8s_info:
     context: "{{ ocp_context or omit }}"
@@ -90,6 +176,21 @@
   retries: 20
   delay: 6
 
+- name: Wait for the Agent Sandbox controller to be ready
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: agent-sandbox-system
+    name: agent-sandbox-controller
+  register: openshell_asc
+  until: >-
+    ((openshell_asc.resources | default([]) | first | default({})).status
+     | default({})).readyReplicas | default(0) | int > 0
+  retries: 30
+  delay: 10
+
+# --- namespace and SCC -----------------------------------------------------
 - name: Create the OpenShell namespace
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -101,77 +202,142 @@
       metadata:
         name: "{{ openshell_namespace }}"
 
-# Refuse to publish a gateway nobody has to authenticate to. OpenShell's own
-# docs: "allow_unauthenticated_users = true and --disable-tls are local
-# development conveniences. Don't expose such a gateway on a network."
-- name: Refuse to expose the gateway without an OIDC issuer
-  ansible.builtin.assert:
-    that: openshell_oidc_issuer | default('') | length > 0
-    fail_msg: >-
-      openshell_expose_route is true but openshell_oidc_issuer is empty.
-      The gateway signs sandbox credentials and holds provider keys; a
-      Route in front of it with no identity check publishes all of that.
-      Either set an OIDC issuer, or leave the Route off - omnigent reaches
-      the gateway over the Service and needs no Route at all.
-    quiet: true
-  when: openshell_expose_route | bool
-
-# FIRST RUN: the policy is written as a ConfigMap and is NOT yet wired into
-# the chart. Upstream documents four policy sources - a gateway-wide global
-# policy, a saved policy chosen at creation, one embedded in the sandbox
-# image, and OpenShell's own restrictive default - but not which Helm value
-# mounts the first of them, and guessing a value name would either be
-# silently ignored or fail the install.
+# The gateway asks for uid 0 and drops no capabilities, which restricted-v2
+# will not admit - the pod is rejected at creation and helm --wait sits
+# there until it times out, with the reason only visible in the ReplicaSet
+# events. So the grant comes first.
 #
-# So: the policy is rendered and parked here, where it is reviewable and
-# where the next step is one --set away. Until it is wired, sandboxes get
-# OpenShell's built-in default policy, which is restrictive - and therefore
-# very likely to block the omnigent callback and LiteLLM, which is the
-# first thing to look at if agents start and immediately cannot reach a
-# model.
+# Scoped deliberately: a RoleBinding in this namespace, naming the two
+# ServiceAccounts the chart creates, against the anyuid SCC and not
+# privileged. anyuid relaxes the uid range and nothing else - it does not
+# grant host access, host network, or extra capabilities.
 #
-#   helm show values {{ openshell_chart_ref }} --version {{ openshell_chart_version }}
-#
-# and look for a policy/gatewayConfig key, then add the --set below.
-- name: Render the gateway-wide sandbox policy
+# The alternative is to not run as root. Upstream's chart default is
+# runAsNonRoot with uid 1000, and the previous version of this role set the
+# uid and fsGroup to null so OpenShift would assign them from the namespace
+# range, which is the better posture and needs no SCC grant at all. It is
+# not what the POC runs, so it is not what this installs - but if this grant
+# is unacceptable on a given cluster, set openshell_run_as_root=false and
+# that path is what you get.
+- name: Let the gateway ServiceAccounts run as root
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
     state: present
     apply: true
     definition:
-      apiVersion: v1
-      kind: ConfigMap
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
       metadata:
-        name: openshell-base-policy
+        name: openshell-anyuid
         namespace: "{{ openshell_namespace }}"
-        annotations:
-          openshell.local/status: >-
-            Rendered by the openshell role. Not yet mounted into the gateway -
-            see the FIRST RUN note in roles/openshell/tasks/main.yml.
-      data:
-        policy.yaml: "{{ lookup('template', 'policy.yaml.j2') }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:anyuid
+      subjects:
+        - kind: ServiceAccount
+          name: openshell
+          namespace: "{{ openshell_namespace }}"
+        - kind: ServiceAccount
+          name: openshell-sandbox
+          namespace: "{{ openshell_namespace }}"
+  when: openshell_run_as_root | bool
 
-# FIRST RUN: the chart's values schema moved at v2 - "chart schema v2
-# replaces app-specific values with a single non-secret gatewayConfig map" -
-# so if --set keys below are rejected, check the chart README for the
-# version actually being installed:
-#   helm show values oci://ghcr.io/nvidia/openshell/helm-chart --version X
+# --- the gateway -----------------------------------------------------------
+# Values follow the POC's working install, with four of its keys dropped
+# and one translated.
 #
-# The two securityContext nulls are from upstream's own OpenShift
-# instructions: the chart's defaults pin a uid and fsGroup, and OpenShift's
-# namespace allocator wants to assign them from the namespace's range.
+# server.sandboxImagePullPolicy, server.forceInitContainerSideload and
+# supervisor.sideloadMethod appear in the POC's values file and are not
+# referenced by any template in 0.1.3-pre.3 - the chart ships no
+# values.schema.json, so helm accepts unknown keys in silence and they look
+# applied while doing nothing. They are residue: the POC's documented
+# install uses "helm upgrade --reuse-values", which carries every key from
+# the previous release forward, including ones a later chart dropped.
+#
+# server.sandboxImage is the fourth, and it is the dangerous one, because
+# the thing it was meant to set matters. Setting it does nothing; the
+# gateway keeps its built-in default and every sandbox comes up as
+# nvcr.io/nvidia/base/ubuntu:24.04 - no agent CLIs, no curl, no baked
+# policy. That was the observed result here on the first end-to-end test,
+# and the rendered ConfigMap confirmed it:
+#
+#   default_image = "nvcr.io/nvidia/base/ubuntu:24.04"
+#
+# The real keys are sandbox.image.repository and .tag, which is what the
+# chart's openshell.sandboxImage helper reads. Easy to get wrong by
+# grepping, because "sandboxImage" also matches the unrelated
+# server.sandboxImagePullSecrets.
+#
+# Everything here is therefore set through a key that was checked against
+# templates/, not against the POC's values file.
+#
+# openshell_helm_context, not the repo-wide ocp_context_arg: that renders
+# "--context X", which is oc's spelling and not helm's. helm wants
+# --kube-context and exits 1 on "unknown flag: --context". The other two
+# helm users in this repo, openrag and milvus, go through
+# kubernetes.core.helm and pass kube_context as a module parameter, so they
+# never see this; this role is the only one shelling out to the binary.
+# Latent until ocp_context was pinned, because an empty context renders an
+# empty string and the wrong flag never appears.
+# A first install that fails leaves revision 1 in "failed", and helm will
+# not upgrade over it - "has no deployed releases" - so the obvious response
+# to a failed run, running it again, fails differently and more
+# confusingly than the first time. Clear that one case before installing.
+#
+# Deliberately narrow: only when the release has never had a good revision.
+# A release that deployed once and failed on a later upgrade still has a
+# revision to roll back to, and throwing that away would be destructive.
+# The StatefulSet's PVC survives an uninstall either way.
+- name: Look for a previous OpenShell release
+  ansible.builtin.command:
+    cmd: >-
+      helm list --all --namespace {{ openshell_namespace }}
+      {{ openshell_helm_context }} --filter '^openshell$' --output json
+  register: openshell_release
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Clear a first install that never came up
+  ansible.builtin.command:
+    cmd: >-
+      helm uninstall openshell --namespace {{ openshell_namespace }}
+      {{ openshell_helm_context }} --wait
+  when:
+    - openshell_release.rc | default(1) == 0
+    - (openshell_release.stdout | from_json | default([], true)) | length > 0
+    - (openshell_release.stdout | from_json | first).status | default('') == 'failed'
+    - (openshell_release.stdout | from_json | first).revision | default('0') | int == 1
+
 - name: Install the OpenShell gateway chart
   ansible.builtin.command:
     cmd: >-
       helm upgrade --install openshell {{ openshell_chart_ref }}
       --version {{ openshell_chart_version }}
       --namespace {{ openshell_namespace }}
-      {{ ocp_context_arg }}
+      {{ openshell_helm_context }}
+      --set replicaCount=1
+      --set service.type=ClusterIP
+      --set server.logLevel=info
+      --set server.disableTls={{ openshell_disable_tls | bool | lower }}
+      --set server.auth.allowUnauthenticatedUsers={{ openshell_allow_unauthenticated | bool | lower }}
+      --set server.drivers.kubernetes.allowDriverConfig={{ openshell_allow_driver_config | bool | lower }}
+      --set server.defaultRuntimeClassName={{ openshell_default_runtime_class | quote }}
+      --set server.sandboxNamespace=""
+      --set sandbox.image.repository={{ (openshell_sandbox_image | split(':') | first) | quote }}
+      --set sandbox.image.tag={{ (openshell_sandbox_image | split(':') | last) | quote }}
+      --set sandbox.image.pullPolicy=Always
+      --set networkPolicy.enabled={{ openshell_network_policy | bool | lower }}
+      --set pkiInitJob.enabled={{ openshell_pki_init_job | bool | lower }}
+      {% if openshell_run_as_root | bool %}
+      --set podSecurityContext.fsGroup=0
+      --set securityContext.runAsNonRoot=false
+      --set securityContext.runAsUser=0
+      --set securityContext.capabilities.drop=null
+      {% else %}
       --set podSecurityContext.fsGroup=null
       --set securityContext.runAsUser=null
-      {% if openshell_oidc_issuer | length > 0 %}
-      --set server.oidc.issuer={{ openshell_oidc_issuer | quote }}
-      --set server.oidc.audience={{ openshell_oidc_audience | quote }}
       {% endif %}
       --wait --timeout 10m
   register: openshell_install
@@ -191,19 +357,302 @@
   retries: 30
   delay: 10
 
-# FIRST RUN: this is the awkward one, and it is awkward upstream rather than
-# here. Omnigent resolves its gateway through the OpenShell SDK's
-# from_active_cluster(), which reads $OPENSHELL_GATEWAY or
-# ~/.config/openshell/active_gateway - CLI state, in a pod. Upstream is
-# explicit that "there is no base-URL or token knob in Omnigent - gateway
-# setup and auth are an OpenShell concern", so there is nothing to template
-# on the omnigent side.
+# --- the LiteMaaS alias ----------------------------------------------------
+# One Service that makes this cluster answer to the name the POC's sandbox
+# image and provider profile already expect. See defaults/main.yml.
 #
-# What this writes is the Service address for the omnigent role to export as
-# OPENSHELL_GATEWAY. If the SDK turns out to want a registered gateway
-# rather than a bare endpoint, this is where that work goes: most likely an
-# initContainer running "openshell gateway add" against a mounted config
-# volume.
+# ExternalName rather than a copied ClusterIP: it is a DNS CNAME, so it
+# follows LiteLLM if its Service IP ever changes, and it carries no port
+# mapping to drift - the caller asks for :4000 on the alias and gets :4000
+# on the target, which is the port LiteLLM serves.
+- name: Create the LiteMaaS alias namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ openshell_litemaas_namespace }}"
+        annotations:
+          openshell.local/purpose: >-
+            Alias only. Holds one ExternalName Service so the OpenShell
+            sandbox image, which hardcodes the POC cluster's LiteMaaS
+            hostname, resolves to this cluster's LiteLLM. Nothing runs here.
+  when: openshell_litemaas_alias | bool
+
+- name: Alias LiteMaaS onto this cluster's LiteLLM
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "{{ openshell_litemaas_service }}"
+        namespace: "{{ openshell_litemaas_namespace }}"
+      spec:
+        type: ExternalName
+        externalName: "{{ openshell_litemaas_target | trim }}"
+        ports:
+          - port: 4000
+            targetPort: 4000
+            protocol: TCP
+            name: http
+  when: openshell_litemaas_alias | bool
+
+# --- model name aliases ----------------------------------------------------
+# The alias above fixes the hostname; these fix the model names. The image's
+# baked opencode.json names four models this cluster does not serve, and the
+# default of the four - gemma-4 - is the one every session starts on.
+#
+# Registered through LiteLLM's admin API rather than its ConfigMap, because
+# this cluster's LiteLLM runs with store_model_in_db: true and the models
+# are already in the database, not the file. Adding them the same way needs
+# no restart and does not fight the litellm role for ownership of the
+# ConfigMap.
+#
+# Each alias clones the litellm_params of the model it points at, so it is a
+# second name for the same upstream deployment rather than a new route.
+# Skipped silently when the target is not served - a missing alias is a
+# clearer failure than one that points at nothing.
+- name: Find the LiteLLM pod
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ litellm_namespace | default('litellm') }}"
+    label_selectors:
+      - app=litellm
+    field_selectors:
+      - status.phase=Running
+  register: openshell_litellm_pod
+  when: openshell_model_aliases | length > 0
+
+- name: Register the model name aliases the sandbox image expects
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }}
+      exec -i -n {{ litellm_namespace | default('litellm') }}
+      {{ (openshell_litellm_pod.resources | first).metadata.name }}
+      -- python - {{ openshell_model_aliases | to_json | quote }}
+    stdin: "{{ lookup('file', 'register_aliases.py') }}"
+  register: openshell_alias_result
+  changed_when: "'created' in (openshell_alias_result.stdout | default(''))"
+  failed_when: false
+  when:
+    - openshell_model_aliases | length > 0
+    - openshell_litellm_pod.resources | default([]) | length > 0
+
+- name: Say what the aliases did
+  ansible.builtin.debug:
+    msg: "{{ (openshell_alias_result.stdout | default('(no output)')).split('\n') }}"
+  when: openshell_model_aliases | length > 0
+
+# --- providers -------------------------------------------------------------
+# A provider is how a credential reaches an agent without the agent ever
+# holding it: the gateway keeps the key, the sandbox gets a placeholder, and
+# the policy proxy swaps one for the other on the way out to the one host
+# the profile names.
+#
+# It is also, less obviously, how a host gets reachable at all. OpenShell is
+# deny-by-default and the POC's sandbox image bakes a policy covering
+# Anthropic, npm, PyPI and the omnigent dial-back - nothing about this
+# cluster's model gateway. Measured here: a sandbox with no provider gets
+# nothing from the gateway; the same sandbox with providers=[...] gets the
+# full /v1/models list. So this block is what makes the agent able to think.
+#
+# Done as a Job rather than from the control host because provider creation
+# is a CLI operation, not an SDK one - the openshell PyPI package is the SDK
+# and its ProviderClient is read-only (get_credentials, for sandboxes
+# fetching their own). The CLI is a separate release binary. Running it
+# in-cluster means it reaches the gateway over the Service and the control
+# host needs neither the binary nor a port-forward.
+# Looked for before the provider list is used, because openshell_providers
+# is gated on whether this came back. Optional by design: no token means no
+# github provider, and everything else still works.
+- name: Look for a supplied GitHub token
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ openshell_namespace }}"
+    name: "{{ openshell_github_token_secret }}"
+  register: openshell_github_secret
+  no_log: true
+
+- name: Settle on the GitHub token
+  ansible.builtin.set_fact:
+    openshell_github_token: >-
+      {{ ((openshell_github_secret.resources | default([]) | first | default({})).data | default({})).token
+         | default('', true) | b64decode }}
+  no_log: true
+
+- name: Say whether repository checkout will be available
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'GitHub token found - the github provider will be created, so
+          sandboxes can clone and fetch (push stays denied by policy).'
+         if openshell_github_token | length > 0
+         else 'No GitHub token in Secret ' ~ openshell_namespace ~ '/'
+              ~ openshell_github_token_secret ~ ' - skipping the github
+              provider. Sessions work, but selecting a Repository in the
+              Omnigent UI will fail the launch at git clone. Create the
+              Secret and re-run to enable it.' }}
+
+# The profiles are vendored byte-identical from the POC's profiles/
+# directory, so a diff against their repo stays empty and an upstream
+# change to a profile is a clean copy rather than a merge.
+- name: Publish the provider profiles
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition: "{{ lookup('template', 'profiles-configmap.yaml.j2') | from_yaml }}"
+  when: openshell_providers | length > 0
+
+- name: Read the LiteLLM key the litemaas provider brokers
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    kind: Secret
+    namespace: "{{ litellm_namespace | default('litellm') }}"
+  register: openshell_litellm_secrets
+  no_log: true
+  when: openshell_providers | length > 0
+
+- name: Store the provider credentials for the Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openshell-provider-credentials
+        namespace: "{{ openshell_namespace }}"
+      type: Opaque
+      stringData:
+        LITEMAAS_API_KEY: >-
+          {{ openshell_litellm_secrets.resources
+             | selectattr('data.LITELLM_MASTER_KEY', 'defined')
+             | map(attribute='data.LITELLM_MASTER_KEY')
+             | first | default('', true) | b64decode }}
+        # Empty when no token was supplied. The Job refuses to create a
+        # provider whose credential is blank, and openshell_providers has
+        # already dropped the github entry in that case, so this is just
+        # belt and braces.
+        GH_TOKEN: "{{ openshell_github_token | default('') }}"
+  no_log: true
+  when: openshell_providers | length > 0
+
+# Deleted and recreated every run. A Job's pod template is immutable, so an
+# apply over an existing one is rejected; and the work is idempotent at the
+# gateway (import and create both tolerate "already exists"), so re-running
+# it costs a few seconds and keeps the role re-runnable.
+- name: Clear any previous provider Job
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ openshell_namespace }}"
+    name: openshell-load-providers
+    wait: true
+    wait_timeout: 120
+  when: openshell_providers | length > 0
+
+- name: Import the profiles and create the providers
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    definition: "{{ lookup('template', 'load-providers-job.yaml.j2') | from_yaml }}"
+  when: openshell_providers | length > 0
+
+- name: Wait for the providers to be created
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ openshell_namespace }}"
+    name: openshell-load-providers
+  register: openshell_provider_job
+  until: >-
+    ((openshell_provider_job.resources | default([]) | first | default({})).status
+     | default({})).succeeded | default(0) | int > 0
+    or
+    ((openshell_provider_job.resources | default([]) | first | default({})).status
+     | default({})).failed | default(0) | int > 0
+  retries: 40
+  delay: 10
+  when: openshell_providers | length > 0
+
+- name: Report what the provider Job did
+  ansible.builtin.command:
+    cmd: >-
+      oc {{ ocp_context_arg }} logs -n {{ openshell_namespace }}
+      job/openshell-load-providers --tail=40
+  register: openshell_provider_log
+  changed_when: false
+  failed_when: false
+  when: openshell_providers | length > 0
+
+- name: Require the providers to exist
+  ansible.builtin.assert:
+    that:
+      - ((openshell_provider_job.resources | first).status | default({})).succeeded | default(0) | int > 0
+    fail_msg: >-
+      The provider Job did not succeed, so no credential is brokered and
+      sandboxes will be denied egress to the model gateway - agents will
+      start and then be unable to reach a model. Job output:
+      {{ openshell_provider_log.stdout | default('(no logs)') }}
+    quiet: true
+  when: openshell_providers | length > 0
+
+# --- gateway discovery -----------------------------------------------------
+# This is the one the previous role could not answer, and the POC's answer
+# is the whole reason to prefer it.
+#
+# Omnigent resolves its gateway through the OpenShell SDK's
+# from_active_cluster(), which reads CLI state - ~/.config/openshell/
+# active_gateway naming a gateway, and gateways/<name>/metadata.json
+# describing it. Upstream is explicit that "there is no base-URL or token
+# knob in Omnigent - gateway setup and auth are an OpenShell concern", so
+# there is nothing to template on the server side and the old role fell back
+# to guessing at an OPENSHELL_GATEWAY environment variable.
+#
+# The POC's answer: write that CLI state into a Secret and mount it at
+# /.config/openshell in the server pod. The SDK then finds a registered
+# gateway exactly as if someone had run "openshell gateway add" by hand.
+# No init container, no CLI in the image.
+#
+# auth_mode plaintext and the http:// endpoint match the gateway posture set
+# in defaults - disableTls true, no OIDC. Change one and this has to change
+# with it.
+- name: Register the gateway for the omnigent server to find
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openshell-gateway-config
+        namespace: "{{ omnigent_namespace | default('omnigent') }}"
+      stringData:
+        active_gateway: "{{ openshell_gateway_name }}"
+        metadata.json: "{{ openshell_gateway_metadata | to_json }}"
+  vars:
+    openshell_gateway_metadata:
+      name: "{{ openshell_gateway_name }}"
+      gateway_endpoint: "http://openshell.{{ openshell_namespace }}.svc.cluster.local:8080"
+      is_remote: false
+      gateway_port: 8080
+      auth_mode: plaintext
+
 - name: Record the gateway endpoint for the omnigent role
   ansible.builtin.set_fact:
     openshell_gateway_endpoint: "openshell.{{ openshell_namespace }}.svc.cluster.local:8080"
@@ -212,6 +661,9 @@
   ansible.builtin.debug:
     msg:
       - "OpenShell gateway ready in {{ openshell_namespace }}."
-      - "endpoint: {{ openshell_gateway_endpoint }}"
-      - "policy:   ConfigMap/openshell-base-policy, {{ (openshell_egress_allow + openshell_egress_extra) | length }} egress rules"
+      - "endpoint : {{ openshell_gateway_endpoint }} (plaintext, no auth, ClusterIP only)"
+      - "landlock : ABI {{ openshell_abi.stdout | default('unchecked') | trim }}"
+      - "sandbox  : {{ openshell_sandbox_image }}"
+      - "policy   : baked into that image at /etc/openshell/policy.yaml"
+      - "litemaas : {{ openshell_litemaas_service }}.{{ openshell_litemaas_namespace }} -> {{ openshell_litemaas_target | trim }}"
       - "Set omnigent_sandbox_provider=openshell to have omnigent use it."

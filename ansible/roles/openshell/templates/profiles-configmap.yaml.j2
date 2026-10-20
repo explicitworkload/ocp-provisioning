@@ -1,0 +1,19 @@
+{#
+  The OpenShell provider profiles the load-providers Job imports.
+
+  Each entry is copied verbatim from roles/openshell/files/profiles/, which
+  are themselves byte-identical to the aicatalyst-team POC's profiles/. A
+  profile declares which hosts a credential may be sent to and which
+  binaries may trigger it, so editing one here rather than there would
+  silently widen the blast radius of a key.
+-#}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openshell-profiles
+  namespace: {{ openshell_namespace }}
+data:
+{% for p in openshell_providers %}
+  {{ p.profile }}.yaml: |
+{{ lookup('file', 'profiles/' ~ p.profile ~ '.yaml') | indent(4, true) }}
+{% endfor %}

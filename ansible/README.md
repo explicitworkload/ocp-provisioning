@@ -31,7 +31,7 @@ else is reference.
     [Omnigent](#omnigent--on-by-default)
     ([Sandboxes](#sandboxes),
     [upstream changes](#three-upstream-things-this-role-changes)) ·
-    [OpenShell](#openshell--off-by-default-untested) ·
+    [OpenShell](#openshell--off-by-default-verified-on-sandbox544) ·
     [Demos](#demos--on-by-default)
   - Operations:
     [Operations Dashboard](#operations-dashboard) ·
@@ -671,44 +671,74 @@ The image is `omnigent-server-kubernetes`, not the plain `omnigent-server` —
 same build with the kubernetes client extra compiled in, which the sandbox
 provider needs to import its client. Harmless when sandboxes are off.
 
-### OpenShell — off by default, untested
+### OpenShell — off by default, verified on sandbox544
 
 [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) is a runtime that
 sandboxes AI agents with kernel-level policy: Landlock on the filesystem,
 seccomp on syscalls, and a deny-by-default egress proxy that brokers
 credentials so the agent holds placeholders rather than keys.
 
-It exists here for Omnigent, which supports it as a first-party sandbox
-provider — `sandbox.provider: openshell`, with a 635-line launcher and an
-849-line test file upstream. Set `omnigent_sandbox_provider: openshell` and
-`deploy_openshell: true` together; `site.yml` gates the role on both.
+It exists here for Omnigent, which supports it as a sandbox provider —
+`sandbox.provider: openshell`. Set `omnigent_sandbox_provider: openshell`
+and `deploy_openshell: true` together; `site.yml` gates the role on both.
 
-What the role does, in order: installs the kubernetes-sigs Agent Sandbox
-controller and CRDs (pinned to v1.0.7, since that project ships weekly),
-creates the `openshell` namespace, renders a gateway-wide egress policy,
-and installs the gateway from `oci://ghcr.io/nvidia/openshell/helm-chart`.
-The Omnigent server then switches to the matching `-openshell` image build
-and gets `OPENSHELL_GATEWAY` pointed at the gateway Service.
+This role was rewritten on 2026-10-19 against a deployment that works:
+[aicatalyst-team/omnigent-poc](https://github.com/aicatalyst-team/omnigent-poc)
+and the `scShiftShell` / `scOpenshellProviders` branches of their Omnigent
+fork. The previous version was written from documentation with no cluster
+and guessed wrong about the chart version, how the server finds the
+gateway, and how the sandbox policy is delivered.
 
-Two things worth knowing before you turn it on:
+What the role does, in order: probes the kernel's Landlock ABI and refuses
+below 2; installs the kubernetes-sigs Agent Sandbox controller and CRDs;
+creates the `openshell-poc` namespace and grants `anyuid` to the gateway's
+two ServiceAccounts; installs the gateway chart; aliases LiteMaaS onto this
+cluster's LiteLLM and registers the model-name aliases the sandbox image
+expects; runs a Job that imports the provider profiles and creates the
+providers; and writes the gateway's identity into a Secret the Omnigent
+server mounts.
 
-**OpenShift 4.19 or later.** The RHCOS kernels in 4.16–4.18 are built
-without Landlock, so every sandbox fails its startup probe. The role reads
-`ClusterVersion` and refuses rather than letting that surface later as a
-Landlock error. It needs no `privileged` SCC and no added capability — the
-driver reads the namespace's `openshift.io/sa.scc.uid-range` and runs
-non-root under the restricted posture.
+Four things worth knowing:
 
-**None of this has been run against a cluster.** It was written from
-upstream documentation and registry metadata while no cluster was
-available. Every version was checked to exist; nothing was observed
-working. `roles/openshell/tasks/main.yml` marks four `FIRST RUN` spots.
-The one most likely to bite: the egress policy is rendered into a
-ConfigMap but not mounted into the gateway, because upstream documents four
-policy sources without naming the Helm value for the gateway-wide one — so
-until that is wired, sandboxes fall back to OpenShell's built-in default
-policy, which is restrictive enough to block the Omnigent callback and
-LiteLLM. That looks like a broken model, not a blocked egress rule.
+**The kernel, not the OpenShift version.** The upstream POC's docs say
+OpenShell needs kernel ≥ 5.19, that RHCOS 9 is pinned to 5.14, and that the
+way out is Tech Preview plus a MultiOS migration of every node to RHCOS 10
+— irreversible, and it forfeits minor-version upgrades for the cluster.
+That reasoning reads the mainline version number, where Landlock ABI 2
+landed in 5.19. Red Hat backported Landlock, so the mapping does not hold.
+Measured on OCP 4.22.18 / RHCOS 9.8 / kernel `5.14.0-687`:
+`landlock_create_ruleset()` returns **ABI 6**, the mainline 6.12 feature
+level. No migration is needed. The role asks the kernel rather than
+inferring, so it stays honest on a cluster where the answer differs.
+
+**The gateway runs as root.** The POC's values set `runAsUser: 0` with no
+capabilities dropped, so the role binds the `anyuid` SCC to the gateway's
+ServiceAccounts in that namespace. `anyuid` relaxes the UID range only — no
+host access, no extra capabilities. Set `openshell_run_as_root: false` for
+the stricter posture where OpenShift assigns the UID instead.
+
+**The policy ships in the image.** Not as a gateway ConfigMap. The POC's
+sandbox image (`quay.io/aicatalyst/omnigent-host-openshell`) bakes
+`/etc/openshell/policy.yaml` and meets OpenShell's sandbox contract: a
+non-root `sandbox` user with an `nss_wrapper` shim for OpenShift's
+arbitrary UID, plus iproute2 and nftables for the supervisor's network
+namespace. Changing the egress allow-list means building an image.
+
+**Providers are what let the agent think.** OpenShell is deny-by-default
+and the baked policy says nothing about this cluster's model gateway, so a
+sandbox with no provider attached is correctly confined and completely
+unable to reach a model. Providers do *not* auto-attach. Attaching them
+needs `sandbox.openshell.providers`, which exists only in the aicatalyst
+fork of the Omnigent server — upstream's launcher takes `image`, `env`,
+`cluster` and `workspace` and nothing else. That is why the openshell path
+pins the fork image, and why it gets its own database: the fork's alembic
+head is behind upstream's and refuses a schema from the future. See
+`omnigent_db_name`.
+
+Only the `litemaas` provider is created, brokering this cluster's LiteLLM
+key. The POC's other four profiles (`openai`, `claude-code`, `github`,
+`antigravity`) need vendor API keys, and this repo does not carry
+credentials — add one to `openshell_providers` with its key in a Secret.
 
 
 ### Demos — on by default
