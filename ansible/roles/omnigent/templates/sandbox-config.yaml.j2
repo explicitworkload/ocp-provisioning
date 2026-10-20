@@ -18,11 +18,39 @@ sandbox:
   #
   # api_key_ref resolves INSIDE the runner Pod against the Secret named
   # below, so the key itself never appears in this ConfigMap.
+  #
+  # A gateway entry groups one or more model FAMILIES, and "default:" is a
+  # list of the family scopes this provider is the default for - not a list
+  # of agents. The three scopes that matter here:
+  #
+  #   anthropic  the Messages API surface, consumed by native Claude Code
+  #   openai     the Responses/Chat surface, consumed by Codex and opencode
+  #   pi         omnigent's own agent, which consumes either family
+  #
+  # This used to declare only "openai" and "default: [pi]", which is why
+  # the model picker offered exactly one model: nothing but pi had a
+  # gateway, so Claude Code fell back to the single ANTHROPIC_MODEL env var
+  # and every other model LiteLLM serves was invisible. Adding the
+  # anthropic family gives Claude Code the gateway too, and the catalog
+  # then lists whatever GET <base_url>/v1/models returns.
   host_config:
     providers:
       litellm:
         kind: gateway
-        default: [pi]
+        default: [{{ omnigent_gateway_default_families | join(', ') }}]
+        {# No /v1 here on purpose. The catalog appends /v1/models when the
+           base does not already name a version, and the harness appends
+           /v1/messages - a base that already said /v1 builds a path
+           LiteLLM does not serve. The openai family below is the opposite
+           case and keeps its suffix. -#}
+        anthropic:
+          base_url: {{ omnigent_anthropic_base_url }}
+          api_key_ref: env:LITELLM_API_KEY
+          {# Which model a Claude Code session starts on. The picker still
+             lists the whole catalog; this is only the pre-selection, and
+             it stays on the model with the most testing behind it. -#}
+          models:
+            default: {{ omnigent_anthropic_model }}
         openai:
           base_url: {{ omnigent_litellm_url }}
           api_key_ref: env:LITELLM_API_KEY

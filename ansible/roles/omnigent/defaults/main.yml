@@ -357,6 +357,33 @@ omnigent_anthropic_base_url: >-
 # changing it.
 omnigent_anthropic_model: qwen36-35b-a3b
 
+# Which model-family scopes the LiteLLM gateway is the default provider
+# for, written into host_config.providers.litellm.default.
+#
+# All three, which is a deliberate widening. It used to be [pi] alone, and
+# the visible symptom was a model picker with exactly one entry in it: pi
+# had a gateway and nothing else did, so Claude Code had no catalog to list
+# and fell back to the single ANTHROPIC_MODEL env var. Every other model
+# LiteLLM serves was reachable from the cluster and invisible from the UI.
+#
+#   anthropic  native Claude Code
+#   openai     Codex and opencode
+#   pi         omnigent's own agent
+#
+# Narrow this if a family should keep a different default provider; an
+# empty list leaves the gateway configured but default for nothing, which
+# puts the one-model picker back.
+#
+# Listing a family here does NOT promise every catalogue entry works
+# through it. The picker shows what LiteLLM advertises, and on this cluster
+# that includes an embedding model and a document converter that cannot
+# chat at all - see the notes on omnigent_anthropic_model for which of the
+# chat models actually survive the Anthropic translation.
+omnigent_gateway_default_families:
+  - anthropic
+  - openai
+  - pi
+
 # Claude Code refuses to size a context window for a model it has never
 # heard of, and none of this cluster's models are in its catalogue. Without
 # this it prints a paragraph of advice about modelPicker rows on every

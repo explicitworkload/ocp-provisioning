@@ -178,6 +178,26 @@
         template:
           metadata:
             labels: {app: omnigent}
+            # Rolls the pod when the sandbox config changes, and this is
+            # not belt-and-braces: the server parses the sandbox: section
+            # ONCE at startup - cli.py hands the parsed object to the
+            # server as sandbox_config= - and holds that snapshot for its
+            # whole life. A mounted ConfigMap updates the file underneath
+            # it and changes nothing.
+            #
+            # Without this the failure is silent and easy to miss. The run
+            # reports changed=1 on the ConfigMap, the new YAML is visibly
+            # correct on the cluster, and every sandbox launched afterwards
+            # still uses the config the pod read hours earlier. Measured
+            # here: widening the model-provider families landed in the
+            # ConfigMap and did nothing until the pod was rolled by hand.
+            #
+            # Hashing the rendered template rather than the live ConfigMap
+            # keeps this independent of task order - sandboxes.yml writes
+            # that object after this task has already run.
+            annotations:
+              omnigent.io/sandbox-config-checksum: >-
+                {{ lookup('template', 'sandbox-config.yaml.j2') | hash('sha1') }}
           spec:
             serviceAccountName: "{{ 'omnigent-server' if omnigent_sandboxes | bool else 'default' }}"
             # runAsNonRoot without runAsUser, exactly as upstream's
