@@ -85,3 +85,7 @@ ansible/group_vars/all.yml.*
 .venv/
 venv/
 pyvenv.cfg
+
+# run.sh session logs. Unredacted - the end-of-run summary prints every
+# generated credential - so they never belong in git.
+ansible/logs/

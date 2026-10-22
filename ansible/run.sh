@@ -123,12 +123,46 @@ if ! ansible-galaxy collection install -r requirements.yml; then
   echo
 fi
 
+# The run log. script(1) was already recording the whole session and throwing
+# it into /dev/null; it now writes to logs/ instead, and lib/runlog.sh keeps a
+# copy on the cluster - in ConfigMap ansible-run-log in the dashboard
+# namespace, refreshed every minute and once more at exit with the outcome -
+# so a failure can be read with oc rather than copied out of this terminal.
+# Credentials are removed from that copy; the local file keeps everything.
+mkdir -p logs
+chmod 700 logs 2>/dev/null || true
+run_log="logs/run-$(date -u +%Y%m%dT%H%M%SZ).log"
+# shellcheck disable=SC2012  # names are ours: run-<timestamp>.log
+ls -1t logs/run-*.log 2>/dev/null | tail -n +20 | xargs rm -f -- 2>/dev/null || true
+(umask 077 && : > "$run_log")
+
+RUN_LOG_STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_LOG_ARGS="$*"
+if [[ -f lib/runlog.sh ]]; then
+  # shellcheck source=lib/runlog.sh
+  source lib/runlog.sh
+else
+  runlog_publish() { :; }; runlog_start() { :; }; runlog_stop() { :; }
+  runlog_status_for() { :; }
+fi
+runlog_publish "$run_log" running
+runlog_start "$run_log"
+trap 'runlog_stop' EXIT
+
 # Run playbook with blocking IO wrapper.
 # -e/--return makes script exit with the playbook's status; without it a
-# failed run reports success on Linux. printf %q quotes each argument so the
-# shell re-parse cannot mangle values containing spaces or metacharacters.
+# failed run reports success on Linux. -f/-F flushes every write, so the copy
+# uploaded mid-run is current rather than a buffer behind. printf %q quotes
+# each argument so the shell re-parse cannot mangle values containing spaces
+# or metacharacters.
+#
+# set +e around it: under -e a failed playbook would end this script on the
+# spot, before the final upload that records the failure - the one upload
+# that matters most.
+set +e
 if [[ "$(uname)" == "Darwin" ]]; then
-  script -q /dev/null ansible-playbook site.yml "$@"
+  script -q -F "$run_log" ansible-playbook site.yml "$@"
+  rc=$?
 else
   # Build the argument suffix only when there is something to quote: bash's
   # printf emits '' for a %q with no corresponding argument, so a bare
@@ -138,5 +172,12 @@ else
   if (( $# )); then
     extra=" $(printf '%q ' "$@")"
   fi
-  script -qe -c "ansible-playbook site.yml$extra" /dev/null
+  script -qef -c "ansible-playbook site.yml$extra" "$run_log"
+  rc=$?
 fi
+set -e
+
+runlog_stop
+runlog_publish "$run_log" "$(runlog_status_for "$rc")" "$rc"
+echo "Run log: $run_log (copy without credentials: ${RUN_LOG_KIND:-configmap}/${RUN_LOG_NAME:-ansible-run-log} in ${RUN_LOG_NAMESPACE:-dashboard})" >&2
+exit "$rc"
