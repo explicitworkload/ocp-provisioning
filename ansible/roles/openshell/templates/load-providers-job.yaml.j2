@@ -144,12 +144,36 @@ spec:
                 fi
               fi
 
+              # The profile can also be held by a provider that is not ours
+              # by name - most likely one created under an earlier
+              # openshell_provider_prefix, the way sandbox2914 kept
+              # sandbox544-litemaas when the prefix became "sandbox":
+              #
+              #   provider profile 'litemaas' is in use by providers:
+              #   sandbox544-litemaas
+              #
+              # Treated like the attached-sandbox case above: the profile
+              # stays as it is, the edit is reported as not applied, and our
+              # provider is still created against it. Under set -eu the
+              # alternative was the lint below failing on "already exists"
+              # and the whole Job with it.
               if [ "$reconcile" = yes ]; then
-                "$CLI" profile delete {{ p.profile }} \
-                  && echo "removed previous profile" \
-                  || echo "no previous profile to remove (expected on a first run)"
-                "$CLI" profile lint -f /profiles/{{ p.profile }}.yaml
-                "$CLI" profile import -f /profiles/{{ p.profile }}.yaml
+                import=yes
+                if "$CLI" profile delete {{ p.profile }} 2>/tmp/pdel.err; then
+                  echo "removed previous profile"
+                elif grep -qi "in use by providers" /tmp/pdel.err; then
+                  cat /tmp/pdel.err
+                  echo "!! PROFILE NOT UPDATED: {{ p.profile }} is held by the provider(s) above."
+                  echo "!! The existing profile is kept and {{ openshell_provider_prefix }}-{{ p.profile }} is created against it."
+                  echo "!! To apply an edit to this profile, delete those providers and re-run."
+                  import=no
+                else
+                  echo "no previous profile to remove (expected on a first run)"
+                fi
+                if [ "$import" = yes ]; then
+                  "$CLI" profile lint -f /profiles/{{ p.profile }}.yaml
+                  "$CLI" profile import -f /profiles/{{ p.profile }}.yaml
+                fi
               fi
 
               # A listed credential that is unset would create a provider

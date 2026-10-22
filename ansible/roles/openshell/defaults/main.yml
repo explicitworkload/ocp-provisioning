@@ -378,7 +378,22 @@ openshell_agent_policy_proposals: false
 #
 # To add one later: put the key in a Secret, add an entry here, and list the
 # provider name in omnigent_openshell_providers.
-openshell_provider_prefix: "sandbox544"
+#
+# Providers are named "<prefix>-<profile>", so this gives sandbox-litemaas
+# on every cluster. It said "sandbox544" until OpenShell became the default
+# and that one cluster's name would have appeared on all of them. The
+# omnigent role derives its provider list from this same value, so the two
+# cannot disagree.
+#
+# Changing it on a cluster that already has providers under the old name
+# adds the new provider alongside the old one; it does not rename. The old
+# provider keeps holding the litemaas profile, so the Job leaves that
+# profile as it is and says so, rather than re-importing it. sandbox2914 is
+# such a cluster - it was deployed with "sandbox544" an hour before this
+# changed. Once nothing is attached to the old provider, remove it with
+#   openshell provider delete sandbox544-litemaas
+# and the next run re-imports the profile normally.
+openshell_provider_prefix: "sandbox"
 
 # The GitHub token, if one has been supplied. Read off the cluster rather
 # than set here, so no token is ever written into this repo:
