@@ -429,8 +429,8 @@
     - role: openshell
       tags: [openshell, agents]
       when:
-        - deploy_openshell | default(false) | bool
-        - (omnigent_sandbox_provider | default('kubernetes')) == 'openshell'
+        - deploy_openshell | default(true) | bool
+        - (omnigent_sandbox_provider | default('openshell')) == 'openshell'
 
     # After litellm, openrag and milvus, because it needs all three: the
     # virtual key, the model list and the Milvus endpoint. Before demos,

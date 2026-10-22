@@ -348,22 +348,27 @@ code with real credentials.
 
 ### `omnigent_sandbox_provider`
 
-Which runtime an agent session actually runs in. `kubernetes` or `openshell`.
-
-`kubernetes` is the tested path: each session is a Pod in
-`omnigent-sandboxes`, and the boundary is Kubernetes RBAC plus the
-namespace. Nothing confines what the agent does *inside* that Pod.
+Which runtime an agent session actually runs in. `openshell` (the default)
+or `kubernetes`.
 
 `openshell` hands sessions to [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell),
 which adds Landlock on the filesystem, seccomp on syscalls, and a
 deny-by-default egress proxy that brokers credentials so the agent holds
 placeholders rather than keys. It is a first-party Omnigent provider, not
 something assembled here — upstream ships a 635-line launcher, an 849-line
-test file and a kustomize overlay for it — and it needs `deploy_openshell`
-as well, plus OpenShift 4.19 or later.
+test file and a kustomize overlay for it. It only takes effect together
+with `deploy_openshell: true`, which is also the default. Run end to end on
+sandbox544. Under it the server runs the aicatalyst fork
+(`omnigent-server-openshell`) against its own database, so switching
+provider does not carry sessions across.
 
-**Untested.** It was written from upstream documentation with no cluster
-available; see `deploy_openshell`.
+`kubernetes` runs each session as a plain Pod in `omnigent-sandboxes`, and
+the boundary is Kubernetes RBAC plus the namespace — nothing confines what
+the agent does *inside* that Pod. Select it with
+`omnigent_sandbox_provider: kubernetes` and `deploy_openshell: false`. Run
+end to end on sandbox2914. Its pods need the `nonroot-v2` SCC because
+upstream hardcodes their UID; the role grants it, see
+`omnigent_runner_service_account` in `roles/omnigent/defaults/main.yml`.
 
 ---
 
@@ -403,28 +408,39 @@ setting actually lives on this cluster".
 ### `deploy_openshell`
 
 Deploy the NVIDIA OpenShell gateway and the Agent Sandbox controller, so
-`omnigent_sandbox_provider: openshell` has something to talk to. Only read
-when that provider is selected — a gateway nothing uses is a StatefulSet
-nobody asked for, so `site.yml` gates on both.
+`omnigent_sandbox_provider: openshell` has something to talk to. **On by
+default**, together with that provider. `site.yml` runs the role only when
+both say so — a gateway nothing uses is a StatefulSet nobody asked for — so
+turning OpenShell off means setting both: `deploy_openshell: false` and
+`omnigent_sandbox_provider: kubernetes`.
 
-**Nothing in this role has been run against a cluster.** Every version in
-it was checked to exist in its registry, but that is a long way from the
-gateway coming up and Omnigent reaching it. Four things are marked
-`FIRST RUN` in `roles/openshell/tasks/main.yml` as the most likely to need
-work; the biggest is that the sandbox egress policy is rendered into a
-ConfigMap but not yet mounted into the gateway, because upstream documents
-four policy sources without naming the Helm value that supplies the first.
-Until that is wired, sandboxes get OpenShell's built-in default policy,
-which is restrictive enough to block the Omnigent callback and LiteLLM.
+Needs the `helm` CLI on the host running the playbook; the role checks for
+it first and stops with a clear message if it is missing.
 
-Requires OpenShift 4.19+. The RHCOS kernels in 4.16 through 4.18 are built
-without Landlock, so every sandbox fails its startup probe; the role checks
-the cluster version and refuses rather than letting that happen later.
+Run end to end on sandbox544 (OCP 4.22, RHCOS 9.8), following the
+aicatalyst-team POC; the role's defaults mark the few places it
+deliberately differs from that POC with `DIVERGES`. What it installs:
 
-The gateway needs no `privileged` SCC and no added Linux capability —
-its driver reads the namespace's `openshift.io/sa.scc.uid-range` and runs
-non-root under the restricted posture, which is unusual enough for a
-kernel-level sandbox to be worth saying.
+- the kubernetes-sigs Agent Sandbox controller, pinned, which OpenShell's
+  Kubernetes driver builds on — cluster-scoped, one CRD and a controller in
+  `agent-sandbox-system`, fetched from GitHub
+- the OpenShell gateway Helm chart, 0.1.4, in `openshell-poc`
+- a `litemaas` alias Service onto this cluster's LiteLLM, and the provider
+  that brokers its key to sandboxes
+
+The sandbox egress policy ships baked into the sandbox image rather than
+in a ConfigMap, so changing what a sandbox may reach means building an
+image.
+
+The role probes the kernel's Landlock ABI and refuses below 2, rather than
+reading a version number: RHCOS 9's kernel reports 5.14, but Red Hat
+backported Landlock and RHCOS 9.8 measures ABI 6.
+
+The gateway runs as root, with `anyuid` granted to its own ServiceAccount
+only — that is the POC's posture and the one with a working gateway behind
+it. It is plaintext and unauthenticated, with no Route, reachable only
+in-cluster; see `openshell_disable_tls` in `roles/openshell/defaults` for
+what that trades.
 
 ---
 

@@ -679,8 +679,10 @@ seccomp on syscalls, and a deny-by-default egress proxy that brokers
 credentials so the agent holds placeholders rather than keys.
 
 It exists here for Omnigent, which supports it as a sandbox provider —
-`sandbox.provider: openshell`. Set `omnigent_sandbox_provider: openshell`
-and `deploy_openshell: true` together; `site.yml` gates the role on both.
+`sandbox.provider: openshell` — and it is **on by default**:
+`omnigent_sandbox_provider: openshell` and `deploy_openshell: true`.
+`site.yml` gates the role on both, so opting out means setting both, to
+`kubernetes` and `false`. It needs the `helm` CLI on the run host.
 
 This role was rewritten on 2026-10-19 against a deployment that works:
 [aicatalyst-team/omnigent-poc](https://github.com/aicatalyst-team/omnigent-poc)

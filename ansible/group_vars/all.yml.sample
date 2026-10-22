@@ -105,11 +105,13 @@ deploy_milvus: true
 deploy_omnigent: true
 omnigent_sandboxes: true
 omnigent_version: v0.18.0
-# kubernetes | openshell. openshell sandboxes each agent session with
+# openshell | kubernetes. openshell sandboxes each agent session with
 # Landlock on the filesystem, seccomp on syscalls and a deny-by-default
-# egress proxy; it needs deploy_openshell below. kubernetes is the default
-# because it has no kernel prerequisite and no extra images to pull.
-omnigent_sandbox_provider: kubernetes
+# egress proxy, and is the default; it needs deploy_openshell below, and
+# the two only take effect together. kubernetes runs each session as a
+# plain Pod in omnigent-sandboxes, with RBAC and the namespace as the only
+# boundary - set both to kubernetes / false for that.
+omnigent_sandbox_provider: openshell
 
 # true  = oauth-proxy, log in with your OpenShift identity.
 # false = Omnigent's own accounts; the admin password is generated on first
@@ -135,6 +137,10 @@ deploy_genai_playground: true
 # --- OpenShell -------------------------------------------------------------
 # Only used when omnigent_sandbox_provider is openshell.
 #
+# On by default, together with omnigent_sandbox_provider: openshell above;
+# site.yml runs the role only when both say so. Needs the helm CLI on the
+# host running this playbook - the role checks and stops early if not.
+#
 # The role checks the kernel's Landlock ABI before installing anything and
 # refuses below ABI 2. Worth knowing because the headline prerequisite is
 # widely misreported: Landlock ABI 2 landed in mainline 5.19 and RHCOS 9 is
@@ -142,7 +148,7 @@ deploy_genai_playground: true
 # migration to RHCOS 10. It does not - Red Hat backported Landlock, and
 # RHCOS 9.8 on OCP 4.22 measures ABI 6, the mainline 6.12 feature level.
 # The role asks the kernel rather than the version string.
-deploy_openshell: false
+deploy_openshell: true
 
 # ===========================================================================
 # OPTIONAL - nothing below here is necessary.

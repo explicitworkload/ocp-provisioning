@@ -42,20 +42,20 @@ omnigent_version: v0.18.0
 # Which sandbox runtime agent sessions get. Two supported values, and the
 # image below follows this rather than being set separately.
 #
-#   kubernetes  Each session is a Pod in omnigent_sandbox_namespace. The
-#               boundary is Kubernetes RBAC and the namespace. This is the
-#               tested path.
-#   openshell   Each session runs under NVIDIA OpenShell, which adds
-#               Landlock on the filesystem, seccomp on syscalls and a
-#               deny-by-default egress proxy that brokers credentials so
-#               the agent holds placeholders rather than keys. Needs the
-#               openshell role to have run, and OpenShift 4.19+ for the
-#               Landlock backport. NOT YET TESTED - see that role.
+#   openshell   The default. Each session runs under NVIDIA OpenShell,
+#               which adds Landlock on the filesystem, seccomp on syscalls
+#               and a deny-by-default egress proxy that brokers credentials
+#               so the agent holds placeholders rather than keys. Needs the
+#               openshell role (deploy_openshell) and a kernel with Landlock
+#               ABI 2+, which RHCOS 9.8 has. Run end to end on sandbox544.
+#   kubernetes  Each session is a plain Pod in omnigent_sandbox_namespace,
+#               bounded only by RBAC and the namespace. Run end to end on
+#               sandbox2914.
 #
 # This is a first-party upstream provider, not something bolted on here:
 # omnigent/onboarding/sandboxes/openshell.py is 635 lines with an 849-line
 # test file, and upstream ships a kustomize overlay for it.
-omnigent_sandbox_provider: kubernetes
+omnigent_sandbox_provider: openshell
 
 # The build variant has to match the provider. Both are the same server
 # with a different extra compiled in - OMNIGENT_EXTRAS=kubernetes or
