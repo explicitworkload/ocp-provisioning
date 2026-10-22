@@ -112,6 +112,32 @@
 # ---------------------------------------------------------------------------
 # Object storage
 # ---------------------------------------------------------------------------
+# Created here rather than left to the operator. Everything below - the
+# bucket claim, the S3 Secret, the LokiStack - lives in this namespace, and
+# all of it is created BEFORE the FlowCollector, which is what the operator
+# reconciles its namespace from.
+#
+# This worked for as long as it did only because the 1.x operator happened
+# to have the namespace in place by now. Operator 2.0.0 (replacing 1.12.3
+# on the stable channel) does not, and sandbox2914 died here 34 minutes in:
+#
+#   namespaces "netobserv" not found
+#
+# Owning it is correct on either version. Red Hat's own Loki instructions
+# for Network Observability have you create the namespace by hand before
+# the FlowCollector, so a pre-existing one is the supported arrangement,
+# and apply leaves alone any labels the operator adds later.
+- name: Create the Network Observability namespace
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ netobserv_namespace }}"
+
 - name: Claim a NooBaa bucket for Loki
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
