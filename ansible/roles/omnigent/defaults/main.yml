@@ -175,10 +175,21 @@ omnigent_db_user: omnigent
 # Choose oidc instead of accounts if this ever becomes multi-user and an
 # IdP exists to point at; the role does not template that yet.
 #
-# Left at true so that turning sandboxes on never silently downgrades
-# anyone's authentication. tasks/main.yml refuses the broken combination
-# instead, which makes it a decision rather than a surprise.
-omnigent_auth: true
+# Follows omnigent_sandboxes: OpenShift login whenever it can work, built-in
+# accounts when it cannot.
+#
+# This used to be a flat true, with the reasoning that turning sandboxes on
+# should never silently downgrade anyone's authentication. That only holds if
+# sandboxes default to off, and they default to on - so the shipped defaults
+# were exactly the combination tasks/main.yml refuses, and every fresh
+# all.yml copied from the sample failed there. sandbox2914 hit it 45 minutes
+# into its first run.
+#
+# Deriving it keeps the original intent without the trap. Turn sandboxes off
+# and this goes back to true. Set omnigent_auth: true explicitly alongside
+# sandboxes and the refusal still fires, which is the "decision rather than
+# a surprise" the check exists for.
+omnigent_auth: "{{ not (omnigent_sandboxes | bool) }}"
 
 # The first account created in accounts mode. Its password is generated on
 # first run, stored in the omnigent-admin Secret, and read back by the

@@ -120,7 +120,11 @@ omnigent_sandbox_provider: kubernetes
 # reaches "host online" and then fails its first callback with HTTP 401,
 # surfacing as "Native <harness> terminal failed to start". The role refuses
 # the combination rather than letting you find that out from a crash loop.
-omnigent_auth: true
+#
+# So it follows omnigent_sandboxes rather than being set on its own. This
+# was a literal true until sandbox2914, where it failed that check 45
+# minutes into a fresh run.
+omnigent_auth: "{{ not (omnigent_sandboxes | bool) }}"
 
 # --- Gen AI playground -----------------------------------------------------
 # Correct the playground's llama-stack config. On by default: without it the
