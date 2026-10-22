@@ -53,6 +53,10 @@
 # Deliberately powerless, and automountServiceAccountToken is false on
 # purpose: a runner Pod has no business holding a cluster credential. It
 # talks to the server over the launch-token tunnel, not the API.
+#
+# Only when a dedicated account is chosen. The default is the namespace's
+# own "default" ServiceAccount, which already exists and is equally
+# powerless - see omnigent_runner_service_account.
 - name: Create the Omnigent runner service account
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
@@ -62,12 +66,49 @@
       apiVersion: v1
       kind: ServiceAccount
       metadata:
-        name: omnigent-runner
+        name: "{{ omnigent_runner_service_account }}"
         namespace: "{{ omnigent_sandbox_namespace }}"
         labels:
           app.kubernetes.io/name: omnigent
           app.kubernetes.io/component: runner
       automountServiceAccountToken: false
+  when: omnigent_runner_service_account != 'default'
+
+# Without this no session ever starts on the kubernetes provider: upstream
+# hardcodes the pod's UID to 1000660000, outside this namespace's allocated
+# range, so restricted-v2 refuses it and the Job never creates a pod. See
+# omnigent_runner_service_account in defaults/main.yml for the full story
+# and for what the SCC grant does and does not loosen here.
+#
+# nonroot-v2, not anyuid: anyuid permits no seccomp profile at all, and the
+# launcher hardcodes seccompProfile: RuntimeDefault on every pod, so anyuid
+# refuses it too - measured on sandbox2914 with the binding in place.
+#
+# A RoleBinding to the SCC's ClusterRole rather than oc adm policy, so it is
+# declarative, namespaced to this one namespace, and removed with it.
+- name: Let session pods run as the host image's fixed user
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: omnigent-runner-nonroot
+        namespace: "{{ omnigent_sandbox_namespace }}"
+        labels:
+          app.kubernetes.io/name: omnigent
+          app.kubernetes.io/component: runner
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:openshift:scc:nonroot-v2
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ omnigent_runner_service_account }}"
+          namespace: "{{ omnigent_sandbox_namespace }}"
+  when: omnigent_sandbox_provider == 'kubernetes'
 
 - name: Grant the server rights over runner pods
   kubernetes.core.k8s:

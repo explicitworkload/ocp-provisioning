@@ -106,7 +106,7 @@ sandbox:
   kubernetes:
     namespace: {{ omnigent_sandbox_namespace }}
     secret_name: omnigent-creds
-    service_account: omnigent-runner
+    service_account: {{ omnigent_runner_service_account }}
 {% if omnigent_sandbox_host_image | length > 0 %}
     image: {{ omnigent_sandbox_host_image }}
 {% endif %}

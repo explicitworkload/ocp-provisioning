@@ -243,6 +243,38 @@ omnigent_litellm_url: >-
 # code it runs there is written by a model. The Role deliberately excludes
 # pods/exec, and the runner ServiceAccount is powerless.
 omnigent_sandboxes: true
+
+# The ServiceAccount kubernetes-provider session pods run as, and the one
+# granted the nonroot-v2 SCC in omnigent_sandbox_namespace.
+#
+# The SCC grant is not optional. Upstream's launcher hardcodes the pod's
+# runAsUser, runAsGroup and fsGroup to 1000660000 - the "sandbox" user baked
+# into its host image, which it must match or whoami and git commit break
+# inside the session. OpenShift's restricted-v2 only admits a UID inside the
+# namespace's own allocated range, and that range is assigned per cluster,
+# so the pod was refused by every SCC and the Job never made a pod:
+#
+#   Kubernetes sandbox job 'omnigent-managed-...' did not create a child
+#   pod within 90s.
+#   ... unable to validate against any security context constraint:
+#   restricted-v2: .spec.securityContext.fsGroup: Invalid value: [1000660000]
+#
+# which the UI reports only as being unable to connect to the host. Found
+# on sandbox2914, where the namespace's range was 1001110000/10000 and
+# 1000660000 happened to belong to openshift-catalogd.
+#
+# nonroot-v2 is the SCC that fits, and the only simple one that does. It
+# admits any non-root UID and the runtime/default seccomp profile. anyuid was
+# tried first and does NOT work: it permits no seccomp profile at all, and
+# the launcher hardcodes seccompProfile: RuntimeDefault, so anyuid refused
+# the pod on seccomp even with the binding in place.
+#
+# What it loosens is small. The pod still sets runAsNonRoot: true and drops
+# all capabilities, and nonroot-v2 itself refuses root. The ServiceAccount is
+# the namespace's default one, which holds no rights, and the pod spec sets
+# automountServiceAccountToken: false, so no cluster credential reaches the
+# session either way.
+omnigent_runner_service_account: default
 # The image an agent session runs in. Upstream's default is
 # ghcr.io/omnigent-ai/omnigent-host:latest, and :latest is how this repo has
 # already been bitten twice - so it is pinned to the server's own version,
@@ -340,16 +372,27 @@ omnigent_runner_env_passthrough: >-
 # key, and the same models every other workload here uses. Verified against
 # this cluster: an anthropic-version request to /v1/messages answers 200.
 #
-# Points at the LiteMaaS alias rather than litellm's own Service name for
-# the same reason omnigent_litellm_url does: the sandbox's egress policy is
-# enforced by hostname, and the alias is the name the litemaas provider
-# profile permits.
+# Under the openshell provider this points at the LiteMaaS alias rather than
+# litellm's own Service name, for the same reason omnigent_litellm_url does:
+# the sandbox's egress policy is enforced by hostname, and the alias is the
+# name the litemaas provider profile permits.
+#
+# Under kubernetes it must NOT, and it used to, unconditionally. The alias
+# is a Service the openshell role creates; with openshell not deployed it
+# does not exist, so on sandbox2914 every Claude Code request died on DNS
+# (curl exit 6 from inside the session pod) while litellm's own Service
+# answered 200 a line later. It looked like a model that never replied,
+# and the catalogue lookup failing the same way left the picker showing
+# only the default model. Switches exactly as omnigent_litellm_url does.
 #
 # No /v1 suffix - Claude Code appends its own path.
 omnigent_anthropic_base_url: >-
   {{ 'http://' ~ (openshell_litemaas_service | default('litemaas-litellm'))
      ~ '.' ~ (openshell_litemaas_namespace | default('litemaas'))
-     ~ '.svc.cluster.local:4000' }}
+     ~ '.svc.cluster.local:4000'
+     if omnigent_sandbox_provider == 'openshell'
+     else 'http://litellm.' ~ (litellm_namespace | default('litellm'))
+          ~ '.svc.cluster.local:4000' }}
 
 # Which of this cluster's models Claude Code drives. Chosen by testing all
 # of them through the Anthropic-compatible endpoint from inside a sandbox,
