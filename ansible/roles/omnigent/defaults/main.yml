@@ -349,6 +349,7 @@ omnigent_openshell_env:
   - ANTHROPIC_MODEL
   - CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT
   - CLAUDE_CODE_MAX_OUTPUT_TOKENS
+  - ANTHROPIC_DEFAULT_HAIKU_MODEL
   - OMNIGENT_RUNNER_ENV_PASSTHROUGH
 
 # Widened to the POC's list. The proxy variables are the load-bearing ones -
@@ -364,7 +365,7 @@ omnigent_openshell_env:
 # simply not forwarded; only the sandbox config's env: list fails loudly on
 # a missing name.
 omnigent_runner_env_passthrough: >-
-  https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,all_proxy,NO_PROXY,no_proxy,LITEMAAS_API_KEY,ANTHROPIC_BASE_URL,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_MODEL,CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,CLAUDE_CODE_MAX_OUTPUT_TOKENS,SSL_CERT_FILE,NODE_EXTRA_CA_CERTS
+  https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,all_proxy,NO_PROXY,no_proxy,LITEMAAS_API_KEY,ANTHROPIC_BASE_URL,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_MODEL,CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,CLAUDE_CODE_MAX_OUTPUT_TOKENS,ANTHROPIC_DEFAULT_HAIKU_MODEL,SSL_CERT_FILE,NODE_EXTRA_CA_CERTS
 
 # Claude Code against this cluster's models instead of Anthropic's API.
 #
@@ -464,6 +465,23 @@ omnigent_claude_disable_model_window_check: "1"
 # history passes roughly 49k tokens the same error returns, and starting a
 # new session is the remedy.
 omnigent_claude_max_output_tokens: "16384"
+
+# The model Claude Code uses for its small background jobs - naming the
+# session and the like - set as ANTHROPIC_DEFAULT_HAIKU_MODEL, the name the
+# Claude Code in the sandbox image (2.1.286) reads.
+#
+# Unset, Claude Code asks for claude-haiku-4-5-20251001 by name, which no
+# gateway here serves, and LiteLLM refuses it:
+#
+#   400 anthropic_messages: Invalid model name passed in
+#   model=claude-haiku-4-5-20251001
+#
+# Seen once per session on sandbox2914. The conversation itself carried on,
+# but the background job it belonged to did not run.
+#
+# The main model rather than a smaller one: it is the one whose behaviour
+# through the Anthropic translation has actually been tested.
+omnigent_claude_fast_model: "{{ omnigent_anthropic_model }}"
 
 # Empty means "use the active gateway", which is the registered one the
 # openshell role writes into the openshell-gateway-config Secret. Set this

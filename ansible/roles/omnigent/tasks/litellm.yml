@@ -68,6 +68,7 @@
         ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
         CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: "{{ omnigent_claude_max_output_tokens }}"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{ omnigent_claude_fast_model }}"
   no_log: true
 
 # The same Secret has to exist in the RUNNER namespace, because that is
@@ -93,5 +94,6 @@
         ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
         CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: "{{ omnigent_claude_max_output_tokens }}"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{ omnigent_claude_fast_model }}"
   no_log: true
   when: omnigent_sandboxes | bool
