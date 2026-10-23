@@ -216,6 +216,38 @@
   register: omnigent_db_create
   changed_when: "'CREATE DATABASE' in (omnigent_db_create.stderr | default(''))"
 
+# The providers attached to every OpenShell sandbox come from
+# omnigent_openshell_providers, which is derived from openshell_providers,
+# whose github entry depends on openshell_github_token - a fact the openshell
+# role sets when it reads the token Secret. Run this role on its own, as
+# --tags omnigent does, and that fact never exists: the github provider
+# silently drops out of the sandbox config and every session that names a
+# repository fails at git clone again. That happened on sandbox2914 the
+# first time the role was applied alone after the token was added.
+#
+# So read the same Secret here when the openshell role has not already done
+# so this play. Nothing is created: it only decides whether to attach a
+# provider the openshell role made.
+- name: Look for the GitHub token the openshell role uses
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    kind: Secret
+    namespace: "{{ openshell_namespace | default('openshell-poc') }}"
+    name: "{{ openshell_github_token_secret | default('openshell-github-token') }}"
+  register: omnigent_github_secret
+  no_log: true
+  when:
+    - omnigent_sandbox_provider == 'openshell'
+    - openshell_github_token is not defined
+
+- name: Attach the github provider only if its token exists
+  ansible.builtin.set_fact:
+    openshell_github_token: >-
+      {{ ((omnigent_github_secret.resources | default([]) | first | default({})).data | default({})).token
+         | default('', true) | b64decode }}
+  no_log: true
+  when: omnigent_github_secret is not skipped
+
 # Sandboxes first, and the order matters: the credentials below are written
 # into BOTH namespaces, and the runner one does not exist until this runs.
 - name: Include the sandbox namespace and RBAC

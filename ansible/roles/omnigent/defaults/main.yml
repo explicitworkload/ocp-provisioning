@@ -348,6 +348,7 @@ omnigent_openshell_env:
   - ANTHROPIC_AUTH_TOKEN
   - ANTHROPIC_MODEL
   - CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT
+  - CLAUDE_CODE_MAX_OUTPUT_TOKENS
   - OMNIGENT_RUNNER_ENV_PASSTHROUGH
 
 # Widened to the POC's list. The proxy variables are the load-bearing ones -
@@ -363,7 +364,7 @@ omnigent_openshell_env:
 # simply not forwarded; only the sandbox config's env: list fails loudly on
 # a missing name.
 omnigent_runner_env_passthrough: >-
-  https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,all_proxy,NO_PROXY,no_proxy,LITEMAAS_API_KEY,ANTHROPIC_BASE_URL,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_MODEL,CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,SSL_CERT_FILE,NODE_EXTRA_CA_CERTS
+  https_proxy,http_proxy,HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,all_proxy,NO_PROXY,no_proxy,LITEMAAS_API_KEY,ANTHROPIC_BASE_URL,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_MODEL,CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT,CLAUDE_CODE_MAX_OUTPUT_TOKENS,SSL_CERT_FILE,NODE_EXTRA_CA_CERTS
 
 # Claude Code against this cluster's models instead of Anthropic's API.
 #
@@ -443,6 +444,26 @@ omnigent_gateway_default_families:
 # this it prints a paragraph of advice about modelPicker rows on every
 # single turn. It only disables the warning, not the model.
 omnigent_claude_disable_model_window_check: "1"
+
+# The most Claude Code may ask a model to write in one response. Its default
+# is 32000, which no model on this cluster can grant once the prompt is
+# counted, and the prompt is never small: Claude Code's own system prompt and
+# tool definitions come to about 33,500 tokens before the user has typed a
+# word. Against qwen36-35b-a3b's 65,536-token window that is 65,537, so on
+# sandbox2914 every turn - "hello" included - came back as
+#
+#   400 ContextWindowExceededError: maximum context length is 65536 tokens.
+#   However, you requested 32000 output tokens and your prompt contains at
+#   least 33537 input tokens
+#
+# 16384 leaves about 15,600 tokens of headroom for the conversation itself on
+# that model, and is also the most Mistral-Small-4-119B-2603 accepts, which
+# refused the 32000 default outright.
+#
+# It does not stop a long conversation outgrowing a 64k window: once the
+# history passes roughly 49k tokens the same error returns, and starting a
+# new session is the remedy.
+omnigent_claude_max_output_tokens: "16384"
 
 # Empty means "use the active gateway", which is the registered one the
 # openshell role writes into the openshell-gateway-config Secret. Set this
