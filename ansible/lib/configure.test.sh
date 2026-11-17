@@ -462,6 +462,44 @@ chk "and not about the AWS keys"          "$(has 'AWS keys' "$out" && echo asked
 # nothing. It is checked on a pty instead, outside this suite.
 
 # ---------------------------------------------------------------------------
+echo "== a python3 without PyYAML must not wipe the MaaS entry =="
+# What happened on a real run host: render_maas_block could not import yaml,
+# printed nothing, and set_block wrote "litellm_extra_models:" with an empty
+# body - YAML null - while setup still announced the models as registered.
+fresh
+body=$(render_maas_block 'sk-keep-me' alpha beta)
+guard_yaml litellm_extra_models -- set_block litellm_extra_models "$body" >/dev/null 2>&1
+cp "$AY" "$WORK/with_maas"
+
+# A python3 that cannot import yaml: a shadowing yaml.py that refuses.
+mkdir -p "$WORK/noyaml"
+printf 'raise ImportError("no PyYAML here")\n' > "$WORK/noyaml/yaml.py"
+printf '#!/bin/sh\nPYTHONPATH="%s" exec python3 "$@"\n' "$WORK/noyaml" > "$WORK/py-noyaml"
+chmod +x "$WORK/py-noyaml"
+
+SAVED_PY3="$PY3"; PY3="$WORK/py-noyaml"
+out=$(guard_yaml litellm_extra_models -- \
+        set_block litellm_extra_models "$(render_maas_block 'sk-new' gamma 2>/dev/null)" 2>&1); rc=$?
+PY3="$SAVED_PY3"
+
+[ "$rc" -ne 0 ] && ok "the write reports failure" || no "the write reports failure" "rc=$rc"
+cmp -s "$AY" "$WORK/with_maas" && ok "all.yml is left exactly as it was" \
+  || no "all.yml is left exactly as it was" "$(diff "$WORK/with_maas" "$AY" | head -3)"
+has "sk-keep-me" "$(cat "$AY")" && ok "the existing MaaS key survives" || no "the existing MaaS key survives"
+has "nothing to write" "$out" && ok "and says why" || no "and says why" "$out"
+
+echo "== set_block refuses an empty body outright =="
+fresh; cp "$AY" "$WORK/before_empty"
+guard_yaml litellm_extra_models -- set_block litellm_extra_models "" >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && ok "empty body is refused" || no "empty body is refused" "rc=$rc"
+cmp -s "$AY" "$WORK/before_empty" && ok "and nothing is written" || no "and nothing is written"
+guard_yaml litellm_extra_models -- set_block litellm_extra_models "   " >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && ok "whitespace-only body is refused too" || no "whitespace-only body is refused too" "rc=$rc"
+
+echo "== _pick_py finds a PyYAML-capable interpreter =="
+chk "the chosen interpreter imports yaml" "$("$(_pick_py)" -c 'import yaml; print(1)' 2>/dev/null)" "1"
+
+# ---------------------------------------------------------------------------
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -197,6 +197,13 @@ set_raw() { _upsert "$1" "$2"; }
 # that safe; a write that produces unparseable YAML is reverted.
 set_block() {
   local key="$1" body="$2" tmp
+  # An empty body would write "key:" alone - YAML null - and silently drop
+  # whatever the block held. It only happens when the renderer failed, so
+  # fail the write and let guard_yaml restore the file and say so.
+  if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+    echo "  set_block: nothing to write for $key - the renderer produced no output" >&2
+    return 1
+  fi
   tmp="$(_mktemp)" || return 1
   _K="$key" _B="$body" awk '
     BEGIN { k = ENVIRON["_K"]; b = ENVIRON["_B"] }
@@ -220,7 +227,36 @@ set_block() {
 # way - and line-level editing of YAML can always be defeated by a file
 # shaped unexpectedly. Reverting beats corrupting the one file in this repo
 # that is not in git and cannot be recovered from it.
-_yaml_ok() { python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' "$1" >/dev/null 2>&1; }
+# Every helper below that reads or writes YAML needs a python3 that can
+# import yaml, and the python3 on PATH is not always it. Ansible depends on
+# PyYAML, so its own interpreter always has it - but a Homebrew or pipx
+# install keeps that interpreter private, and the bare python3 next to it
+# may have no PyYAML at all.
+#
+# That cost a real run. render_maas_block failed on the import, printed
+# nothing, and set_block wrote "litellm_extra_models:" with an empty body -
+# YAML null - while the setup still said "registered N models". The run then
+# died 54 minutes later in the litellm role with no MaaS endpoint configured.
+#
+# So: PY3 if set, else python3 if it has yaml, else ansible-playbook's own
+# interpreter (read off its shebang, through /usr/bin/env if need be), else
+# python3 anyway and the writes below refuse an empty result.
+_pick_py() {
+  local shebang interp
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    printf 'python3'; return 0
+  fi
+  shebang="$(sed -n '1s/^#![[:space:]]*//p' "$(command -v ansible-playbook 2>/dev/null)" 2>/dev/null)"
+  interp="${shebang%% *}"
+  case "$interp" in */env) interp="$(printf '%s' "$shebang" | awk '{print $2}')" ;; esac
+  if [ -n "$interp" ] && "$interp" -c 'import yaml' >/dev/null 2>&1; then
+    printf '%s' "$interp"; return 0
+  fi
+  printf 'python3'
+}
+PY3="${PY3:-$(_pick_py)}"
+
+_yaml_ok() { "$PY3" -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' "$1" >/dev/null 2>&1; }
 _NO_PYYAML_WARNED=0
 _WAS_INVALID_WARNED=0
 
@@ -235,7 +271,7 @@ guard_yaml() {
   # No PyYAML: the validator cannot run. Reverting everything because the
   # checker is missing turns a missing library into "none of your answers
   # were saved", which is a far worse failure than the one it guards.
-  if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  if ! "$PY3" -c 'import yaml' >/dev/null 2>&1; then
     check=0
     if [ "$_NO_PYYAML_WARNED" = 0 ]; then
       echo "  note: python3 has no PyYAML here, so writes are not" >&2
@@ -364,7 +400,7 @@ maas_models() {
     404)     echo "no /models at $base - does the base_url end in /v1?" >&2; return 1 ;;
     *)       echo "the endpoint answered HTTP $code" >&2; return 1 ;;
   esac
-  printf '%s' "$body" | python3 -c '
+  printf '%s' "$body" | "$PY3" -c '
 import json, re, sys
 try:
     d = json.load(sys.stdin)
@@ -395,7 +431,7 @@ print("\n".join(sorted(ok)))
 render_maas_block() {
   local key="$1"; shift
   _K="$key" _N="$MAAS_NAME" _C="$MAAS_CREDENTIAL" _U="$MAAS_BASE_URL" \
-  _M="$*" python3 - "$AY" <<'PY'
+  _M="$*" "$PY3" - "$AY" <<'PY'
 import os, sys, yaml
 try:
     doc = yaml.safe_load(open(sys.argv[1])) or {}
@@ -428,7 +464,7 @@ PY
 
 # maas_current_models - the ids already configured for the maas endpoint.
 maas_current_models() {
-  python3 - "$AY" "$MAAS_NAME" <<'PY' 2>/dev/null || true
+  "$PY3" - "$AY" "$MAAS_NAME" <<'PY' 2>/dev/null || true
 import sys, yaml
 try:
     d = yaml.safe_load(open(sys.argv[1])) or {}
@@ -444,7 +480,7 @@ PY
 # maas_current_key - the api_key already configured, so a re-run can query
 # the endpoint without making the user paste it again.
 maas_current_key() {
-  python3 - "$AY" "$MAAS_NAME" <<'PY' 2>/dev/null || true
+  "$PY3" - "$AY" "$MAAS_NAME" <<'PY' 2>/dev/null || true
 import sys, yaml
 try:
     d = yaml.safe_load(open(sys.argv[1])) or {}
@@ -465,7 +501,7 @@ DEMO_KEYS="demos_rag_eval demos_rag_judge demos_prompt_versions demos_tabular
 
 # gpu_selected - the instance types currently at one or more replicas.
 gpu_selected() {
-  python3 - "$AY" <<'PY' 2>/dev/null || echo "unreadable"
+  "$PY3" - "$AY" <<'PY' 2>/dev/null || echo "unreadable"
 import sys, yaml
 try:
     d = yaml.safe_load(open(sys.argv[1])) or {}
@@ -495,7 +531,7 @@ preset_needs_hf() { [ "$1" = "qwen3.8-27b-fp8" ]; }
 # instance - which is also the most expensive wrong answer available here:
 # two keystrokes, then 95 minutes, then a GPU node that can never serve it.
 gpu_fit_warning() {
-  python3 - "$AY" <<'PY' 2>/dev/null || true
+  "$PY3" - "$AY" <<'PY' 2>/dev/null || true
 import sys, yaml
 try:
     cfg = yaml.safe_load(open(sys.argv[1])) or {}
@@ -1003,9 +1039,10 @@ ask_missing_credentials() {
 
   if [ -z "$(maas_current_key)" ]; then
     if ask_maas ""; then
-      guard_yaml litellm_extra_models -- \
-        set_block litellm_extra_models "$(render_maas_block "$MAAS_KEY_OUT" $MAAS_MODELS_OUT)"
-      echo "    registered $(printf '%s' "$MAAS_MODELS_OUT" | wc -w | tr -d ' ') models from $MAAS_NAME"
+      if guard_yaml litellm_extra_models -- \
+        set_block litellm_extra_models "$(render_maas_block "$MAAS_KEY_OUT" $MAAS_MODELS_OUT)"; then
+        echo "    registered $(printf '%s' "$MAAS_MODELS_OUT" | wc -w | tr -d ' ') models from $MAAS_NAME"
+      fi
       secure_file; asked=1
     fi
   fi
@@ -1183,9 +1220,10 @@ _walkthrough() {
     # whitespace because maas_models filters them to [A-Za-z0-9._-] first -
     # they are remote data, and an id with a space or a quote in it would
     # otherwise reach the YAML writer.
-    guard_yaml litellm_extra_models -- \
-      set_block litellm_extra_models "$(render_maas_block "$MAAS_KEY_OUT" $MAAS_MODELS_OUT)"
-    echo "    registered $(printf '%s' "$MAAS_MODELS_OUT" | wc -w | tr -d ' ') models from $MAAS_NAME"
+    if guard_yaml litellm_extra_models -- \
+      set_block litellm_extra_models "$(render_maas_block "$MAAS_KEY_OUT" $MAAS_MODELS_OUT)"; then
+      echo "    registered $(printf '%s' "$MAAS_MODELS_OUT" | wc -w | tr -d ' ') models from $MAAS_NAME"
+    fi
     secure_file
   fi
 
