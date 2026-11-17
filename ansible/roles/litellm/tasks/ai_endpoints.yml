@@ -77,7 +77,7 @@
       {{ (litellm_standalone_cred.resources | first).data.LITELLM_MASTER_KEY | b64decode }}
     existing_vkey_secret: "{{ litellm_standalone_vkey }}"
     litellm_all_extras: >-
-      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+      {{ ((litellm_extra_models | default([], true)) + (rhoai_extra_ai_endpoints | default([], true)))
          | unique(attribute='name') | list }}
     # Only used below to work out which endpoints opted OUT of publishing,
     # and an endpoint opts out whether or not its key happens to be usable -
@@ -87,7 +87,7 @@
     # opted out, and an endpoint marked publish_as_ai_asset false would be
     # published anyway. Supply the same vars file you deploy with.
     litellm_usable_extras: >-
-      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+      {{ ((litellm_extra_models | default([], true)) + (rhoai_extra_ai_endpoints | default([], true)))
          | unique(attribute='name') | list }}
     # false means "use the key already on the cluster", which is the only
     # correct answer when this file is not the one that minted it.

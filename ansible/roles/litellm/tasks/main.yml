@@ -319,10 +319,19 @@
 # rhoai_extra_ai_endpoints is the old name for the same thing, accepted so a
 # run-time vars file written against it keeps working. Undocumented, and
 # merged by name, so declaring an endpoint in both is harmless.
+#
+# default([], true) on both: a key written with nothing under it - most often
+# litellm_extra_models: uncommented while the entries below it stay
+# commented - is YAML null, not an empty list, and null + list stopped
+# sandbox897 here 54 minutes into its first run:
+#
+#   unsupported operand type(s) for +: 'NoneType' and '_AnsibleLazyTemplateList'
+#
+# An empty key means "no extra endpoints", which is what it now does.
 - name: Gather the declared extra endpoints
   ansible.builtin.set_fact:
     litellm_all_extras: >-
-      {{ (litellm_extra_models + rhoai_extra_ai_endpoints)
+      {{ ((litellm_extra_models | default([], true)) + (rhoai_extra_ai_endpoints | default([], true)))
          | unique(attribute='name') | list }}
 
 # Checked before anything uses them. These are hand-written in a vars file
