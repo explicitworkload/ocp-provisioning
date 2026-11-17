@@ -483,6 +483,72 @@ omnigent_claude_max_output_tokens: "16384"
 # through the Anthropic translation has actually been tested.
 omnigent_claude_fast_model: "{{ omnigent_anthropic_model }}"
 
+# --- which models agents may use, and smart routing ---------------------
+# The only models Omnigent's agents, model picker and smart router can see,
+# enforced by a LiteLLM virtual key the role keeps in step with this list
+# (tasks/litellm.yml). LITELLM_API_KEY and ANTHROPIC_AUTH_TOKEN carry that
+# key; LITEMAAS_API_KEY keeps the master key, because the OpenShell image's
+# OpenCode config asks for alias names (gemma-4 and friends) that a key
+# scoped to real model names would refuse.
+#
+# Measured on sandbox2914 with Claude Code's real request shape - a ~48k-token
+# prompt, max_tokens 16384, one tool to call:
+#
+#   qwen36-35b-a3b            answered and called the tool
+#   qwen38-27b                answered and called the tool
+#   gpt-oss-120b              answered but ignored the tool; poor for agents
+#   deepseek-r1-distill-...   400
+#   granite-3-2-8b-instruct   404, LiteLLM cannot find it
+#   qwen3-4b                  32k window, smaller than the prompt alone
+#   Mistral-Small-4-119B-...  8k input window
+#
+# Re-test before adding one: a model the router can pick but cannot serve
+# turns into a subtask that fails rather than one that is never delegated.
+omnigent_litellm_models:
+  - qwen36-35b-a3b
+  - qwen38-27b
+
+# The model Omnigent's built-in smart router uses to decide where a prompt
+# or a subagent spawn goes. Setting it writes a server-level llm: block, and
+# that block is what switches routing on at all - without it the server
+# reports smart_routing_enabled false and nothing is ever delegated. The
+# only other router Omnigent ships needs a Databricks AI Gateway.
+#
+# Empty turns routing off. The router picks among omnigent_litellm_models,
+# and each decision has a nine-second budget; a slower answer means the
+# prompt is simply not routed.
+#
+# The same block also feeds Omnigent's policy LLM client, so LLM-backed
+# policy features have a model to call once this is set.
+#
+# OFF by default, because no model on this cluster can be the judge for
+# this Omnigent build - measured on sandbox2914 by running the real judge
+# inside the server pod:
+#
+#   - It calls the Responses API (/v1/responses) with a strict JSON schema,
+#     a nine-second budget, and reads only the FIRST output item.
+#   - Every chat model here that can answer is a reasoning model (both
+#     Qwens, qwen3-4b, gpt-oss-120b). They think for 12-26s, and their first
+#     output item is the reasoning, not the verdict, so the judge fails even
+#     when it is fast enough ('NativeToolOutput' object has no attribute
+#     'content'). enable_thinking: false works on chat completions (1.8-3s)
+#     but LiteLLM does not pass it through on the Responses path, for either
+#     an openai/ or a hosted_vllm/ model entry.
+#   - Mistral, which does not reason, sits on a backend with no Responses
+#     API: 404.
+#
+# Switched on, every first message and subagent spawn would wait the full
+# nine seconds for a judge that always fails and then proceed unrouted -
+# worse than off. Set this to a model that answers /v1/responses with a
+# plain message first, inside nine seconds, before turning it on.
+omnigent_routing_model: ""
+
+# The server reaches LiteLLM directly. It is not inside an OpenShell sandbox,
+# so the litemaas alias that sandboxes need for their egress policy does not
+# apply to it.
+omnigent_routing_base_url: >-
+  {{ 'http://litellm.' ~ (litellm_namespace | default('litellm')) ~ '.svc.cluster.local:4000/v1' }}
+
 # Empty means "use the active gateway", which is the registered one the
 # openshell role writes into the openshell-gateway-config Secret. Set this
 # only to pin a different registered gateway by name.

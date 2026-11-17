@@ -38,6 +38,140 @@
       provider keys in the omnigent-creds Secret.
   when: omnigent_litellm_key | length == 0
 
+# --- a key that can only see the models agents can actually use ------------
+# Omnigent's model picker and its smart router both list whatever LiteLLM
+# returns for the key they hold. With the master key that is every model on
+# the cluster, and most of them fail through Claude Code - an embedding
+# model, a document converter, one that caps output below what it asks for,
+# one LiteLLM cannot find, one that rejects the request shape. The router
+# would happily delegate a subtask to any of them.
+#
+# Omnigent's provider config has no allow-list, so the trim happens here: a
+# LiteLLM virtual key restricted to omnigent_litellm_models, which LiteLLM
+# then also enforces on every request. Kept in step with that list on every
+# run, and replaced if it was revoked or lost with LiteLLM's database - the
+# same checks the litellm role makes for its own key.
+# Claude Code's main model, its fast model and the router all call through
+# the scoped key, so each has to be on its list or LiteLLM refuses it - and
+# that would surface as a session that never answers, not as a failed run.
+- name: Require every model Omnigent calls by name to be on its allow-list
+  ansible.builtin.assert:
+    that:
+      - item | trim in omnigent_litellm_models
+    fail_msg: >-
+      {{ item | trim }} is used by Omnigent but is not in
+      omnigent_litellm_models ({{ omnigent_litellm_models | join(', ') }}).
+      The scoped LiteLLM key would refuse it. Add it to the list - after
+      testing it through Claude Code - or change the setting that names it.
+    quiet: true
+  loop: >-
+    {{ [omnigent_anthropic_model, omnigent_claude_fast_model]
+       + ([omnigent_routing_model] if (omnigent_routing_model | default('') | trim | length) > 0 else []) }}
+
+- name: Find LiteLLM's Route, to manage Omnigent's key
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ litellm_namespace | default('litellm') }}"
+    name: litellm
+  register: omnigent_litellm_route
+
+- name: Look for Omnigent's scoped LiteLLM key
+  kubernetes.core.k8s_info:
+    context: "{{ ocp_context or omit }}"
+    kind: Secret
+    namespace: "{{ omnigent_namespace }}"
+    name: omnigent-litellm-key
+  register: omnigent_scoped_secret
+  no_log: true
+
+# Asked with the master key, so a revoked key answers 404 rather than the
+# probe itself being refused, and the answer carries the key's models.
+- name: Check the scoped key is still valid
+  ansible.builtin.uri:
+    url: >-
+      https://{{ (omnigent_litellm_route.resources | first).spec.host }}/key/info?key={{
+      (omnigent_scoped_secret.resources | first).data.api_key | b64decode | urlencode }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ omnigent_litellm_key }}"
+    validate_certs: false
+    status_code: [200, 400, 401, 404]
+  register: omnigent_scoped_probe
+  failed_when: false
+  when: omnigent_scoped_secret.resources | length > 0
+  no_log: true
+
+- name: Decide whether the scoped key needs creating or updating
+  ansible.builtin.set_fact:
+    omnigent_scoped_missing: >-
+      {{ (omnigent_scoped_secret.resources | length == 0)
+         or (omnigent_scoped_probe.status | default(401)) != 200 }}
+    omnigent_scoped_models_now: >-
+      {{ ((omnigent_scoped_probe.json | default({})).info | default({})).models | default([]) | sort }}
+
+- name: Create Omnigent's scoped LiteLLM key
+  ansible.builtin.uri:
+    url: "https://{{ (omnigent_litellm_route.resources | first).spec.host }}/key/generate"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ omnigent_litellm_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      key_alias: omnigent
+      models: "{{ omnigent_litellm_models }}"
+    validate_certs: false
+    status_code: [200, 201]
+  register: omnigent_scoped_new
+  when: omnigent_scoped_missing | bool
+  no_log: true
+
+- name: Keep the scoped key's models in step with omnigent_litellm_models
+  ansible.builtin.uri:
+    url: "https://{{ (omnigent_litellm_route.resources | first).spec.host }}/key/update"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ omnigent_litellm_key }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      key: "{{ (omnigent_scoped_secret.resources | first).data.api_key | b64decode }}"
+      models: "{{ omnigent_litellm_models }}"
+    validate_certs: false
+    status_code: [200, 201]
+  changed_when: true
+  when:
+    - not (omnigent_scoped_missing | bool)
+    - omnigent_scoped_models_now != (omnigent_litellm_models | sort)
+  no_log: true
+
+- name: Store Omnigent's scoped LiteLLM key
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: omnigent-litellm-key
+        namespace: "{{ omnigent_namespace }}"
+      type: Opaque
+      stringData:
+        api_key: "{{ omnigent_scoped_new.json.key }}"
+  when: omnigent_scoped_missing | bool
+  no_log: true
+
+- name: Settle on the key agents and the router use
+  ansible.builtin.set_fact:
+    omnigent_agent_key: >-
+      {{ omnigent_scoped_new.json.key
+         if omnigent_scoped_missing | bool
+         else ((omnigent_scoped_secret.resources | first).data.api_key | b64decode) }}
+  no_log: true
+
 # Projected into every runner Pod by envFrom, and read by the server for its
 # own harness calls. ANTHROPIC/OPENAI keys would go here too for anyone
 # wanting the vendor CLIs rather than the gateway.
@@ -61,10 +195,10 @@
         namespace: "{{ omnigent_namespace }}"
       type: Opaque
       stringData:
-        LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+        LITELLM_API_KEY: "{{ omnigent_agent_key }}"
         LITEMAAS_API_KEY: "{{ omnigent_litellm_key }}"
         ANTHROPIC_BASE_URL: "{{ omnigent_anthropic_base_url | trim }}"
-        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_agent_key }}"
         ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
         CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: "{{ omnigent_claude_max_output_tokens }}"
@@ -87,10 +221,10 @@
         namespace: "{{ omnigent_sandbox_namespace }}"
       type: Opaque
       stringData:
-        LITELLM_API_KEY: "{{ omnigent_litellm_key }}"
+        LITELLM_API_KEY: "{{ omnigent_agent_key }}"
         LITEMAAS_API_KEY: "{{ omnigent_litellm_key }}"
         ANTHROPIC_BASE_URL: "{{ omnigent_anthropic_base_url | trim }}"
-        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_litellm_key }}"
+        ANTHROPIC_AUTH_TOKEN: "{{ omnigent_agent_key }}"
         ANTHROPIC_MODEL: "{{ omnigent_anthropic_model }}"
         CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "{{ omnigent_claude_disable_model_window_check }}"
         CLAUDE_CODE_MAX_OUTPUT_TOKENS: "{{ omnigent_claude_max_output_tokens }}"

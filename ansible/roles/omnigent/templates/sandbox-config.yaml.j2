@@ -7,6 +7,20 @@
   traffic that never leaves the cluster - and the proxy would demand an
   OpenShift login the runner does not have.
 -#}
+{% if omnigent_use_litellm | bool and (omnigent_routing_model | default('') | trim | length) > 0 %}
+{# The server-level LLM. Its presence is what turns smart routing on: the
+   built-in router uses this model to decide which model or harness a prompt
+   or a subagent spawn goes to. See omnigent_routing_model.
+
+   ${LITELLM_API_KEY} is expanded by the server from its own environment, so
+   the key never appears in this ConfigMap. It is the scoped key, which is
+   allowed the routing model because the model is in omnigent_litellm_models. -#}
+llm:
+  model: openai/{{ omnigent_routing_model | trim }}
+  connection:
+    base_url: {{ omnigent_routing_base_url | trim }}
+    api_key: ${LITELLM_API_KEY}
+{% endif %}
 sandbox:
   provider: {{ omnigent_sandbox_provider }}
   server_url: http://omnigent.{{ omnigent_namespace }}.svc.cluster.local
