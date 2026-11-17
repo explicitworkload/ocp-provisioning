@@ -631,6 +631,30 @@
 # auth_mode plaintext and the http:// endpoint match the gateway posture set
 # in defaults - disableTls true, no OIDC. Change one and this has to change
 # with it.
+#
+# The Secret lives in Omnigent's namespace, and this role runs BEFORE the
+# omnigent role, so on a fresh cluster that namespace does not exist yet.
+# It never showed while OpenShell was opt-in - every cluster that turned it
+# on already had Omnigent - and it stopped sandbox897's first run once
+# 2eb3c9a made OpenShell the default:
+#
+#   namespaces "omnigent" not found
+#
+# Created here with the same definition the omnigent role applies, so that
+# role's own apply later is a no-op rather than a second opinion.
+- name: Make sure Omnigent's namespace exists for the gateway Secret
+  kubernetes.core.k8s:
+    context: "{{ ocp_context or omit }}"
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ omnigent_namespace | default('omnigent') }}"
+        labels:
+          app.kubernetes.io/name: omnigent
+
 - name: Register the gateway for the omnigent server to find
   kubernetes.core.k8s:
     context: "{{ ocp_context or omit }}"
