@@ -684,6 +684,13 @@ It exists here for Omnigent, which supports it as a sandbox provider —
 `site.yml` gates the role on both, so opting out means setting both, to
 `kubernetes` and `false`. It needs the `helm` CLI on the run host.
 
+To watch providers and sandboxes in OpenShell's own TUI, run
+`tools/openshell-tui.sh` (and `tools/openshell-tui.sh --delete` when done).
+It opens `openshell term` inside the cluster rather than through a
+port-forward: over a port-forward from a laptop the TUI times out silently
+and shows empty tables, while the CLI (`openshell provider list`,
+`openshell sandbox list`) works from anywhere.
+
 This role was rewritten on 2026-10-19 against a deployment that works:
 [aicatalyst-team/omnigent-poc](https://github.com/aicatalyst-team/omnigent-poc)
 and the `scShiftShell` / `scOpenshellProviders` branches of their Omnigent
